@@ -198,7 +198,19 @@ public sealed class JsonAppDataStore : IAppDataStore
 
         var tempPath = targetPath + ".tmp";
         var backupPath = targetPath + ".bak";
-        var json = JsonSerializer.Serialize(payload, ProtocolJson.StorageOptions);
+        string json;
+        if (payload is PetProfile { SoloProgress: { } progress })
+        {
+            // 소셜 보상·상점 구매와 같은 잠금에서 성장 상태를 직렬화한다.
+            lock (progress)
+            {
+                json = JsonSerializer.Serialize(payload, ProtocolJson.StorageOptions);
+            }
+        }
+        else
+        {
+            json = JsonSerializer.Serialize(payload, ProtocolJson.StorageOptions);
+        }
 
         // 1. 임시 파일에 UTF-8 기록 후 디스크 플러시
         await using (var fs = new FileStream(tempPath, FileMode.Create, FileAccess.Write, FileShare.None, 4096, useAsync: true))

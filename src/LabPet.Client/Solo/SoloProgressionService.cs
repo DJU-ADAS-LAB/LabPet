@@ -77,24 +77,27 @@ public sealed class SoloProgressionService
     public (bool LeveledUp, int NewLevel) GrantRewards(PetProfile profile, long xp, long coins)
     {
         var progress = profile.SoloProgress;
-        if (coins > 0)
+        lock (progress)
         {
-            progress.Coins += coins;
-        }
-
-        var leveledUp = false;
-        if (xp > 0)
-        {
-            progress.Xp += xp;
-            while (progress.Xp >= GetRequiredXpForLevel(progress.Level))
+            if (coins > 0)
             {
-                progress.Xp -= GetRequiredXpForLevel(progress.Level);
-                progress.Level++;
-                leveledUp = true;
+                progress.Coins += coins;
             }
-        }
 
-        return (leveledUp, progress.Level);
+            var leveledUp = false;
+            if (xp > 0)
+            {
+                progress.Xp += xp;
+                while (progress.Xp >= GetRequiredXpForLevel(progress.Level))
+                {
+                    progress.Xp -= GetRequiredXpForLevel(progress.Level);
+                    progress.Level++;
+                    leveledUp = true;
+                }
+            }
+
+            return (leveledUp, progress.Level);
+        }
     }
 
     public (bool Success, string Message) TryPurchaseItem(PetProfile profile, CustomizationOption option)
@@ -105,18 +108,21 @@ public sealed class SoloProgressionService
         }
 
         var progress = profile.SoloProgress;
-        if (progress.UnlockedItemIds.Contains(option.UnlockItemId, StringComparer.OrdinalIgnoreCase))
+        lock (progress)
         {
-            return (false, "이미 해금된 아이템입니다.");
-        }
+            if (progress.UnlockedItemIds.Contains(option.UnlockItemId, StringComparer.OrdinalIgnoreCase))
+            {
+                return (false, "이미 해금된 아이템입니다.");
+            }
 
-        if (progress.Coins < option.CoinPrice)
-        {
-            return (false, $"코인이 부족합니다. (필요: {option.CoinPrice}, 보유: {progress.Coins})");
-        }
+            if (progress.Coins < option.CoinPrice)
+            {
+                return (false, $"코인이 부족합니다. (필요: {option.CoinPrice}, 보유: {progress.Coins})");
+            }
 
-        progress.Coins -= option.CoinPrice;
-        progress.UnlockedItemIds.Add(option.UnlockItemId);
-        return (true, $"'{option.DisplayName}' 해금 완료!");
+            progress.Coins -= option.CoinPrice;
+            progress.UnlockedItemIds.Add(option.UnlockItemId);
+            return (true, $"'{option.DisplayName}' 해금 완료!");
+        }
     }
 }

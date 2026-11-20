@@ -30,9 +30,10 @@ public partial class App : Application
     {
         base.OnStartup(e);
 
-        _singleInstanceMutex = new Mutex(initiallyOwned: true, SingleInstanceMutexName, out var createdNew);
+        var singleInstanceMutex = new Mutex(initiallyOwned: true, SingleInstanceMutexName, out var createdNew);
         if (!createdNew)
         {
+            singleInstanceMutex.Dispose();
             MessageBox.Show(
                 "LabPet이 이미 실행 중입니다. 시스템 트레이 아이콘을 확인해 주세요.",
                 "LabPet",
@@ -42,6 +43,7 @@ public partial class App : Application
             return;
         }
 
+        _singleInstanceMutex = singleInstanceMutex;
         var services = new ServiceCollection();
         ConfigureServices(services);
         _serviceProvider = services.BuildServiceProvider();

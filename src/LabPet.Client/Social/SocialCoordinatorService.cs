@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.IO;
 using LabPet.Client.Solo;
 using LabPet.Client.Storage;
 using LabPet.Shared.Models;
@@ -31,9 +32,11 @@ public sealed class SocialCoordinatorService : IAsyncDisposable
 
     private readonly Stopwatch _clock = Stopwatch.StartNew();
     private readonly object _musicLock = new();
+    private readonly object _friendStateLock = new();
+    private readonly SemaphoreSlim _friendSaveLock = new(1, 1);
 
-    private PetProfile _localProfile = new();
-    private FriendsStore _friendsStore = new();
+    private volatile PetProfile _localProfile = new();
+    private volatile FriendEntry[] _friends = [];
     private uint _musicFrameSequence;
 
     // 노래 따라하기 팔로워 상태
@@ -46,7 +49,7 @@ public sealed class SocialCoordinatorService : IAsyncDisposable
     public bool PreferLocalMusicWhenActive { get; set; } = true;
 
     public string? FollowingHostPetId => _followingHostPetId;
-    public IReadOnlyList<FriendEntry> Friends => _friendsStore.Friends;
+    public IReadOnlyList<FriendEntry> Friends => Array.ConvertAll(_friends, static friend => friend.Clone());
     public IReadOnlyList<PeerSnapshot> DiscoveredPeers => _transport.GetDiscoveredPeers();
 
     public event EventHandler? StateChanged;
@@ -78,8 +81,9 @@ public sealed class SocialCoordinatorService : IAsyncDisposable
     public async Task StartAsync(PetProfile localProfile, CancellationToken cancellationToken = default)
     {
         _localProfile = localProfile;
-        _friendsStore = await _store.LoadFriendsAsync(cancellationToken).ConfigureAwait(false);
-        await _transport.StartAsync(_localProfile, _friendsStore.Friends, cancellationToken).ConfigureAwait(false);
+        var friendsStore = await _store.LoadFriendsAsync(cancellationToken).ConfigureAwait(false);
+        _friends = [.. friendsStore.Friends];
+        await _transport.StartAsync(_localProfile, _friends, cancellationToken).ConfigureAwait(false);
         StateChanged?.Invoke(this, EventArgs.Empty);
     }
 
@@ -214,10 +218,10 @@ public sealed class SocialCoordinatorService : IAsyncDisposable
 
     public async Task<bool> SendBubbleMessageAsync(FriendEntry friend, string text)
     {
-        var ok = await _transport.SendBubbleMessageAsync(friend, text).ConfigureAwait(false);
+        var ok = await _transport.SendBubbleMessageAsync(FindFriend(friend.PetId) ?? friend, text).ConfigureAwait(false);
         if (ok)
         {
-            await RewardSocialBonusAsync(friend, coins: 2).ConfigureAwait(false);
+            await RewardSocialBonusAsync(friend.PetId, coins: 2).ConfigureAwait(false);
         }
 
         return ok;
@@ -225,10 +229,10 @@ public sealed class SocialCoordinatorService : IAsyncDisposable
 
     public async Task<bool> SendQuickReactionAsync(FriendEntry friend, string reactionId)
     {
-        var ok = await _transport.SendQuickReactionAsync(friend, reactionId).ConfigureAwait(false);
+        var ok = await _transport.SendQuickReactionAsync(FindFriend(friend.PetId) ?? friend, reactionId).ConfigureAwait(false);
         if (ok)
         {
-            await RewardSocialBonusAsync(friend, coins: 1).ConfigureAwait(false);
+            await RewardSocialBonusAsync(friend.PetId, coins: 1).ConfigureAwait(false);
         }
 
         return ok;
@@ -236,10 +240,10 @@ public sealed class SocialCoordinatorService : IAsyncDisposable
 
     public async Task<bool> SendPetInteractionAsync(FriendEntry friend)
     {
-        var ok = await _transport.SendPetInteractionAsync(friend, "pet").ConfigureAwait(false);
+        var ok = await _transport.SendPetInteractionAsync(FindFriend(friend.PetId) ?? friend, "pet").ConfigureAwait(false);
         if (ok)
         {
-            await RewardSocialBonusAsync(friend, coins: 2).ConfigureAwait(false);
+            await RewardSocialBonusAsync(friend.PetId, coins: 2).ConfigureAwait(false);
         }
 
         return ok;
@@ -247,7 +251,9 @@ public sealed class SocialCoordinatorService : IAsyncDisposable
 
     public async Task<bool> ToggleMusicFollowAsync(FriendEntry hostFriend)
     {
-        var currentlyFollowingThis = string.Equals(_followingHostPetId, hostFriend.PetId, StringComparison.OrdinalIgnoreCase);
+        hostFriend = FindFriend(hostFriend.PetId) ?? hostFriend;
+        var previousHostId = FollowingHostPetId;
+        var currentlyFollowingThis = string.Equals(previousHostId, hostFriend.PetId, StringComparison.OrdinalIgnoreCase);
         if (currentlyFollowingThis)
         {
             await _transport.SetMusicFollowAsync(hostFriend, enable: false).ConfigureAwait(false);
@@ -262,9 +268,9 @@ public sealed class SocialCoordinatorService : IAsyncDisposable
         }
 
         // 기존 팔로우 호스트가 있으면 먼저 해제
-        if (_followingHostPetId is not null)
+        if (previousHostId is not null)
         {
-            var prev = _friendsStore.Friends.FirstOrDefault(f => string.Equals(f.PetId, _followingHostPetId, StringComparison.OrdinalIgnoreCase));
+            var prev = FindFriend(previousHostId);
             if (prev is not null)
             {
                 _ = await _transport.SetMusicFollowAsync(prev, enable: false).ConfigureAwait(false);
@@ -353,12 +359,7 @@ public sealed class SocialCoordinatorService : IAsyncDisposable
 
     private async void OnBubbleMessageReceived(object? sender, BubbleMessageReceivedEventArgs e)
     {
-        var friend = FindFriend(e.SenderPetId);
-        var name = friend is null ? "친구" : FormatDisplayName(friend.OwnerName, friend.PetName);
-        if (friend is not null)
-        {
-            await RewardSocialBonusAsync(friend, coins: 2).ConfigureAwait(false);
-        }
+        var name = await RewardSocialBonusAsync(e.SenderPetId, coins: 2).ConfigureAwait(false);
 
         SocialNotification?.Invoke(this, $"{name}: {e.Text}");
         PetReactionTriggered?.Invoke(this, EventArgs.Empty);
@@ -366,12 +367,7 @@ public sealed class SocialCoordinatorService : IAsyncDisposable
 
     private async void OnQuickReactionReceived(object? sender, QuickReactionReceivedEventArgs e)
     {
-        var friend = FindFriend(e.SenderPetId);
-        var name = friend is null ? "친구" : FormatDisplayName(friend.OwnerName, friend.PetName);
-        if (friend is not null)
-        {
-            await RewardSocialBonusAsync(friend, coins: 1).ConfigureAwait(false);
-        }
+        var name = await RewardSocialBonusAsync(e.SenderPetId, coins: 1).ConfigureAwait(false);
 
         SocialNotification?.Invoke(this, $"{name}의 반응: {e.ReactionId}");
         PetReactionTriggered?.Invoke(this, EventArgs.Empty);
@@ -379,12 +375,7 @@ public sealed class SocialCoordinatorService : IAsyncDisposable
 
     private async void OnPetInteractionReceived(object? sender, PetInteractionReceivedEventArgs e)
     {
-        var friend = FindFriend(e.SenderPetId);
-        var name = friend is null ? "친구" : FormatDisplayName(friend.OwnerName, friend.PetName);
-        if (friend is not null)
-        {
-            await RewardSocialBonusAsync(friend, coins: 2).ConfigureAwait(false);
-        }
+        var name = await RewardSocialBonusAsync(e.SenderPetId, coins: 2).ConfigureAwait(false);
 
         SocialNotification?.Invoke(this, $"{name}(이)가 쓰다듬어 줬어요!");
         PetReactionTriggered?.Invoke(this, EventArgs.Empty);
@@ -413,38 +404,90 @@ public sealed class SocialCoordinatorService : IAsyncDisposable
 
     private async Task UpsertFriendAsync(FriendEntry entry)
     {
-        var existing = _friendsStore.Friends.FirstOrDefault(f => string.Equals(f.PetId, entry.PetId, StringComparison.OrdinalIgnoreCase));
-        if (existing is not null)
+        // 수락 패킷에 응답하기 전에 인증 목록에 등록한다.
+        lock (_friendStateLock)
         {
-            existing.OwnerName = entry.OwnerName;
-            existing.PetName = entry.PetName;
-            existing.LastKnownIp = entry.LastKnownIp;
-            existing.LastKnownTcpPort = entry.LastKnownTcpPort;
-            existing.PairSecretBase64 = entry.PairSecretBase64;
-            existing.CachedAppearance = entry.CachedAppearance;
-            existing.LastSeenAtUtc = entry.LastSeenAtUtc;
-        }
-        else
-        {
-            _friendsStore.Friends.Add(entry);
+            var existing = FindSharedFriend(entry.PetId);
+            if (existing is null)
+            {
+                _friends = [.. _friends, entry];
+            }
+            else
+            {
+                lock (existing)
+                {
+                    existing.OwnerName = entry.OwnerName;
+                    existing.PetName = entry.PetName;
+                    existing.LastKnownIp = entry.LastKnownIp;
+                    existing.LastKnownTcpPort = entry.LastKnownTcpPort;
+                    existing.PairSecretBase64 = entry.PairSecretBase64;
+                    existing.CachedAppearance = entry.CachedAppearance;
+                    existing.LastSeenAtUtc = entry.LastSeenAtUtc;
+                }
+            }
+
+            _transport.UpdateKnownFriends(_friends);
         }
 
-        _transport.UpdateKnownFriends(_friendsStore.Friends);
-        await _store.SaveFriendsAsync(_friendsStore).ConfigureAwait(false);
+        await SaveSocialStateAsync().ConfigureAwait(false);
         StateChanged?.Invoke(this, EventArgs.Empty);
     }
 
-    private async Task RewardSocialBonusAsync(FriendEntry friend, long coins)
+    private async Task<string> RewardSocialBonusAsync(string petId, long coins)
     {
-        friend.Intimacy++;
-        _progression.GrantRewards(_localProfile, xp: 3, coins: coins);
-        await _store.SaveFriendsAsync(_friendsStore).ConfigureAwait(false);
-        await _store.SaveProfileAsync(_localProfile).ConfigureAwait(false);
+        string name;
+        PetProfile profile;
+        lock (_friendStateLock)
+        {
+            var friend = FindSharedFriend(petId);
+            if (friend is null)
+            {
+                return "친구";
+            }
+
+            lock (friend)
+            {
+                friend.Intimacy++;
+                name = FormatDisplayName(friend.OwnerName, friend.PetName);
+            }
+
+            profile = _localProfile;
+            _progression.GrantRewards(profile, xp: 3, coins: coins);
+        }
+
+        await SaveSocialStateAsync(profile).ConfigureAwait(false);
         StateChanged?.Invoke(this, EventArgs.Empty);
+        return name;
     }
+
+    private async Task SaveSocialStateAsync(PetProfile? profile = null)
+    {
+        await _friendSaveLock.WaitAsync().ConfigureAwait(false);
+        try
+        {
+            // 저장 순서가 돌아왔을 때 최신 목록을 복사한다.
+            await _store.SaveFriendsAsync(new FriendsStore { Friends = [.. Friends] }).ConfigureAwait(false);
+            if (profile is not null)
+            {
+                await _store.SaveProfileAsync(profile).ConfigureAwait(false);
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            Trace.TraceError("소셜 상태 저장 실패: {0}", ex);
+            SocialNotification?.Invoke(this, "친구 정보 또는 보상을 저장하지 못했어요.");
+        }
+        finally
+        {
+            _friendSaveLock.Release();
+        }
+    }
+
+    private FriendEntry? FindSharedFriend(string petId)
+        => Array.Find(_friends, f => string.Equals(f.PetId, petId, StringComparison.OrdinalIgnoreCase));
 
     private FriendEntry? FindFriend(string petId)
-        => _friendsStore.Friends.FirstOrDefault(f => string.Equals(f.PetId, petId, StringComparison.OrdinalIgnoreCase));
+        => FindSharedFriend(petId)?.Clone();
 
     private string FindFriendName(string petId)
     {

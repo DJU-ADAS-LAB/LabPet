@@ -25,7 +25,7 @@ public sealed class LanP2pTransport : ISocialTransport
     private readonly int _tcpControlPort;
 
     private readonly ConcurrentDictionary<string, PeerSnapshot> _peers = new(StringComparer.OrdinalIgnoreCase);
-    private readonly ConcurrentDictionary<string, FriendEntry> _friendsByPetId = new(StringComparer.OrdinalIgnoreCase);
+    private volatile Dictionary<string, FriendEntry> _friendsByPetId = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, MusicSubscriber> _musicSubscribers = new(StringComparer.OrdinalIgnoreCase);
 
     private readonly object _stateLock = new();
@@ -150,20 +150,21 @@ public sealed class LanP2pTransport : ISocialTransport
 
     public void UpdateKnownFriends(IReadOnlyList<FriendEntry> friends)
     {
-        _friendsByPetId.Clear();
+        var friendsByPetId = new Dictionary<string, FriendEntry>(StringComparer.OrdinalIgnoreCase);
         foreach (var f in friends)
         {
             if (!string.IsNullOrWhiteSpace(f.PetId))
             {
-                _friendsByPetId[f.PetId] = f;
+                friendsByPetId[f.PetId] = f;
             }
         }
+        _friendsByPetId = friendsByPetId;
 
         // 기존 피어 스냅샷의 친구 여부 배지 동기화
         var changed = false;
         foreach (var peer in _peers.Values)
         {
-            var isFriend = _friendsByPetId.ContainsKey(peer.PetId);
+            var isFriend = friendsByPetId.ContainsKey(peer.PetId);
             if (peer.IsFriend != isFriend)
             {
                 peer.IsFriend = isFriend;
@@ -480,24 +481,27 @@ public sealed class LanP2pTransport : ISocialTransport
                 var isFriend = _friendsByPetId.TryGetValue(hello.PetId, out var friendEntry);
 
                 // DHCP IP 및 이름 변경 시 영구 petId 기준으로 자동 갱신
-                if (isFriend && friendEntry is not null)
+                if (friendEntry is not null)
                 {
-                    friendEntry.LastKnownIp = remoteIp;
-                    friendEntry.LastKnownTcpPort = hello.TcpPort;
-                    friendEntry.LastSeenAtUtc = DateTimeOffset.UtcNow;
-                    if (!string.IsNullOrWhiteSpace(hello.OwnerName))
+                    lock (friendEntry)
                     {
-                        friendEntry.OwnerName = hello.OwnerName;
-                    }
+                        friendEntry.LastKnownIp = remoteIp;
+                        friendEntry.LastKnownTcpPort = hello.TcpPort;
+                        friendEntry.LastSeenAtUtc = DateTimeOffset.UtcNow;
+                        if (!string.IsNullOrWhiteSpace(hello.OwnerName))
+                        {
+                            friendEntry.OwnerName = hello.OwnerName;
+                        }
 
-                    if (!string.IsNullOrWhiteSpace(hello.PetName))
-                    {
-                        friendEntry.PetName = hello.PetName;
-                    }
+                        if (!string.IsNullOrWhiteSpace(hello.PetName))
+                        {
+                            friendEntry.PetName = hello.PetName;
+                        }
 
-                    if (hello.Appearance is not null)
-                    {
-                        friendEntry.CachedAppearance = hello.Appearance.Clone();
+                        if (hello.Appearance is not null)
+                        {
+                            friendEntry.CachedAppearance = hello.Appearance.Clone();
+                        }
                     }
                 }
 
@@ -688,22 +692,26 @@ public sealed class LanP2pTransport : ISocialTransport
             PacketType.MusicFollowOn or
             PacketType.MusicFollowOff;
 
-        FriendEntry? friend = null;
+        string? verifiedPairSecret = null;
         if (requiresFriendHmac)
         {
-            if (!_friendsByPetId.TryGetValue(header.SenderPetId, out friend))
+            if (!_friendsByPetId.TryGetValue(header.SenderPetId, out var friend))
             {
                 return new AckPayload { AckMessageId = header.MessageId, Accepted = false, ErrorCode = "NOT_FRIEND" };
             }
 
             var canonical = PacketSigner.BuildControlCanonicalString(header, envelope.PayloadJson);
-            if (!PacketSigner.VerifySignature(canonical, header.SignatureBase64, friend.PairSecretBase64))
+            lock (friend)
             {
-                return new AckPayload { AckMessageId = header.MessageId, Accepted = false, ErrorCode = "INVALID_SIGNATURE" };
-            }
+                verifiedPairSecret = friend.PairSecretBase64;
+                if (!PacketSigner.VerifySignature(canonical, header.SignatureBase64, verifiedPairSecret))
+                {
+                    return new AckPayload { AckMessageId = header.MessageId, Accepted = false, ErrorCode = "INVALID_SIGNATURE" };
+                }
 
-            friend.LastKnownIp = remoteIp;
-            friend.LastSeenAtUtc = DateTimeOffset.UtcNow;
+                friend.LastKnownIp = remoteIp;
+                friend.LastSeenAtUtc = DateTimeOffset.UtcNow;
+            }
         }
 
         // 3. 패킷 유형별 이벤트 디스패치
@@ -770,12 +778,12 @@ public sealed class LanP2pTransport : ISocialTransport
             {
                 var p = JsonSerializer.Deserialize<MusicFollowPayload>(envelope.PayloadJson, ProtocolJson.PacketOptions);
                 var udpPort = p?.ListenerUdpPort ?? _udpMusicPort;
-                if (IPAddress.TryParse(remoteIp, out var parsedIp) && friend is not null)
+                if (IPAddress.TryParse(remoteIp, out var parsedIp) && verifiedPairSecret is not null)
                 {
                     _musicSubscribers[header.SenderPetId] = new MusicSubscriber(
                         header.SenderPetId,
                         new IPEndPoint(parsedIp, udpPort),
-                        friend.PairSecretBase64,
+                        verifiedPairSecret,
                         DateTimeOffset.UtcNow);
                     MusicFollowStateChanged?.Invoke(this, new MusicFollowStateChangedEventArgs(header.SenderPetId, true));
                 }

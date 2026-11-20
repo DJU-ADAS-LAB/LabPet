@@ -32,4 +32,15 @@ public sealed class FriendEntry
     public int Intimacy { get; set; }
     public DateTimeOffset PairedAtUtc { get; set; } = DateTimeOffset.UtcNow;
     public DateTimeOffset? LastSeenAtUtc { get; set; }
+
+    // 전송과 저장에서 공유하는 항목의 갱신 및 복사는 같은 항목을 잠근 상태에서 수행한다.
+    public FriendEntry Clone()
+    {
+        lock (this)
+        {
+            var copy = (FriendEntry)MemberwiseClone();
+            copy.CachedAppearance = CachedAppearance?.Clone() ?? new PetAppearance();
+            return copy;
+        }
+    }
 }

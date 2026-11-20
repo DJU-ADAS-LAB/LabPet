@@ -2,8 +2,7 @@
 title: "UI/UX 설계서 개요"
 doc_id: SPEC-UI-00
 version: "0.1.0"
-baseline_commit: "uncommitted"
-working_tree: "Phase 1 구현완료"
+baseline_commit: "49d7700"
 updated: "2026-11-20"
 status: "활성"
 tags:
@@ -21,7 +20,7 @@ related:
 ## 기준선
 | 항목 | 내용 |
 | --- | --- |
-| 대상 버전 | `0.1.0` (Phase 1) |
+| 기준 릴리스 | `v0.1.5` (`49d7700`) |
 | 렌더링 기반 | WPF `Viewport3D` + `HelixToolkit.Wpf 3.1.2` (`AllowsTransparency="True"`) |
 | 트레이 UI | `H.NotifyIcon.Wpf 2.3.0` |
 

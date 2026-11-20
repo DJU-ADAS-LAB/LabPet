@@ -2,8 +2,7 @@
 title: "서버리스 LAN P2P 소셜 기능명세"
 doc_id: SPEC-FT-03
 version: "0.3.0"
-baseline_commit: "uncommitted"
-working_tree: "Phase 3 구현완료"
+baseline_commit: "49d7700"
 updated: "2026-11-20"
 status: "활성"
 tags:
@@ -27,6 +26,7 @@ related:
   - 프로토콜 호환 범위를 벗어난 피어는 연결을 차단하고 UI에 `업데이트 필요` 배지 및 툴팁 표시
 
 ## FT-10: TCP 친구 신청/인증, 말풍선 메시지, 30Hz 노래 따라하기
+- **동시 갱신** 시에도 화면에서는 친구 정보의 복사본을 읽는다. 코디네이터는 친구 등록과 상호작용 보상 저장을 순서대로 처리하고, 파일 쓰기에 실패하면 펫 말풍선으로 알린다. [소셜 코디네이터 회귀 테스트](../../tests/LabPet.Tests/SocialCoordinatorTests.cs)
 - **구현 파일**: [LanP2pTransport.cs](../../src/LabPet.Client/Network/LanP2pTransport.cs), [SocialCoordinatorService.cs](../../src/LabPet.Client/Social/SocialCoordinatorService.cs), [SocialWindow.xaml.cs](../../src/LabPet.Client/Views/SocialWindow.xaml.cs), [PetWindow.xaml.cs](../../src/LabPet.Client/Views/PetWindow.xaml.cs)
 - **동작 규칙**:
   - TCP `45680`으로 친구 신청(`FriendRequest`) → 상대 펫 위 `[수락 / 거절]` 말풍선 표시 → 수락 시 32바이트 `pairSecret` 생성·회신 및 `friends.json` 저장
