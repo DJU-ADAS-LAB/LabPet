@@ -9,6 +9,7 @@ using LabPet.Shared.Transport;
 namespace LabPet.Client.Social;
 
 public sealed record PendingFriendRequest(
+    string RequestId,
     string RequesterPetId,
     string RequesterOwnerName,
     string RequesterName,
@@ -56,6 +57,7 @@ public sealed class SocialCoordinatorService : IAsyncDisposable
 
     public event EventHandler? StateChanged;
     public event EventHandler<PendingFriendRequest>? FriendRequestArrived;
+    public event EventHandler<string>? PairingCodeReady;
     public event EventHandler<ReceivedFriendMessage>? FriendMessageReceived;
     public event EventHandler<string>? SocialNotification;
     public event EventHandler? PetReactionTriggered;
@@ -86,9 +88,23 @@ public sealed class SocialCoordinatorService : IAsyncDisposable
     public async Task StartAsync(PetProfile localProfile, CancellationToken cancellationToken = default)
     {
         _localProfile = localProfile;
-        var friendsStore = await _store.LoadFriendsAsync(cancellationToken).ConfigureAwait(false);
+        FriendsStore friendsStore;
+        try
+        {
+            friendsStore = await _store.LoadFriendsAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            Trace.TraceError("친구 목록 로드 실패: {0}", ex);
+            SocialNotification?.Invoke(this, "친구 데이터를 열거나 보호하지 못했습니다. 기존 파일을 보존하고 LAN 연결을 중단했습니다.");
+            return;
+        }
         _friends = [.. friendsStore.Friends];
         await _transport.StartAsync(_localProfile, _friends, cancellationToken).ConfigureAwait(false);
+        if (friendsStore.UnreadableProtectedKeys > 0)
+        {
+            SocialNotification?.Invoke(this, "일부 친구 키를 열 수 없습니다. 원래 키를 저장한 Windows 계정에서 복구해 주세요.");
+        }
         StateChanged?.Invoke(this, EventArgs.Empty);
     }
 
@@ -183,54 +199,29 @@ public sealed class SocialCoordinatorService : IAsyncDisposable
         return false;
     }
 
-    public Task<bool> SendFriendRequestAsync(PeerSnapshot peer)
-        => _transport.SendFriendRequestAsync(peer);
+    public async Task<bool> SendFriendRequestAsync(PeerSnapshot peer)
+    {
+        var code = PacketCrypto.GeneratePairingCode();
+        if (!await _transport.SendFriendRequestAsync(peer, code).ConfigureAwait(false))
+        {
+            return false;
+        }
+        PairingCodeReady?.Invoke(this, code);
+        return true;
+    }
 
     public Task<bool> SendGameEventAsync(FriendEntry friend, GameEventPayload payload)
         => _transport.SendGameEventAsync(FindFriend(friend.PetId) ?? friend, payload);
 
     public string GetFriendDisplayName(string petId) => FindFriendName(petId);
 
-    private string? _lastTransportError;
-
-    public async Task<bool> RespondFriendRequestAsync(PendingFriendRequest request, bool accept)
+    public async Task<bool> RespondFriendRequestAsync(PendingFriendRequest request, bool accept, string? verificationCode)
     {
-        _lastTransportError = null;
-        string? secret = accept ? PacketSigner.GeneratePairSecretBase64() : null;
-        var sent = await _transport.RespondFriendRequestAsync(
-            request.RequesterPetId,
-            request.RemoteIp,
-            request.RemoteTcpPort,
-            accept,
-            secret).ConfigureAwait(false);
-
-        if (accept && sent && secret is not null)
+        var sent = await _transport.RespondFriendRequestAsync(request.RequestId, accept, verificationCode).ConfigureAwait(false);
+        if (accept && !sent)
         {
-            await UpsertFriendAsync(new FriendEntry
-            {
-                PetId = request.RequesterPetId,
-                OwnerName = request.RequesterOwnerName,
-                PetName = request.RequesterName,
-                LastKnownIp = request.RemoteIp,
-                LastKnownTcpPort = request.RemoteTcpPort,
-                PairSecretBase64 = secret,
-                CachedAppearance = request.Appearance.Clone(),
-                Intimacy = 1,
-                PairedAtUtc = DateTimeOffset.UtcNow,
-                LastSeenAtUtc = DateTimeOffset.UtcNow
-            }).ConfigureAwait(false);
-
-            SocialNotification?.Invoke(this, $"{request.DisplayName}(와)과 친구가 되었어요!");
-            PetReactionTriggered?.Invoke(this, EventArgs.Empty);
+            SocialNotification?.Invoke(this, "친구 확인에 실패했습니다. 상대가 공유한 코드와 신청 유효 시간을 확인해 주세요.");
         }
-        else if (accept && !sent)
-        {
-            var reason = string.IsNullOrWhiteSpace(_lastTransportError)
-                ? "상대 PC 방화벽(TCP 45680) 또는 네트워크를 확인해 주세요."
-                : $"연결 실패({request.RemoteIp}:{request.RemoteTcpPort}) · 상대 PC 방화벽(TCP 45680)을 확인해 주세요.";
-            SocialNotification?.Invoke(this, $"{request.DisplayName} 수락 전송 실패: {reason}");
-        }
-
         return sent;
     }
 
@@ -315,7 +306,10 @@ public sealed class SocialCoordinatorService : IAsyncDisposable
 
     private void OnTransportError(object? sender, TransportErrorEventArgs e)
     {
-        _lastTransportError = e.Message;
+        if (e.Operation == "Listen")
+        {
+            SocialNotification?.Invoke(this, e.Message);
+        }
     }
 
     private void OnGameEventReceived(object? sender, GameEventReceivedEventArgs e)
@@ -345,6 +339,7 @@ public sealed class SocialCoordinatorService : IAsyncDisposable
     private void OnFriendRequestReceived(object? sender, FriendRequestReceivedEventArgs e)
     {
         FriendRequestArrived?.Invoke(this, new PendingFriendRequest(
+            e.RequestId,
             e.RequesterPetId,
             e.RequesterOwnerName,
             e.RequesterName,
@@ -356,7 +351,7 @@ public sealed class SocialCoordinatorService : IAsyncDisposable
 
     private async void OnFriendAccepted(object? sender, FriendAcceptedEventArgs e)
     {
-        await UpsertFriendAsync(new FriendEntry
+        var registered = await AddFriendAsync(new FriendEntry
         {
             PetId = e.AccepterPetId,
             OwnerName = e.AccepterOwnerName,
@@ -369,6 +364,10 @@ public sealed class SocialCoordinatorService : IAsyncDisposable
             PairedAtUtc = DateTimeOffset.UtcNow,
             LastSeenAtUtc = DateTimeOffset.UtcNow
         }).ConfigureAwait(false);
+        if (!registered)
+        {
+            return;
+        }
 
         var display = FormatDisplayName(e.AccepterOwnerName, e.AccepterName);
         SocialNotification?.Invoke(this, $"{display}(이)가 친구 신청을 수락했어요!");
@@ -428,35 +427,23 @@ public sealed class SocialCoordinatorService : IAsyncDisposable
         }
     }
 
-    private async Task UpsertFriendAsync(FriendEntry entry)
+    private async Task<bool> AddFriendAsync(FriendEntry entry)
     {
         // 수락 패킷에 응답하기 전에 인증 목록에 등록한다.
         lock (_friendStateLock)
         {
-            var existing = FindSharedFriend(entry.PetId);
-            if (existing is null)
+            if (FindSharedFriend(entry.PetId) is not null)
             {
-                _friends = [.. _friends, entry];
-            }
-            else
-            {
-                lock (existing)
-                {
-                    existing.OwnerName = entry.OwnerName;
-                    existing.PetName = entry.PetName;
-                    existing.LastKnownIp = entry.LastKnownIp;
-                    existing.LastKnownTcpPort = entry.LastKnownTcpPort;
-                    existing.PairSecretBase64 = entry.PairSecretBase64;
-                    existing.CachedAppearance = entry.CachedAppearance;
-                    existing.LastSeenAtUtc = entry.LastSeenAtUtc;
-                }
+                return false;
             }
 
+            _friends = [.. _friends, entry];
             _transport.UpdateKnownFriends(_friends);
         }
 
         await SaveSocialStateAsync().ConfigureAwait(false);
         StateChanged?.Invoke(this, EventArgs.Empty);
+        return true;
     }
 
     private async Task<string> RewardSocialBonusAsync(string petId, long coins)

@@ -81,6 +81,13 @@ public sealed class SocialCoordinatorTests : IAsyncLifetime
         await using var newPeer = new LanP2pTransport(udpDiscoveryPort: 0, udpMusicPort: 0, tcpControlPort: 0);
         var newPeerProfile = new PetProfile { PetName = "새 친구" };
         await newPeer.StartAsync(newPeerProfile, []);
+        var registration = new TaskCompletionSource<LabPet.Shared.Transport.FriendRequestReceivedEventArgs>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        newPeer.FriendRequestReceived += (_, e) => registration.TrySetResult(e);
+        var code = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+        _host.PairingCodeReady += (_, value) => code.TrySetResult(value);
+        var newPeerKey = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+        newPeer.FriendAccepted += (_, e) => newPeerKey.TrySetResult(e.PairSecretBase64);
         Assert.True(await _host.SendFriendRequestAsync(new PeerSnapshot
         {
             PetId = newPeerProfile.PetId,
@@ -124,14 +131,13 @@ public sealed class SocialCoordinatorTests : IAsyncLifetime
         try
         {
             await saveStarted.Task.WaitAsync(TimeSpan.FromSeconds(15));
-            var newSecret = PacketSigner.GeneratePairSecretBase64();
+            var request = await registration.Task.WaitAsync(TimeSpan.FromSeconds(5));
             Assert.True(await newPeer.RespondFriendRequestAsync(
-                _hostProfile.PetId, IPAddress.Loopback.ToString(), _hostTransport.BoundTcpPort,
-                accept: true, newSecret));
+                request.RequestId, accept: true, await code.Task.WaitAsync(TimeSpan.FromSeconds(5))));
 
             // 앞선 저장이 대기 중이어도 새 친구의 첫 메시지는 바로 인증된다.
             var hostAsNewFriend = _hostAsFriend.Clone();
-            hostAsNewFriend.PairSecretBase64 = newSecret;
+            hostAsNewFriend.PairSecretBase64 = await newPeerKey.Task.WaitAsync(TimeSpan.FromSeconds(5));
             Assert.True(await newPeer.SendBubbleMessageAsync(hostAsNewFriend, "새 친구 수신 메시지"));
         }
         finally

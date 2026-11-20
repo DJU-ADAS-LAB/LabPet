@@ -18,6 +18,8 @@ namespace LabPet.Client.Views;
 /// </summary>
 public partial class VisitorPetWindow : Window
 {
+    private static readonly TimeSpan ActiveInterval = TimeSpan.FromMilliseconds(16);
+    private static readonly TimeSpan IdleInterval = TimeSpan.FromMilliseconds(32);
     private const double DragThresholdPixels = 5.0;
     private const double BaseWindowWidth = 176.0;
     private const double BaseViewportHeight = 168.0;
@@ -67,7 +69,7 @@ public partial class VisitorPetWindow : Window
 
         _frameTimer = new DispatcherTimer(DispatcherPriority.Render)
         {
-            Interval = TimeSpan.FromMilliseconds(16)
+            Interval = IdleInterval
         };
         _frameTimer.Tick += OnFrameTick;
         _frameTimer.Start();
@@ -83,6 +85,7 @@ public partial class VisitorPetWindow : Window
             _frameTimer.Stop();
             _dismissHideTimer.Stop();
             _social.StateChanged -= OnSocialStateChanged;
+            _animator.DetachRig();
             _bubbleCts?.Cancel();
             _bubbleCts?.Dispose();
         };
@@ -219,13 +222,24 @@ public partial class VisitorPetWindow : Window
 
     private void OnFrameTick(object? sender, EventArgs e)
     {
+        if (!IsVisible)
+        {
+            return;
+        }
         var now = _clock.Elapsed.TotalSeconds;
         var dt = now - _lastFrameSeconds;
         _lastFrameSeconds = now;
 
         // 로컬 음악 또는 노래 따라하기 프레임에 맞춰 내 펫과 함께 춤춤
         var localAudio = _audioAnalyzer.GetCurrentSnapshot();
-        if (_social.TryGetFollowedMusicFrame(localAudio.IsMusicActive, out var followed))
+        var isFollowing = _social.TryGetFollowedMusicFrame(localAudio.IsMusicActive, out var followed);
+        var interval = localAudio.IsMusicActive || isFollowing || VisitorViewport.IsMouseOver || _animator.HasInteractiveMotion
+            ? ActiveInterval : IdleInterval;
+        if (_frameTimer.Interval != interval)
+        {
+            _frameTimer.Interval = interval;
+        }
+        if (isFollowing)
         {
             _animator.UpdateAudioSnapshot(followed.Bass, followed.Mid, followed.Treble, followed.IsBeat);
         }

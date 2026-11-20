@@ -16,12 +16,14 @@ using LabPet.Client.Social;
 using LabPet.Client.Solo;
 using LabPet.Client.ViewModels;
 using LabPet.Shared.Models;
+using Microsoft.Win32;
 
 namespace LabPet.Client.Views;
 
 public partial class PetWindow : Window
 {
     private const double DragThresholdPixels = 5.0;
+    private const double IdleAnimationIntervalSeconds = 0.030;
     private const double BaseWindowWidth = 214.0;
     private const double DefaultWindowHeight = 274.0;
     private const double LegacyMessageRowHeight = 78.0;
@@ -104,7 +106,12 @@ public partial class PetWindow : Window
         SpeechBubblePopup.CustomPopupPlacementCallback = (popupSize, targetSize, _) =>
             GetSpeechBubblePlacements(popupSize, targetSize, VisualTreeHelper.GetDpi(PetLayout));
 
-        Loaded += (_, _) => RepositionSpeechBubblePopup();
+        Loaded += (_, _) =>
+        {
+            KeepPetInMonitorWorkArea();
+            RepositionSpeechBubblePopup();
+        };
+        SystemEvents.DisplaySettingsChanged += OnDisplaySettingsChanged;
         LocationChanged += (_, _) => RepositionSpeechBubblePopup();
         SizeChanged += (_, e) =>
         {
@@ -128,6 +135,7 @@ public partial class PetWindow : Window
         _pomodoro.BreakCompleted += OnPomodoroBreakCompleted;
         _social.StateChanged += OnSocialStateChanged;
         _social.FriendRequestArrived += OnSocialFriendRequestArrived;
+        _social.PairingCodeReady += OnPairingCodeReady;
         _social.FriendMessageReceived += OnFriendMessageReceived;
         _social.SocialNotification += OnSocialNotification;
         _social.PetReactionTriggered += OnSocialPetReactionTriggered;
@@ -170,6 +178,7 @@ public partial class PetWindow : Window
 
         Closed += (_, _) =>
         {
+            SystemEvents.DisplaySettingsChanged -= OnDisplaySettingsChanged;
             _frameTimer.Stop();
             _activityFlushTimer.Stop();
             _uptimeTimer.Stop();
@@ -188,6 +197,7 @@ public partial class PetWindow : Window
             _pomodoro.BreakCompleted -= OnPomodoroBreakCompleted;
             _social.StateChanged -= OnSocialStateChanged;
             _social.FriendRequestArrived -= OnSocialFriendRequestArrived;
+            _social.PairingCodeReady -= OnPairingCodeReady;
             _social.FriendMessageReceived -= OnFriendMessageReceived;
             _social.SocialNotification -= OnSocialNotification;
             _social.PetReactionTriggered -= OnSocialPetReactionTriggered;
@@ -540,6 +550,17 @@ public partial class PetWindow : Window
         Dispatcher.BeginInvoke(() => _viewModel.PendingFriendRequest = request);
     }
 
+    private void OnPairingCodeReady(object? sender, string code)
+    {
+        Dispatcher.BeginInvoke(() =>
+        {
+            if (IsLoaded)
+            {
+                new PairingCodeWindow(code) { Owner = this }.ShowDialog();
+            }
+        });
+    }
+
     private void OnFriendMessageReceived(object? sender, ReceivedFriendMessage message)
     {
         Dispatcher.BeginInvoke(() =>
@@ -562,19 +583,27 @@ public partial class PetWindow : Window
 
     private async void OnFriendRequestResponded(object? sender, (PendingFriendRequest Request, bool Accept) args)
     {
-        var ok = await _social.RespondFriendRequestAsync(args.Request, args.Accept);
+        string? code = null;
+        if (args.Accept)
+        {
+            var dialog = new PairingCodeWindow { Owner = this };
+            if (dialog.ShowDialog() != true)
+            {
+                _viewModel.PendingFriendRequest ??= args.Request;
+                return;
+            }
+            code = dialog.VerificationCode;
+        }
+        var ok = await _social.RespondFriendRequestAsync(args.Request, args.Accept, code);
         if (args.Accept && !ok)
         {
-            // 상대 PC 방화벽 등으로 수락 전송이 실패한 경우 재시도할 수 있도록 요청 복원
-            _viewModel.PendingFriendRequest = args.Request;
+            _viewModel.PendingFriendRequest ??= args.Request;
         }
     }
 
     private void OnFrameTick(object? sender, EventArgs e)
     {
         var now = _clock.Elapsed.TotalSeconds;
-        var dt = now - _lastFrameSeconds;
-        _lastFrameSeconds = now;
 
         // 로컬 오디오 스냅샷 조회
         var localAudio = _audioAnalyzer.GetCurrentSnapshot();
@@ -594,7 +623,8 @@ public partial class PetWindow : Window
         }
 
         // 팔로워 모드 수신 프레임 우선 확인 (내 음악 우선 옵션 포함)
-        if (_social.TryGetFollowedMusicFrame(localAudio.IsMusicActive, out var followed))
+        var isFollowing = _social.TryGetFollowedMusicFrame(localAudio.IsMusicActive, out var followed);
+        if (isFollowing)
         {
             _animator.UpdateAudioSnapshot(followed.Bass, followed.Mid, followed.Treble, followed.IsBeat);
         }
@@ -603,6 +633,13 @@ public partial class PetWindow : Window
             _animator.UpdateAudioSnapshot(localAudio.Bass, localAudio.Mid, localAudio.Treble, localAudio.IsBeat);
         }
 
+        var dt = now - _lastFrameSeconds;
+        if (!IsVisible || (!localAudio.IsMusicActive && !isFollowing && !PetViewport.IsMouseOver
+            && !_animator.HasInteractiveMotion && dt < IdleAnimationIntervalSeconds))
+        {
+            return;
+        }
+        _lastFrameSeconds = now;
         ComputeNormalizedLookDirection(out var lookX, out var lookY);
         _animator.UpdateFrame(dt, lookX, lookY);
     }
@@ -757,21 +794,46 @@ public partial class PetWindow : Window
 
     private void RestoreOrPlaceDefaultPosition(PetProfile profile)
     {
-        if (profile.LastWindowLeft is double savedLeft && profile.LastWindowTop is double savedTop)
+        if (profile.LastWindowLeft is double savedLeft && double.IsFinite(savedLeft)
+            && profile.LastWindowTop is double savedTop && double.IsFinite(savedTop))
         {
-            // 듀얼·멀티 모니터(보조 모니터 X < 0 포함)에서도 저장된 위치를 유지하도록 전체 가상 화면 범위로 클램핑
-            var minLeft = SystemParameters.VirtualScreenLeft - 40;
-            var maxLeft = Math.Max(minLeft, SystemParameters.VirtualScreenLeft + SystemParameters.VirtualScreenWidth - Width + 40);
-            var minTop = SystemParameters.VirtualScreenTop - 40;
-            var maxTop = Math.Max(minTop, SystemParameters.VirtualScreenTop + SystemParameters.VirtualScreenHeight - Height);
-
-            Left = Math.Clamp(savedLeft, minLeft, maxLeft);
-            Top = Math.Clamp(savedTop, minTop, maxTop);
+            Left = savedLeft;
+            Top = savedTop;
             return;
         }
 
         PlaceAtDefaultBottomRight();
     }
+
+    private void KeepPetInMonitorWorkArea()
+    {
+        if (!Win32WindowHelper.TryGetNearestWorkArea(this, out var workArea))
+        {
+            return;
+        }
+        var dpi = VisualTreeHelper.GetDpi(this);
+        var origin = PetLayout.PointToScreen(new Point());
+        var bounds = new Rect(origin, new Size(ActualWidth * dpi.DpiScaleX, ActualHeight * dpi.DpiScaleY));
+        var visibleOrigin = ClampWindowOrigin(bounds, workArea);
+        Left += (visibleOrigin.X - origin.X) / dpi.DpiScaleX;
+        Top += (visibleOrigin.Y - origin.Y) / dpi.DpiScaleY;
+    }
+
+    private void OnDisplaySettingsChanged(object? sender, EventArgs e)
+    {
+        Dispatcher.BeginInvoke(DispatcherPriority.Loaded, () =>
+        {
+            if (IsLoaded && IsVisible)
+            {
+                KeepPetInMonitorWorkArea();
+            }
+        });
+    }
+
+    internal static Point ClampWindowOrigin(Rect window, Rect workArea)
+        => new(
+            Math.Clamp(window.Left, workArea.Left, Math.Max(workArea.Left, workArea.Right - window.Width)),
+            Math.Clamp(window.Top, workArea.Top, Math.Max(workArea.Top, workArea.Bottom - window.Height)));
 
     private void PlaceAtDefaultBottomRight()
     {

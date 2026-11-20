@@ -10,7 +10,81 @@ namespace LabPet.Shared.Protocol;
 /// </summary>
 public static class PacketCrypto
 {
-    private static readonly byte[] AesKeyDerivationInfo = Encoding.UTF8.GetBytes("LabPet-v2-AES256GCM-ControlPayload");
+    private static readonly byte[] AesKeyDerivationInfo = Encoding.UTF8.GetBytes("LabPet-v3-AES256GCM-ControlPayload");
+    private const int P256PublicKeyBase64Length = 124;
+
+    public const int PairingCodeLength = 32;
+
+    public static string GeneratePairingCode()
+        => Convert.ToHexString(RandomNumberGenerator.GetBytes(PairingCodeLength / 2));
+
+    public static bool IsPairingCode(string? code)
+        => code is { Length: PairingCodeLength } && code.All(Uri.IsHexDigit);
+
+    public static bool IsPairingPublicKey(string? encodedKey)
+    {
+        using var key = ECDiffieHellman.Create();
+        return TryImportPairingPublicKey(key, encodedKey);
+    }
+
+    public static (string ConfirmationKey, string FriendKey)? DerivePairingKeys(
+        ECDiffieHellman localKey, string remotePublicKey, string code, string requestId,
+        string requesterId, string accepterId, string requesterPublicKey, string accepterPublicKey,
+        string requestFingerprint)
+    {
+        if (!IsPairingCode(code))
+        {
+            return null;
+        }
+
+        using var remote = ECDiffieHellman.Create();
+        if (!TryImportPairingPublicKey(remote, remotePublicKey))
+        {
+            return null;
+        }
+
+        using var publicKey = remote.PublicKey;
+        var agreement = localKey.DeriveRawSecretAgreement(publicKey);
+        var salt = Convert.FromHexString(code);
+        Span<byte> keys = stackalloc byte[2 * ProtocolConstants.PairSecretByteLength];
+        try
+        {
+            // 길이 경계가 명확한 직렬화로 역할·신청·공개키를 키 합의에 바인딩한다.
+            var context = System.Text.Json.JsonSerializer.SerializeToUtf8Bytes(new[]
+            {
+                "LabPet-v3-FriendPairing", requestId, requesterId, accepterId, requesterPublicKey, accepterPublicKey,
+                requestFingerprint
+            });
+            HKDF.DeriveKey(HashAlgorithmName.SHA256, agreement, keys, salt, context);
+            return (Convert.ToBase64String(keys[..ProtocolConstants.PairSecretByteLength]),
+                Convert.ToBase64String(keys[ProtocolConstants.PairSecretByteLength..]));
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(agreement);
+            CryptographicOperations.ZeroMemory(salt);
+            CryptographicOperations.ZeroMemory(keys);
+        }
+    }
+
+    private static bool TryImportPairingPublicKey(ECDiffieHellman key, string? encodedKey)
+    {
+        if (encodedKey is not { Length: P256PublicKeyBase64Length })
+        {
+            return false;
+        }
+
+        try
+        {
+            var bytes = Convert.FromBase64String(encodedKey);
+            key.ImportSubjectPublicKeyInfo(bytes, out var consumed);
+            return consumed == bytes.Length && key.ExportParameters(false).Curve.Oid.Value == ECCurve.NamedCurves.nistP256.Oid.Value;
+        }
+        catch (Exception ex) when (ex is CryptographicException or ArgumentException or FormatException)
+        {
+            return false;
+        }
+    }
 
     /// <summary>
     /// 친구 전용 제어 패킷의 평문 JSON 페이로드를 AES-256-GCM으로 암호화한다.
@@ -121,6 +195,5 @@ public static class PacketCrypto
         => $"{envelope.NonceBase64}.{envelope.PayloadJson}.{envelope.AuthTagBase64}";
 
     private static byte[] BuildControlAadBytes(PacketHeader header)
-        => Encoding.UTF8.GetBytes(
-            $"{header.ProtocolVersion}|{(int)header.PacketType}|{header.SenderPetId}|{header.MessageId}|{header.TimestampUtc.ToUnixTimeMilliseconds()}");
+        => Encoding.UTF8.GetBytes(PacketSigner.BuildControlCanonicalString(header, string.Empty));
 }

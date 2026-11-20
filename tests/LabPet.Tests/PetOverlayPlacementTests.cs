@@ -6,6 +6,16 @@ namespace LabPet.Tests;
 
 public sealed class PetOverlayPlacementTests
 {
+    [Fact]
+    public void StoredPetPosition_ClampsBelowTaskbarCoordinatesToTheSecondaryMonitorWorkArea()
+    {
+        var workArea = new Rect(-1920, 0, 1920, 1032);
+        var saved = new Rect(-186, 913, 180, 180);
+        Assert.Equal(new Point(-186, 852), PetWindow.ClampWindowOrigin(saved, workArea));
+        var missingMonitor = new Rect(-2200, -200, 180, 180);
+        Assert.Equal(workArea.TopLeft, PetWindow.ClampWindowOrigin(missingMonitor, workArea));
+    }
+
     [Theory]
     [InlineData(180, 220, 1.0)]
     [InlineData(214, 274, 1.25)]

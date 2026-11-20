@@ -93,18 +93,13 @@ public sealed class UpgradeAndUpdateTests
     }
 
     [Fact]
-    public void FirewallRegistration_BuildsHardenedNetshAndPowerShellCommands()
+    public void FirewallRegistration_BuildsRestrictedPowerShellCommandAndRejectsMissingPath()
     {
         const string exePath = @"C:\Users\TestUser\AppData\Local\LabPet\current\LabPet.Client.exe";
 
-        var netsh = FirewallRegistrationService.BuildNetshRegisterCommand(exePath);
-        Assert.Contains("delete rule name=\"LabPet LAN UDP\"", netsh);
-        Assert.Contains("delete rule name=\"LabPet LAN TCP\"", netsh);
-        Assert.Contains("protocol=UDP localport=45678,45679 profile=any remoteip=localsubnet program=\"C:\\Users\\TestUser\\AppData\\Local\\LabPet\\current\\LabPet.Client.exe\"", netsh);
-        Assert.Contains("protocol=TCP localport=45680 profile=any remoteip=localsubnet program=\"C:\\Users\\TestUser\\AppData\\Local\\LabPet\\current\\LabPet.Client.exe\"", netsh);
-
         var ps = FirewallRegistrationService.BuildPowerShellRegisterCommand(exePath);
-        Assert.Contains("Remove-NetFirewallRule -DisplayName 'LabPet LAN UDP','LabPet LAN TCP' -ErrorAction SilentlyContinue;", ps);
+        Assert.Contains("$new | Remove-NetFirewallRule -ErrorAction SilentlyContinue", ps);
+        Assert.Contains("if ($old.Count -gt 0) { $old | Remove-NetFirewallRule }", ps);
         Assert.Contains("-RemoteAddress LocalSubnet -Program 'C:\\Users\\TestUser\\AppData\\Local\\LabPet\\current\\LabPet.Client.exe' -Protocol UDP -LocalPort 45678,45679", ps);
         Assert.Contains("-RemoteAddress LocalSubnet -Program 'C:\\Users\\TestUser\\AppData\\Local\\LabPet\\current\\LabPet.Client.exe' -Protocol TCP -LocalPort 45680", ps);
 
@@ -113,13 +108,8 @@ public sealed class UpgradeAndUpdateTests
         var psWithQuote = FirewallRegistrationService.BuildPowerShellRegisterCommand(quotePath);
         Assert.Contains("-Program 'C:\\Users\\O''Brien\\LabPet\\LabPet.Client.exe'", psWithQuote);
 
-        // 경로가 비어 있거나 셸 메타문자가 포함된 경우 program 인자를 안전하게 생략
-        var fallbackNetsh = FirewallRegistrationService.BuildNetshRegisterCommand(null);
-        Assert.Contains("remoteip=localsubnet", fallbackNetsh);
-        Assert.DoesNotContain("program=", fallbackNetsh);
-
-        var unsafeNetsh = FirewallRegistrationService.BuildNetshRegisterCommand(@"C:\Temp\a&calc.exe");
-        Assert.DoesNotContain("program=", unsafeNetsh);
+        Assert.Throws<ArgumentException>(() => FirewallRegistrationService.BuildPowerShellRegisterCommand(null));
+        Assert.Throws<ArgumentException>(() => FirewallRegistrationService.BuildPowerShellRegisterCommand("relative.exe"));
     }
 
     [Fact]
@@ -148,6 +138,10 @@ public sealed class UpgradeAndUpdateTests
         const string hardenedKoreanOutput = """
             규칙 이름:                            LabPet LAN TCP
             ----------------------------------------------------------------------
+            사용:                                 예
+            방향:                                 인바운드
+            프로토콜:                             TCP
+            로컬 포트:                            45680
             원격 IP:                              로컬 서브넷
             프로그램:                             C:\Users\TestUser\AppData\Local\LabPet\current\LabPet.Client.exe
             작업:                                 허용
@@ -176,9 +170,12 @@ public sealed class UpgradeAndUpdateTests
             Ok.
             """;
 
-        Assert.True(FirewallRegistrationService.IsHardenedRuleOutput(hardenedEnglishOutput, expectedPath));
-        Assert.True(FirewallRegistrationService.IsHardenedRuleOutput(hardenedKoreanOutput, expectedPath));
-        Assert.False(FirewallRegistrationService.IsHardenedRuleOutput(legacyOutput, expectedPath));
-        Assert.False(FirewallRegistrationService.IsHardenedRuleOutput(mismatchedProgramOutput, expectedPath));
+        Assert.True(FirewallRegistrationService.IsHardenedRuleOutput(hardenedEnglishOutput, expectedPath, FirewallRegistrationService.TcpRuleName));
+        Assert.True(FirewallRegistrationService.IsHardenedRuleOutput(hardenedKoreanOutput, expectedPath, FirewallRegistrationService.TcpRuleName));
+        Assert.False(FirewallRegistrationService.IsHardenedRuleOutput(legacyOutput, expectedPath, FirewallRegistrationService.TcpRuleName));
+        Assert.False(FirewallRegistrationService.IsHardenedRuleOutput(mismatchedProgramOutput, expectedPath, FirewallRegistrationService.TcpRuleName));
+        Assert.False(FirewallRegistrationService.IsHardenedRuleOutput(hardenedEnglishOutput.Replace("45680", "45681"), expectedPath, FirewallRegistrationService.TcpRuleName));
+        Assert.False(FirewallRegistrationService.IsHardenedRuleOutput(hardenedEnglishOutput.Replace("LocalSubnet", "LocalSubnet,Any"), expectedPath, FirewallRegistrationService.TcpRuleName));
+        Assert.False(FirewallRegistrationService.IsHardenedRuleOutput(hardenedEnglishOutput + "\n" + hardenedEnglishOutput, expectedPath, FirewallRegistrationService.TcpRuleName));
     }
 }

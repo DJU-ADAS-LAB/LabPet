@@ -97,9 +97,10 @@ public sealed class JsonAppDataStore : IAppDataStore
                 path,
                 _migrator.MigrateFriends,
                 () => new FriendsStore(),
-                cancellationToken).ConfigureAwait(false);
+                cancellationToken, preserveUnreadableFiles: true).ConfigureAwait(false);
 
             store.Friends ??= [];
+            await ProtectExistingFriendBackupAsync(path + ".bak", cancellationToken).ConfigureAwait(false);
 
             // friends.json에 저장된 DPAPI 비밀키 복호화 및 기존 평문 비밀키 자동 마이그레이션
             foreach (var friend in store.Friends)
@@ -114,8 +115,8 @@ public sealed class JsonAppDataStore : IAppDataStore
                 }
                 else
                 {
-                    // 다른 Windows 사용자 계정 파일이거나 손상된 키는 빈 값으로 안전 처리
-                    friend.PairSecretBase64 = string.Empty;
+                    // 원래 Windows 계정에서 복구할 수 있도록 읽을 수 없는 암호문을 보존한다.
+                    store.UnreadableProtectedKeys++;
                 }
             }
 
@@ -153,31 +154,70 @@ public sealed class JsonAppDataStore : IAppDataStore
     /// 디스크 직렬화용 복사본에만 Windows DPAPI 암호화를 적용해 원자적 저장한다.
     /// </summary>
     private Task WriteAtomicFriendsAsync(string path, FriendsStore friendsStore, CancellationToken cancellationToken)
+        => WriteAtomicCoreAsync(path, ProtectedFriendCopy(friendsStore), cancellationToken, BackupFriendsAsync);
+
+    private static FriendsStore ProtectedFriendCopy(FriendsStore friendsStore)
     {
-        var protectedCopy = new FriendsStore
+        return new FriendsStore
         {
             SchemaVersion = friendsStore.SchemaVersion,
             UpdatedAtUtc = friendsStore.UpdatedAtUtc,
             Friends = (friendsStore.Friends ?? []).Select(friend =>
             {
                 var clone = friend.Clone();
-                clone.PairSecretBase64 = LocalSecretProtector.Protect(clone.PairSecretBase64);
+                try
+                {
+                    clone.PairSecretBase64 = LocalSecretProtector.Protect(clone.PairSecretBase64);
+                }
+                catch (InvalidOperationException ex)
+                {
+                    throw new IOException("친구 키를 보호하지 못했습니다. 기존 파일을 보존합니다.", ex);
+                }
                 return clone;
             }).ToList()
         };
 
-        return WriteAtomicCoreAsync(path, protectedCopy, cancellationToken);
+    }
+
+    private async Task BackupFriendsAsync(string primaryPath, string backupPath, CancellationToken ct)
+    {
+        var original = await TryReadAndMigrateAsync<FriendsStore>(primaryPath, _migrator.MigrateFriends, ct)
+            .ConfigureAwait(false);
+        if (original is { Success: true, Value: { } previous })
+        {
+            await WriteAtomicCoreAsync(backupPath, ProtectedFriendCopy(previous), ct, keepBackup: false)
+                .ConfigureAwait(false);
+        }
+        else
+        {
+            // 손상된 본 파일로 정상 백업을 덮어쓰지 않는다.
+            await ProtectExistingFriendBackupAsync(backupPath, ct).ConfigureAwait(false);
+        }
+    }
+
+    private async Task ProtectExistingFriendBackupAsync(string backupPath, CancellationToken ct)
+    {
+        var backup = await TryReadAndMigrateAsync<FriendsStore>(backupPath, _migrator.MigrateFriends, ct, requireReadableFile: true)
+            .ConfigureAwait(false);
+        if (backup.Value?.Friends is { } friends && friends.Any(friend =>
+            !string.IsNullOrWhiteSpace(friend.PairSecretBase64) && !LocalSecretProtector.IsProtected(friend.PairSecretBase64)))
+        {
+            await WriteAtomicCoreAsync(backupPath, ProtectedFriendCopy(backup.Value), ct, keepBackup: false)
+                .ConfigureAwait(false);
+        }
     }
 
     private static async Task<(T Result, bool NeedsSave)> LoadWithFallbackAsync<T>(
         string filePath,
         Func<JsonObject, bool> migrateAction,
         Func<T> defaultFactory,
-        CancellationToken cancellationToken) where T : class
+        CancellationToken cancellationToken, bool preserveUnreadableFiles = false) where T : class
     {
         var backupPath = filePath + ".bak";
+        var primaryExists = File.Exists(filePath);
+        var backupExists = File.Exists(backupPath);
 
-        if (File.Exists(filePath))
+        if (primaryExists)
         {
             var primary = await TryReadAndMigrateAsync<T>(filePath, migrateAction, cancellationToken).ConfigureAwait(false);
             if (primary.Success && primary.Value is not null)
@@ -187,7 +227,7 @@ public sealed class JsonAppDataStore : IAppDataStore
         }
 
         // 본 파일이 없거나 손상된 경우 직전 정상 백업(.bak)에서 복구 시도
-        if (File.Exists(backupPath))
+        if (backupExists)
         {
             var backup = await TryReadAndMigrateAsync<T>(backupPath, migrateAction, cancellationToken).ConfigureAwait(false);
             if (backup.Success && backup.Value is not null)
@@ -196,14 +236,19 @@ public sealed class JsonAppDataStore : IAppDataStore
             }
         }
 
-        // 최초 실행이거나 복구 불가 시 신규 생성
+        if (preserveUnreadableFiles && (primaryExists || backupExists))
+        {
+            throw new IOException("친구 목록과 백업을 읽을 수 없습니다. 기존 파일을 보존합니다.");
+        }
+
+        // 최초 실행이거나 프로필을 복구할 수 없을 때 신규 생성
         return (defaultFactory(), true);
     }
 
     private static async Task<(bool Success, T? Value, bool Migrated)> TryReadAndMigrateAsync<T>(
         string path,
         Func<JsonObject, bool> migrateAction,
-        CancellationToken cancellationToken) where T : class
+        CancellationToken cancellationToken, bool requireReadableFile = false) where T : class
     {
         try
         {
@@ -225,13 +270,15 @@ public sealed class JsonAppDataStore : IAppDataStore
                 ? (true, deserialized, migrated)
                 : (false, null, false);
         }
-        catch (Exception ex) when (ex is IOException or JsonException or UnauthorizedAccessException)
+        catch (Exception ex) when (ex is JsonException or FileNotFoundException or DirectoryNotFoundException
+            || (!requireReadableFile && ex is (IOException or UnauthorizedAccessException)))
         {
             return (false, null, false);
         }
     }
 
-    private async Task WriteAtomicCoreAsync<T>(string targetPath, T payload, CancellationToken cancellationToken)
+    private async Task WriteAtomicCoreAsync<T>(string targetPath, T payload, CancellationToken cancellationToken,
+        Func<string, string, CancellationToken, Task>? writeBackup = null, bool keepBackup = true)
     {
         Directory.CreateDirectory(DataDirectory);
 
@@ -261,7 +308,11 @@ public sealed class JsonAppDataStore : IAppDataStore
         }
 
         // 2. 기존 정상 파일이 존재하면 직전 백업(.bak) 1개 갱신
-        if (File.Exists(targetPath))
+        if (keepBackup && writeBackup is not null)
+        {
+            await writeBackup(targetPath, backupPath, cancellationToken).ConfigureAwait(false);
+        }
+        else if (keepBackup && File.Exists(targetPath))
         {
             File.Copy(targetPath, backupPath, overwrite: true);
         }

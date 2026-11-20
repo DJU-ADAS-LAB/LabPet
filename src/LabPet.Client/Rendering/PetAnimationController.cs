@@ -69,6 +69,10 @@ public sealed class PetAnimationController
 
     private Color _emissiveAccentColor = Color.FromRgb(255, 158, 181);
 
+    internal bool HasInteractiveMotion =>
+        _petReactionTime > 0 || _dizzyReactionTime > 0 || _typingStanceHoldTime > 0
+        || _typingStanceWeight > 0.01 || Volatile.Read(ref _pendingPawTaps) > 0;
+
     public void AttachRig(PetRigHandle rig, string accentHex)
     {
         _rig = rig;

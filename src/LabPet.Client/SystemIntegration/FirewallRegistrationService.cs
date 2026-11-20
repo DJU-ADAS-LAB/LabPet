@@ -26,8 +26,6 @@ public static class FirewallRegistrationService
     public const string UdpRuleName = "LabPet LAN UDP";
     public const string TcpRuleName = "LabPet LAN TCP";
 
-    private static readonly char[] UnsafeCmdPathChars = ['"', '&', '|', '<', '>', '%', '^', '\r', '\n'];
-
     /// <summary>
     /// 현재 머신에 LabPet 방화벽 규칙(UDP·TCP 모두)이 등록되어 있는지 확인한다 (비관리자 권한으로도 조회 가능).
     /// </summary>
@@ -45,7 +43,7 @@ public static class FirewallRegistrationService
         }
 
         var targetPath = expectedExecutablePath ?? Environment.ProcessPath;
-        return IsHardenedRuleOutput(udpOutput, targetPath) && IsHardenedRuleOutput(tcpOutput, targetPath)
+        return IsHardenedRuleOutput(udpOutput, targetPath, UdpRuleName) && IsHardenedRuleOutput(tcpOutput, targetPath, TcpRuleName)
             ? FirewallRuleStatus.RegisteredHardened
             : FirewallRuleStatus.RegisteredLegacy;
     }
@@ -53,109 +51,107 @@ public static class FirewallRegistrationService
     /// <summary>
     /// netsh verbose 출력이 로컬 서브넷 제한과 실행 파일 경로 제한을 모두 만족하는지 검증한다.
     /// </summary>
-    public static bool IsHardenedRuleOutput(string netshVerboseOutput, string? expectedExecutablePath)
+    public static bool IsHardenedRuleOutput(string netshVerboseOutput, string? expectedExecutablePath, string expectedRuleName)
     {
-        if (string.IsNullOrWhiteSpace(netshVerboseOutput))
+        var normalizedExpected = NormalizeExecutablePath(expectedExecutablePath);
+        if (string.IsNullOrWhiteSpace(netshVerboseOutput) || normalizedExpected is null)
+        {
+            return false;
+        }
+
+        var definitions = netshVerboseOutput.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries)
+            .Count(line => TrySplitFieldLine(line, out var key, out _) &&
+                key is "Rule Name" or "규칙 이름");
+        if (definitions != 1)
         {
             return false;
         }
 
         var fields = ParseNetshVerboseFields(netshVerboseOutput);
-        if (!TryGetField(fields, out var remoteIp, "RemoteIP", "원격 IP"))
-        {
-            return false;
-        }
-
-        var isLocalSubnet =
-            remoteIp.Contains("LocalSubnet", StringComparison.OrdinalIgnoreCase) ||
-            remoteIp.Contains("로컬 서브넷", StringComparison.OrdinalIgnoreCase);
-
-        if (!isLocalSubnet)
-        {
-            return false;
-        }
-
-        var normalizedExpected = NormalizeExecutablePath(expectedExecutablePath);
-        if (normalizedExpected is null)
-        {
-            return true;
-        }
-
-        if (!TryGetField(fields, out var programValue, "Program", "프로그램"))
+        if (!TryGetField(fields, out var name, "Rule Name", "규칙 이름") || name != expectedRuleName ||
+            !TryGetField(fields, out var enabled, "Enabled", "사용", "사용 여부") || !EqualsAny(enabled, "Yes", "예") ||
+            !TryGetField(fields, out var direction, "Direction", "방향") || !EqualsAny(direction, "In", "Inbound", "인바운드") ||
+            !TryGetField(fields, out var action, "Action", "작업", "동작") || !EqualsAny(action, "Allow", "허용") ||
+            !TryGetField(fields, out var remoteIp, "RemoteIP", "원격 IP") || !EqualsAny(remoteIp, "LocalSubnet", "로컬 서브넷") ||
+            !TryGetField(fields, out var protocol, "Protocol", "프로토콜") ||
+            !TryGetField(fields, out var ports, "LocalPort", "로컬 포트") ||
+            !TryGetField(fields, out var programValue, "Program", "프로그램"))
         {
             return false;
         }
 
         var normalizedActual = NormalizeExecutablePath(programValue);
-        return normalizedActual is not null &&
+        var usesExpectedPorts = expectedRuleName switch
+        {
+            UdpRuleName => EqualsAny(protocol, "UDP")
+                && (ports == $"{ProtocolConstants.UdpDiscoveryPort}-{ProtocolConstants.UdpMusicFramePort}"
+                    || ports.Split(',', StringSplitOptions.TrimEntries).Order().SequenceEqual(
+                        new[] { ProtocolConstants.UdpDiscoveryPort.ToString(), ProtocolConstants.UdpMusicFramePort.ToString() })),
+            TcpRuleName => EqualsAny(protocol, "TCP") && ports == ProtocolConstants.TcpControlPort.ToString(),
+            _ => false
+        };
+        return usesExpectedPorts && normalizedActual is not null &&
                string.Equals(normalizedActual, normalizedExpected, StringComparison.OrdinalIgnoreCase);
     }
 
-    /// <summary>
-    /// UAC 권한 상승으로 실행할 netsh 방화벽 규칙 등록 명령 문자열을 생성한다.
-    /// 기존 동일 이름 규칙을 삭제한 뒤 LocalSubnet 및 현재 실행 파일 제한이 적용된 UDP/TCP 규칙을 등록한다.
-    /// </summary>
-    public static string BuildNetshRegisterCommand(string? executablePath)
-    {
-        var normalizedPath = NormalizeExecutablePath(executablePath);
-        var programArg = normalizedPath is not null ? $" program=\"{normalizedPath}\"" : string.Empty;
-
-        return
-            $"netsh advfirewall firewall delete rule name=\"{UdpRuleName}\" >nul 2>&1 & " +
-            $"netsh advfirewall firewall delete rule name=\"{TcpRuleName}\" >nul 2>&1 & " +
-            $"netsh advfirewall firewall add rule name=\"{UdpRuleName}\" dir=in action=allow protocol=UDP localport={ProtocolConstants.UdpDiscoveryPort},{ProtocolConstants.UdpMusicFramePort} profile=any remoteip=localsubnet{programArg} & " +
-            $"netsh advfirewall firewall add rule name=\"{TcpRuleName}\" dir=in action=allow protocol=TCP localport={ProtocolConstants.TcpControlPort} profile=any remoteip=localsubnet{programArg}";
-    }
-
-    /// <summary>
-    /// 관리자 권한 PowerShell에서 직접 실행할 수 있는 방화벽 규칙 등록 명령 문자열을 생성한다.
-    /// </summary>
     public static string BuildPowerShellRegisterCommand(string? executablePath)
     {
-        var normalizedPath = NormalizeExecutablePath(executablePath);
-        var programArg = normalizedPath is not null
-            ? $" -Program '{normalizedPath.Replace("'", "''")}'"
-            : string.Empty;
-
+        var normalizedPath = NormalizeExecutablePath(executablePath)
+            ?? throw new ArgumentException("LabPet 실행 파일 경로를 확인할 수 없습니다.", nameof(executablePath));
+        var program = normalizedPath.Replace("'", "''");
+        // 두 새 규칙이 모두 생성되기 전에는 기존 규칙을 보존한다.
         return
-            $"Remove-NetFirewallRule -DisplayName '{UdpRuleName}','{TcpRuleName}' -ErrorAction SilentlyContinue; " +
-            $"New-NetFirewallRule -DisplayName '{UdpRuleName}' -Direction Inbound -Profile Any -RemoteAddress LocalSubnet{programArg} -Protocol UDP -LocalPort {ProtocolConstants.UdpDiscoveryPort},{ProtocolConstants.UdpMusicFramePort} -Action Allow; " +
-            $"New-NetFirewallRule -DisplayName '{TcpRuleName}' -Direction Inbound -Profile Any -RemoteAddress LocalSubnet{programArg} -Protocol TCP -LocalPort {ProtocolConstants.TcpControlPort} -Action Allow";
+            "$ErrorActionPreference = 'Stop'; " +
+            $"$old = @(Get-NetFirewallRule | Where-Object {{ $_.DisplayName -in @('{UdpRuleName}', '{TcpRuleName}') }}); " +
+            "$new = @(); try { " +
+            $"$new += New-NetFirewallRule -DisplayName '{UdpRuleName}' -Direction Inbound -Profile Any -RemoteAddress LocalSubnet -Program '{program}' -Protocol UDP -LocalPort {ProtocolConstants.UdpDiscoveryPort},{ProtocolConstants.UdpMusicFramePort} -Action Allow; " +
+            $"$new += New-NetFirewallRule -DisplayName '{TcpRuleName}' -Direction Inbound -Profile Any -RemoteAddress LocalSubnet -Program '{program}' -Protocol TCP -LocalPort {ProtocolConstants.TcpControlPort} -Action Allow; " +
+            "} catch { $new | Remove-NetFirewallRule -ErrorAction SilentlyContinue; throw }; " +
+            "if ($old.Count -gt 0) { $old | Remove-NetFirewallRule }";
     }
 
-    /// <summary>
-    /// UAC 권한 상승을 요청해 LabPet LAN UDP/TCP 인바운드 규칙(profile=any, remoteip=localsubnet, program 제한)을 등록한다.
-    /// 사용자가 UAC를 취소하거나 실패해도 예외를 던지지 않고 false를 반환한다.
-    /// </summary>
-    public static bool TryRegisterRulesElevated()
+    public static bool TryRegisterRulesElevated() => TryRegisterRulesElevated(out _);
+
+    public static bool TryRegisterRulesElevated(out string error)
     {
+        const string failed = "Windows 방화벽에서 두 규칙을 모두 확인하지 못했습니다.";
         try
         {
-            var cmd = BuildNetshRegisterCommand(Environment.ProcessPath);
-
-            var psi = new ProcessStartInfo("cmd.exe", $"/c {cmd}")
+            var script = BuildPowerShellRegisterCommand(Environment.ProcessPath);
+            var encoded = Convert.ToBase64String(Encoding.Unicode.GetBytes(script));
+            var psi = new ProcessStartInfo("powershell.exe", $"-NoProfile -NonInteractive -EncodedCommand {encoded}")
             {
                 UseShellExecute = true,
                 Verb = "runas",
                 WindowStyle = ProcessWindowStyle.Hidden
             };
-
-            using var proc = Process.Start(psi);
-            if (proc is null)
+            using var process = Process.Start(psi);
+            if (process is null || !process.WaitForExit(15000))
             {
+                error = "방화벽 등록 작업의 완료를 확인하지 못했습니다.";
                 return false;
             }
-
-            proc.WaitForExit(15000);
-            return proc.ExitCode == 0;
+            if (process.ExitCode != 0 || GetRuleStatus() != FirewallRuleStatus.RegisteredHardened)
+            {
+                error = failed;
+                return false;
+            }
+            error = string.Empty;
+            return true;
+        }
+        catch (ArgumentException ex)
+        {
+            error = ex.Message;
+            return false;
         }
         catch (Win32Exception)
         {
-            // 사용자가 UAC 권한 상승을 취소함
+            error = "방화벽 명령을 시작하지 못했습니다. 관리자 권한 허용 여부를 확인해 주세요.";
             return false;
         }
-        catch
+        catch (InvalidOperationException)
         {
+            error = failed;
             return false;
         }
     }
@@ -228,7 +224,7 @@ public static class FirewallRegistrationService
         }
 
         var trimmed = executablePath.Trim();
-        if (trimmed.IndexOfAny(UnsafeCmdPathChars) >= 0)
+        if (trimmed.IndexOfAny(['"', '\r', '\n']) >= 0 || !Path.IsPathFullyQualified(trimmed))
         {
             return null;
         }
@@ -329,4 +325,7 @@ public static class FirewallRegistrationService
         value = string.Empty;
         return false;
     }
+
+    private static bool EqualsAny(string value, params string[] choices)
+        => choices.Contains(value, StringComparer.OrdinalIgnoreCase);
 }

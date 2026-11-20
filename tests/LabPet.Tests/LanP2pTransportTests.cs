@@ -13,6 +13,48 @@ namespace LabPet.Tests;
 public sealed class LanP2pTransportTests
 {
     [Fact]
+    public async Task DiscoveryCandidate_RequiresAuthenticationBeforeReplacingFriendPresence()
+    {
+        await using var transport = new LanP2pTransport(udpDiscoveryPort: 0, udpMusicPort: 0, tcpControlPort: 0);
+        var friend = new FriendEntry
+        {
+            PetId = "friend", PetName = "기존 이름", LastKnownIp = "192.0.2.5",
+            CachedAppearance = new PetAppearance { SpeciesId = PetSpeciesIds.ChibiCat }
+        };
+        transport.UpdateKnownFriends([friend]);
+        var candidate = new DiscoveryHelloPacket { PetId = friend.PetId, PetName = "새 이름", TcpPort = 12345 };
+        transport.HandleDiscoveryHello(candidate, "192.0.2.6", new CancellationToken(canceled: true));
+
+        Assert.Empty(transport.GetDiscoveredPeers());
+        Assert.Equal("192.0.2.5", friend.LastKnownIp);
+        Assert.Equal(ProtocolConstants.TcpControlPort, friend.LastKnownTcpPort);
+        Assert.Equal("기존 이름", friend.PetName);
+        Assert.Equal(PetSpeciesIds.ChibiCat, friend.CachedAppearance.SpeciesId);
+    }
+
+    [Fact]
+    public async Task TcpListener_UsesConfiguredPortAndTimesOutIdleConnection()
+    {
+        await using var listener = new LanP2pTransport(udpDiscoveryPort: 0, udpMusicPort: 0, tcpControlPort: 0);
+        await listener.StartAsync(new PetProfile(), []);
+        Assert.True(listener.IsRunning);
+
+        await using var conflicting = new LanP2pTransport(udpDiscoveryPort: 0, udpMusicPort: 0, tcpControlPort: listener.BoundTcpPort);
+        var error = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+        conflicting.TransportError += (_, args) => error.TrySetResult(args.Operation);
+        await conflicting.StartAsync(new PetProfile(), []);
+        Assert.False(conflicting.IsRunning);
+        Assert.Equal(0, conflicting.BoundTcpPort);
+        Assert.Equal("Listen", await error.Task.WaitAsync(TimeSpan.FromSeconds(2)));
+
+        using var idle = new TcpClient();
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(8));
+        await idle.ConnectAsync(IPAddress.Loopback, listener.BoundTcpPort, deadline.Token);
+        var buffer = new byte[1];
+        Assert.Equal(0, await idle.GetStream().ReadAsync(buffer, deadline.Token));
+    }
+
+    [Fact]
     public void LanNetworkHelper_FiltersVirtualAdaptersAndComputesSubnetBroadcast()
     {
         Assert.True(LanNetworkHelper.IsPhysicalLanAdapter(
@@ -47,8 +89,9 @@ public sealed class LanP2pTransportTests
         await guest.StartAsync(guestProfile, []);
 
         // 1. 친구 신청 -> 호스트 수신 확인 (주인 이름 + 펫 이름 모두 전달)
-        var requestTcs = new TaskCompletionSource<(string Owner, string Pet)>();
-        host.FriendRequestReceived += (_, e) => requestTcs.TrySetResult((e.RequesterOwnerName, e.RequesterName));
+        var requestTcs = new TaskCompletionSource<LabPet.Shared.Transport.FriendRequestReceivedEventArgs>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        host.FriendRequestReceived += (_, e) => requestTcs.TrySetResult(e);
 
         var hostPeerSnapshot = new PeerSnapshot
         {
@@ -60,21 +103,28 @@ public sealed class LanP2pTransportTests
             ProtocolVersion = ProtocolConstants.CurrentProtocolVersion
         };
 
-        var reqSent = await guest.SendFriendRequestAsync(hostPeerSnapshot);
+        var code = PacketCrypto.GeneratePairingCode();
+        var reqSent = await guest.SendFriendRequestAsync(hostPeerSnapshot, code);
         Assert.True(reqSent);
-        var (reqOwner, reqPet) = await requestTcs.Task.WaitAsync(TimeSpan.FromSeconds(3));
-        Assert.Equal("민수", reqOwner);
-        Assert.Equal("게스트냥이", reqPet);
+        var request = await requestTcs.Task.WaitAsync(TimeSpan.FromSeconds(3));
+        Assert.Equal("민수", request.RequesterOwnerName);
+        Assert.Equal("게스트냥이", request.RequesterName);
 
         // 2. 호스트 친구 수락 -> 비밀키 교환
-        var acceptTcs = new TaskCompletionSource<string>();
+        var acceptTcs = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var hostAcceptTcs = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
         guest.FriendAccepted += (_, e) => acceptTcs.TrySetResult(e.PairSecretBase64);
+        host.FriendAccepted += (_, e) => hostAcceptTcs.TrySetResult(e.PairSecretBase64);
 
-        var pairSecret = PacketSigner.GeneratePairSecretBase64();
-        var acceptSent = await host.RespondFriendRequestAsync(
-            guestProfile.PetId, "127.0.0.1", guest.BoundTcpPort, accept: true, pairSecret);
+        Assert.False(await host.RespondFriendRequestAsync(Guid.NewGuid().ToString("N"), true, code));
+        Assert.False(await host.RespondFriendRequestAsync(request.RequestId, true, PacketCrypto.GeneratePairingCode()));
+        Assert.False(acceptTcs.Task.IsCompleted);
+        Assert.False(hostAcceptTcs.Task.IsCompleted);
+        var acceptSent = await host.RespondFriendRequestAsync(request.RequestId, accept: true, code);
         Assert.True(acceptSent);
-        Assert.Equal(pairSecret, await acceptTcs.Task.WaitAsync(TimeSpan.FromSeconds(3)));
+        var pairSecret = await acceptTcs.Task.WaitAsync(TimeSpan.FromSeconds(3));
+        Assert.Equal(pairSecret, await hostAcceptTcs.Task.WaitAsync(TimeSpan.FromSeconds(3)));
+        Assert.False(await host.RespondFriendRequestAsync(request.RequestId, true, code));
 
         // 양쪽 친구 테이블 등록
         var guestAsFriend = new FriendEntry

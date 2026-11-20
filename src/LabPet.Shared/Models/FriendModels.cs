@@ -1,3 +1,4 @@
+using System.Text.Json.Serialization;
 using LabPet.Shared.Protocol;
 
 namespace LabPet.Shared.Models;
@@ -10,6 +11,7 @@ public sealed class FriendsStore
     public int SchemaVersion { get; set; } = ProtocolConstants.CurrentStorageSchemaVersion;
     public List<FriendEntry> Friends { get; set; } = [];
     public DateTimeOffset UpdatedAtUtc { get; set; } = DateTimeOffset.UtcNow;
+    [JsonIgnore] public int UnreadableProtectedKeys { get; set; }
 }
 
 /// <summary>

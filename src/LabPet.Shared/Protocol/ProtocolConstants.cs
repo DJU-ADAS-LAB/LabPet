@@ -5,11 +5,11 @@ namespace LabPet.Shared.Protocol;
 /// </summary>
 public static class ProtocolConstants
 {
-    /// <summary>현재 클라이언트가 송신하는 프로토콜 버전 (v2: 친구 전용 제어 패킷 AES-256-GCM 암호화 필수).</summary>
-    public const int CurrentProtocolVersion = 2;
+    /// <summary>친구 확인 코드·ECDH, 서명된 응답과 탐색 검증을 사용하는 제어 프로토콜 버전.</summary>
+    public const int CurrentProtocolVersion = 3;
 
     /// <summary>이 클라이언트가 하위 호환으로 수용할 수 있는 최소 프로토콜 버전.</summary>
-    public const int MinSupportedProtocolVersion = 2;
+    public const int MinSupportedProtocolVersion = 3;
 
     /// <summary>로컬 JSON 저장소 프로필/친구 스키마 현재 버전.</summary>
     public const int CurrentStorageSchemaVersion = 1;

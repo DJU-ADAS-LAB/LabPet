@@ -1,0 +1,17 @@
+<Window x:Class="LabPet.Client.Views.PairingCodeWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="LabPet 친구 확인"
+        Width="405" SizeToContent="Height" ResizeMode="NoResize"
+        ShowInTaskbar="False" WindowStartupLocation="CenterOwner">
+    <StackPanel Margin="16">
+        <TextBlock x:Name="Instructions" TextWrapping="Wrap" Margin="0,0,0,10" />
+        <TextBox x:Name="CodeInput" AutomationProperties.Name="친구 확인 코드"
+                 FontFamily="Consolas" Padding="5" Margin="0,0,0,12" />
+        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+            <Button x:Name="ConfirmButton" Content="확인" IsDefault="True"
+                    Click="Confirm_Click" Padding="12,4" />
+            <Button x:Name="CancelButton" Content="취소" IsCancel="True" Padding="12,4" Margin="6,0,0,0" />
+        </StackPanel>
+    </StackPanel>
+</Window>

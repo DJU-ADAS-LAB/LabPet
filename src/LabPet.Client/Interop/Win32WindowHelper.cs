@@ -20,6 +20,47 @@ public static partial class Win32WindowHelper
         public int Y;
     }
 
+    [StructLayout(LayoutKind.Sequential)]
+    private struct NativeRect
+    {
+        public int Left, Top, Right, Bottom;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct NativeMonitorInfo
+    {
+        public int Size;
+        public NativeRect Monitor, Work;
+        public int Flags;
+    }
+
+    [LibraryImport("user32.dll")]
+    private static partial IntPtr MonitorFromWindow(IntPtr window, uint flags);
+
+    [LibraryImport("user32.dll", EntryPoint = "GetMonitorInfoW")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool GetMonitorInfo(IntPtr monitor, ref NativeMonitorInfo info);
+
+    public static bool TryGetNearestWorkArea(Window window, out Rect bounds)
+    {
+        const uint monitorDefaultToNearest = 2;
+        bounds = Rect.Empty;
+        var handle = new WindowInteropHelper(window).Handle;
+        if (handle == IntPtr.Zero)
+        {
+            return false;
+        }
+        var monitor = MonitorFromWindow(handle, monitorDefaultToNearest);
+        var info = new NativeMonitorInfo { Size = Marshal.SizeOf<NativeMonitorInfo>() };
+        if (monitor == IntPtr.Zero || !GetMonitorInfo(monitor, ref info))
+        {
+            return false;
+        }
+        var work = info.Work;
+        bounds = new Rect(work.Left, work.Top, work.Right - work.Left, work.Bottom - work.Top);
+        return true;
+    }
+
     [LibraryImport("user32.dll", EntryPoint = "GetWindowLongW", SetLastError = true)]
     private static partial int GetWindowLong(IntPtr hWnd, int nIndex);
 

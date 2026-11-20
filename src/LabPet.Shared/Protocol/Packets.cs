@@ -17,7 +17,8 @@ public enum PacketType
     MusicFollowOn = 7,
     MusicFollowOff = 8,
     Ack = 9,
-    GameEvent = 10
+    GameEvent = 10,
+    PresenceSync = 11
 }
 
 /// <summary>
@@ -61,6 +62,7 @@ public sealed class MusicFramePacket
     public int ProtocolVersion { get; set; } = ProtocolConstants.CurrentProtocolVersion;
     public string SenderPetId { get; set; } = string.Empty;
     public uint Sequence { get; set; }
+    public string SubscriptionId { get; set; } = string.Empty;
     public float Bass { get; set; }
     public float Mid { get; set; }
     public float Treble { get; set; }
@@ -83,6 +85,8 @@ public sealed class ControlPacketEnvelope
 
 public sealed class FriendRequestPayload
 {
+    public string RequestId { get; set; } = string.Empty;
+    public string PublicKey { get; set; } = string.Empty;
     public string RequesterOwnerName { get; set; } = string.Empty;
     public string RequesterName { get; set; } = string.Empty;
     public PetAppearance Appearance { get; set; } = new();
@@ -92,15 +96,17 @@ public sealed class FriendRequestPayload
 
 public sealed class FriendAcceptPayload
 {
+    public string RequestId { get; set; } = string.Empty;
+    public string PublicKey { get; set; } = string.Empty;
     public string AccepterOwnerName { get; set; } = string.Empty;
     public string AccepterName { get; set; } = string.Empty;
     public PetAppearance Appearance { get; set; } = new();
-    public string PairSecretBase64 { get; set; } = string.Empty;
     public int TcpPort { get; set; } = ProtocolConstants.TcpControlPort;
 }
 
 public sealed class FriendRejectPayload
 {
+    public string RequestId { get; set; } = string.Empty;
     public string? Reason { get; set; }
 }
 
@@ -122,6 +128,7 @@ public sealed class PetInteractionPayload
 public sealed class MusicFollowPayload
 {
     public int ListenerUdpPort { get; set; } = ProtocolConstants.UdpMusicFramePort;
+    public string SubscriptionId { get; set; } = string.Empty;
 }
 
 public sealed class AckPayload
@@ -129,6 +136,18 @@ public sealed class AckPayload
     public string AckMessageId { get; set; } = string.Empty;
     public bool Accepted { get; set; } = true;
     public string? ErrorCode { get; set; }
+    public FriendPresencePayload? Presence { get; set; }
+}
+
+public sealed class FriendPresencePayload
+{
+    public string OwnerName { get; set; } = string.Empty;
+    public string PetName { get; set; } = string.Empty;
+    public PetAppearance Appearance { get; set; } = new();
+    public int Level { get; set; }
+    public bool IsMusicActive { get; set; }
+    public int TcpPort { get; set; }
+    public string AppVersion { get; set; } = string.Empty;
 }
 
 /// <summary>

@@ -40,14 +40,12 @@ public interface ISocialTransport : IAsyncDisposable
     /// <summary>현재 관측된 온라인 피어 목록 스냅샷을 반환한다.</summary>
     IReadOnlyList<PeerSnapshot> GetDiscoveredPeers();
 
-    Task<bool> SendFriendRequestAsync(PeerSnapshot target, CancellationToken cancellationToken = default);
+    Task<bool> SendFriendRequestAsync(PeerSnapshot target, string verificationCode, CancellationToken cancellationToken = default);
 
     Task<bool> RespondFriendRequestAsync(
-        string requesterPetId,
-        string requesterIp,
-        int requesterTcpPort,
+        string requestId,
         bool accept,
-        string? pairSecretBase64,
+        string? verificationCode,
         CancellationToken cancellationToken = default);
 
     Task<bool> SendBubbleMessageAsync(FriendEntry friend, string message, CancellationToken cancellationToken = default);
@@ -61,6 +59,7 @@ public interface ISocialTransport : IAsyncDisposable
 }
 
 public sealed class FriendRequestReceivedEventArgs(
+    string requestId,
     string requesterPetId,
     string requesterOwnerName,
     string requesterName,
@@ -69,6 +68,7 @@ public sealed class FriendRequestReceivedEventArgs(
     string remoteIp,
     int remoteTcpPort) : EventArgs
 {
+    public string RequestId { get; } = requestId;
     public string RequesterPetId { get; } = requesterPetId;
     public string RequesterOwnerName { get; } = requesterOwnerName;
     public string RequesterName { get; } = requesterName;

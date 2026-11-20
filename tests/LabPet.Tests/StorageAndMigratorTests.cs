@@ -154,6 +154,31 @@ public sealed class StorageAndMigratorTests : IDisposable
         var migratedDiskJson = await File.ReadAllTextAsync(friendsPath);
         Assert.DoesNotContain(legacySecret, migratedDiskJson);
         Assert.Contains(LocalSecretProtector.ProtectedPrefix, migratedDiskJson);
+        var backupPath = friendsPath + ".bak";
+        Assert.Contains(LocalSecretProtector.ProtectedPrefix, await File.ReadAllTextAsync(backupPath));
+        Assert.DoesNotContain(legacySecret, await File.ReadAllTextAsync(backupPath));
+
+        // 본 파일이 이미 암호화되어 있어도 기존 평문 백업을 별도로 보호한다.
+        await File.WriteAllTextAsync(backupPath, legacyJson);
+        await store.LoadFriendsAsync();
+        Assert.DoesNotContain(legacySecret, await File.ReadAllTextAsync(backupPath));
+        Assert.Contains(LocalSecretProtector.ProtectedPrefix, await File.ReadAllTextAsync(backupPath));
+    }
+
+    [Fact]
+    public async Task SaveFriends_PreservesUnreadableProtectedBlob()
+    {
+        var store = new JsonAppDataStore(new StateMigrator(), _tempDir);
+        var protectedBlob = LocalSecretProtector.ProtectedPrefix + "AQID";
+        await store.SaveFriendsAsync(new FriendsStore
+        {
+            Friends = [new FriendEntry { PetId = "friend", PairSecretBase64 = protectedBlob }]
+        });
+        var loaded = await store.LoadFriendsAsync();
+        Assert.Equal(1, loaded.UnreadableProtectedKeys);
+        Assert.Equal(protectedBlob, Assert.Single(loaded.Friends).PairSecretBase64);
+        await store.SaveFriendsAsync(loaded);
+        Assert.Equal(protectedBlob, Assert.Single((await store.LoadFriendsAsync()).Friends).PairSecretBase64);
     }
 
     public void Dispose()

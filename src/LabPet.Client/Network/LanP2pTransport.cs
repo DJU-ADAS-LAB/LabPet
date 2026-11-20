@@ -1,4 +1,3 @@
-using System.Buffers.Binary;
 using System.Collections.Concurrent;
 using System.Net;
 using System.Net.Sockets;
@@ -16,9 +15,29 @@ namespace LabPet.Client.Network;
 /// - TCP 45680: 친구 신청/수락, HMAC-SHA256 인증 메시지/반응/쓰다듬기, 노래 따라하기 구독 제어
 /// - UDP 45679: 구독 중인 인증된 친구 IP 목록에만 30Hz 경량 오디오 프레임 유니캐스트
 /// </summary>
-public sealed class LanP2pTransport : ISocialTransport
+public sealed partial class LanP2pTransport : ISocialTransport
 {
-    private sealed record MusicSubscriber(string PetId, IPEndPoint UdpEndPoint, string PairSecretBase64, DateTimeOffset SubscribedAtUtc);
+    internal const int MaxConcurrentControlConnections = 16;
+    internal static readonly TimeSpan InboundControlTimeout = TimeSpan.FromSeconds(4);
+    private static readonly TimeSpan OutboundControlTimeout = TimeSpan.FromSeconds(3);
+    private sealed record MusicSubscriber(string PetId, IPEndPoint UdpEndPoint, string PairSecretBase64, string SubscriptionId);
+
+    internal sealed class MusicSequenceWindow(string subscriptionId)
+    {
+        private uint? _sequence;
+        public string SubscriptionId { get; } = subscriptionId;
+
+        public bool Accept(MusicFramePacket packet)
+        {
+            if (packet.SubscriptionId != SubscriptionId ||
+                (_sequence is { } previous && unchecked((int)(packet.Sequence - previous)) <= 0))
+            {
+                return false;
+            }
+            _sequence = packet.Sequence;
+            return true;
+        }
+    }
 
     private readonly int _udpDiscoveryPort;
     private readonly int _udpMusicPort;
@@ -27,12 +46,15 @@ public sealed class LanP2pTransport : ISocialTransport
     private readonly ConcurrentDictionary<string, PeerSnapshot> _peers = new(StringComparer.OrdinalIgnoreCase);
     private volatile Dictionary<string, FriendEntry> _friendsByPetId = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, MusicSubscriber> _musicSubscribers = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, MusicSequenceWindow> _musicReceiveWindows = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, ControlReplayWindow> _replayWindows = new(StringComparer.OrdinalIgnoreCase);
 
     private readonly object _stateLock = new();
     private CancellationTokenSource? _cts;
     private UdpClient? _discoveryUdp;
     private UdpClient? _musicUdp;
     private TcpListener? _tcpListener;
+    private Task[] _transportTasks = [];
 
     private string _localPetId = string.Empty;
     private LocalPresenceState _localPresence = new(string.Empty, "모찌", new PetAppearance(), 1, false, "0.1.0");
@@ -86,44 +108,51 @@ public sealed class LanP2pTransport : ISocialTransport
             UpdateKnownFriends(friends);
             _cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
 
-            // 1. TCP 제어 리스너 시작 (기본 45680, 충돌 시 동적 포트 폴백)
+            // 방화벽의 고정 포트를 사용한다. 테스트에서만 명시적으로 포트 0을 지정한다.
             try
             {
-                _tcpListener = new TcpListener(IPAddress.Any, _tcpControlPort);
-                _tcpListener.Start();
+                _tcpListener = new TcpListener(IPAddress.Any, _tcpControlPort) { ExclusiveAddressUse = true };
+                _tcpListener.Start(MaxConcurrentControlConnections * 2);
                 _boundTcpPort = ((IPEndPoint)_tcpListener.LocalEndpoint).Port;
+                _discoveryUdp = CreateReusableUdpClient(_udpDiscoveryPort, enableBroadcast: true);
+                _musicUdp = CreateReusableUdpClient(_udpMusicPort, enableBroadcast: false);
             }
-            catch (SocketException)
+            catch (SocketException ex)
             {
-                _tcpListener = new TcpListener(IPAddress.Any, 0);
-                _tcpListener.Start();
-                _boundTcpPort = ((IPEndPoint)_tcpListener.LocalEndpoint).Port;
+                _tcpListener?.Stop();
+                _tcpListener = null;
+                _discoveryUdp?.Dispose();
+                _musicUdp?.Dispose();
+                _discoveryUdp = null;
+                _musicUdp = null;
+                _boundTcpPort = 0;
+                _cts.Dispose();
+                _cts = null;
+                TransportError?.Invoke(this, new TransportErrorEventArgs("Listen",
+                    $"LAN 통신을 시작하지 못했습니다. TCP {_tcpControlPort} 및 UDP {_udpDiscoveryPort}, {_udpMusicPort} 포트를 확인해 주세요.", ex));
+                return Task.CompletedTask;
             }
-
-            // 2. UDP 탐색 소켓 (45678, ReuseAddress + Broadcast)
-            _discoveryUdp = CreateReusableUdpClient(_udpDiscoveryPort, enableBroadcast: true);
-
-            // 3. UDP 오디오 프레임 소켓 (45679, ReuseAddress)
-            _musicUdp = CreateReusableUdpClient(_udpMusicPort, enableBroadcast: false);
 
             IsRunning = true;
             var ct = _cts.Token;
-            _ = Task.Run(() => DiscoveryBroadcastLoopAsync(ct), ct);
-            _ = Task.Run(() => DiscoveryReceiveLoopAsync(ct), ct);
-            _ = Task.Run(() => MusicFrameReceiveLoopAsync(ct), ct);
-            _ = Task.Run(() => TcpAcceptLoopAsync(ct), ct);
+            _transportTasks =
+            [
+                DiscoveryBroadcastLoopAsync(ct), DiscoveryReceiveLoopAsync(ct),
+                MusicFrameReceiveLoopAsync(ct), TcpAcceptLoopAsync(_tcpListener, ct)
+            ];
         }
 
         return Task.CompletedTask;
     }
 
-    public Task StopAsync(CancellationToken cancellationToken = default)
+    public async Task StopAsync(CancellationToken cancellationToken = default)
     {
+        Task[] tasks;
         lock (_stateLock)
         {
             if (!IsRunning)
             {
-                return Task.CompletedTask;
+                return;
             }
 
             IsRunning = false;
@@ -137,10 +166,22 @@ public sealed class LanP2pTransport : ISocialTransport
             _discoveryUdp = null;
             _musicUdp = null;
             _cts = null;
+            _boundTcpPort = 0;
+            tasks = _transportTasks;
+            _transportTasks = [];
             _musicSubscribers.Clear();
+            _musicReceiveWindows.Clear();
+            _replayWindows.Clear();
+            lock (_pairingLock)
+            {
+                foreach (var pair in _outgoingPairings.Values) pair.Dispose();
+                foreach (var pair in _incomingPairings.Values) pair.Dispose();
+                _outgoingPairings.Clear();
+                _incomingPairings.Clear();
+            }
         }
 
-        return Task.CompletedTask;
+        await Task.WhenAll(tasks).WaitAsync(cancellationToken).ConfigureAwait(false);
     }
 
     public Task UpdateLocalPresenceAsync(LocalPresenceState presence, CancellationToken cancellationToken = default)
@@ -160,16 +201,22 @@ public sealed class LanP2pTransport : ISocialTransport
             }
         }
         _friendsByPetId = friendsByPetId;
+        foreach (var petId in _replayWindows.Keys)
+        {
+            if (!friendsByPetId.ContainsKey(petId))
+            {
+                _replayWindows.TryRemove(petId, out _);
+            }
+        }
 
-        // 기존 피어 스냅샷의 친구 여부 배지 동기화
+        // 탐색 후보를 친구의 인증된 프레즌스로 승격하지 않는다.
         var changed = false;
         foreach (var peer in _peers.Values)
         {
             var isFriend = friendsByPetId.ContainsKey(peer.PetId);
             if (peer.IsFriend != isFriend)
             {
-                peer.IsFriend = isFriend;
-                changed = true;
+                changed |= _peers.TryRemove(new KeyValuePair<string, PeerSnapshot>(peer.PetId, peer));
             }
         }
 
@@ -180,84 +227,8 @@ public sealed class LanP2pTransport : ISocialTransport
     }
 
     public IReadOnlyList<PeerSnapshot> GetDiscoveredPeers()
-        => _peers.Values.OrderByDescending(p => p.IsFriend).ThenBy(p => p.PetName, StringComparer.OrdinalIgnoreCase).ToList();
-
-    public async Task<bool> SendFriendRequestAsync(PeerSnapshot target, CancellationToken cancellationToken = default)
-    {
-        if (target.RequiresUpdate || string.IsNullOrWhiteSpace(target.IpAddress))
-        {
-            return false;
-        }
-
-        var presence = _localPresence;
-        var payload = new FriendRequestPayload
-        {
-            RequesterOwnerName = presence.OwnerName,
-            RequesterName = presence.PetName,
-            Appearance = presence.Appearance.Clone(),
-            Level = presence.Level,
-            TcpPort = _boundTcpPort
-        };
-
-        var ack = await SendControlPacketAsync(
-            target.IpAddress,
-            target.TcpPort,
-            PacketType.FriendRequest,
-            payload,
-            pairSecretBase64: null,
-            cancellationToken).ConfigureAwait(false);
-
-        return ack is { Accepted: true };
-    }
-
-    public async Task<bool> RespondFriendRequestAsync(
-        string requesterPetId,
-        string requesterIp,
-        int requesterTcpPort,
-        bool accept,
-        string? pairSecretBase64,
-        CancellationToken cancellationToken = default)
-    {
-        if (accept)
-        {
-            if (string.IsNullOrWhiteSpace(pairSecretBase64))
-            {
-                return false;
-            }
-
-            var presence = _localPresence;
-            var payload = new FriendAcceptPayload
-            {
-                AccepterOwnerName = presence.OwnerName,
-                AccepterName = presence.PetName,
-                Appearance = presence.Appearance.Clone(),
-                PairSecretBase64 = pairSecretBase64,
-                TcpPort = _boundTcpPort
-            };
-
-            var ack = await SendControlPacketAsync(
-                requesterIp,
-                requesterTcpPort,
-                PacketType.FriendAccept,
-                payload,
-                pairSecretBase64: null,
-                cancellationToken).ConfigureAwait(false);
-
-            return ack is { Accepted: true };
-        }
-        else
-        {
-            var ack = await SendControlPacketAsync(
-                requesterIp,
-                requesterTcpPort,
-                PacketType.FriendReject,
-                new FriendRejectPayload { Reason = "rejected_by_user" },
-                pairSecretBase64: null,
-                cancellationToken).ConfigureAwait(false);
-
-            return ack is { Accepted: true };
-        }
-    }
+        => _peers.Values.Where(peer => peer.IsFriend == _friendsByPetId.ContainsKey(peer.PetId))
+            .OrderByDescending(p => p.IsFriend).ThenBy(p => p.PetName, StringComparer.OrdinalIgnoreCase).ToList();
 
     public async Task<bool> SendBubbleMessageAsync(FriendEntry friend, string message, CancellationToken cancellationToken = default)
     {
@@ -293,12 +264,28 @@ public sealed class LanP2pTransport : ISocialTransport
             new PetInteractionPayload { InteractionType = interactionType },
             cancellationToken);
 
-    public Task<bool> SetMusicFollowAsync(FriendEntry hostFriend, bool enable, CancellationToken cancellationToken = default)
-        => SendFriendControlPacketAsync(
-            hostFriend,
-            enable ? PacketType.MusicFollowOn : PacketType.MusicFollowOff,
-            new MusicFollowPayload { ListenerUdpPort = _udpMusicPort },
-            cancellationToken);
+    public async Task<bool> SetMusicFollowAsync(FriendEntry hostFriend, bool enable, CancellationToken cancellationToken = default)
+    {
+        if (!enable)
+        {
+            _musicReceiveWindows.TryRemove(hostFriend.PetId, out var previous);
+            return await SendFriendControlPacketAsync(hostFriend, PacketType.MusicFollowOff,
+                new MusicFollowPayload { SubscriptionId = previous?.SubscriptionId ?? string.Empty },
+                cancellationToken).ConfigureAwait(false);
+        }
+
+        var session = new MusicSequenceWindow(Guid.NewGuid().ToString("N"));
+        _musicReceiveWindows[hostFriend.PetId] = session;
+        var localPort = (_musicUdp?.Client.LocalEndPoint as IPEndPoint)?.Port ?? _udpMusicPort;
+        var ok = await SendFriendControlPacketAsync(hostFriend, PacketType.MusicFollowOn,
+            new MusicFollowPayload { ListenerUdpPort = localPort, SubscriptionId = session.SubscriptionId },
+            cancellationToken).ConfigureAwait(false);
+        if (!ok)
+        {
+            _musicReceiveWindows.TryRemove(new KeyValuePair<string, MusicSequenceWindow>(hostFriend.PetId, session));
+        }
+        return ok;
+    }
 
     public Task<bool> SendGameEventAsync(FriendEntry friend, GameEventPayload payload, CancellationToken cancellationToken = default)
         => SendFriendControlPacketAsync(
@@ -318,13 +305,14 @@ public sealed class LanP2pTransport : ISocialTransport
             return false;
         }
 
+        var messageId = Guid.NewGuid().ToString("N");
         var ack = await SendControlPacketAsync(
             primaryIp,
             primaryPort,
             packetType,
             payload,
             friend.PairSecretBase64,
-            cancellationToken).ConfigureAwait(false);
+            cancellationToken, friend.PetId, messageId: messageId).ConfigureAwait(false);
 
         if (ack is { Accepted: true })
         {
@@ -360,7 +348,7 @@ public sealed class LanP2pTransport : ISocialTransport
                 packetType,
                 payload,
                 friend.PairSecretBase64,
-                cancellationToken).ConfigureAwait(false);
+                cancellationToken, friend.PetId, messageId: messageId).ConfigureAwait(false);
             return retryAck is { Accepted: true };
         }
 
@@ -384,6 +372,7 @@ public sealed class LanP2pTransport : ISocialTransport
                     ProtocolVersion = ProtocolConstants.CurrentProtocolVersion,
                     SenderPetId = _localPetId,
                     Sequence = frame.Sequence,
+                    SubscriptionId = sub.SubscriptionId,
                     Bass = frame.Bass,
                     Mid = frame.Mid,
                     Treble = frame.Treble,
@@ -490,66 +479,11 @@ public sealed class LanP2pTransport : ISocialTransport
             {
                 var result = await udp.ReceiveAsync(ct).ConfigureAwait(false);
                 var hello = JsonSerializer.Deserialize<DiscoveryHelloPacket>(result.Buffer, ProtocolJson.PacketOptions);
-                if (hello is null || string.IsNullOrWhiteSpace(hello.PetId))
+                if (hello is not null)
                 {
-                    continue;
+                    var address = result.RemoteEndPoint.Address;
+                    HandleDiscoveryHello(hello, (address.IsIPv4MappedToIPv6 ? address.MapToIPv4() : address).ToString(), ct);
                 }
-
-                if (string.Equals(hello.PetId, _localPetId, StringComparison.OrdinalIgnoreCase))
-                {
-                    continue;
-                }
-
-                var compat = ProtocolConstants.EvaluateCompatibility(hello.ProtocolVersion);
-                var remoteIp = result.RemoteEndPoint.Address.IsIPv4MappedToIPv6
-                    ? result.RemoteEndPoint.Address.MapToIPv4().ToString()
-                    : result.RemoteEndPoint.Address.ToString();
-                var isFriend = _friendsByPetId.TryGetValue(hello.PetId, out var friendEntry);
-
-                // DHCP IP 및 이름 변경 시 영구 petId 기준으로 자동 갱신
-                if (friendEntry is not null)
-                {
-                    lock (friendEntry)
-                    {
-                        friendEntry.LastKnownIp = remoteIp;
-                        friendEntry.LastKnownTcpPort = hello.TcpPort;
-                        friendEntry.LastSeenAtUtc = DateTimeOffset.UtcNow;
-                        if (!string.IsNullOrWhiteSpace(hello.OwnerName))
-                        {
-                            friendEntry.OwnerName = hello.OwnerName;
-                        }
-
-                        if (!string.IsNullOrWhiteSpace(hello.PetName))
-                        {
-                            friendEntry.PetName = hello.PetName;
-                        }
-
-                        if (hello.Appearance is not null)
-                        {
-                            friendEntry.CachedAppearance = hello.Appearance.Clone();
-                        }
-                    }
-                }
-
-                var snapshot = new PeerSnapshot
-                {
-                    PetId = hello.PetId,
-                    OwnerName = hello.OwnerName ?? string.Empty,
-                    PetName = hello.PetName,
-                    Appearance = hello.Appearance ?? new PetAppearance(),
-                    Level = hello.Level,
-                    IsMusicActive = hello.IsMusicActive,
-                    IpAddress = remoteIp,
-                    TcpPort = hello.TcpPort,
-                    ProtocolVersion = hello.ProtocolVersion,
-                    AppVersion = hello.AppVersion,
-                    Compatibility = compat,
-                    IsFriend = isFriend,
-                    LastSeenUtc = DateTimeOffset.UtcNow
-                };
-
-                _peers[hello.PetId] = snapshot;
-                RaisePeersChanged();
             }
             catch (OperationCanceledException)
             {
@@ -601,6 +535,10 @@ public sealed class LanP2pTransport : ISocialTransport
                 {
                     continue;
                 }
+                if (!_musicReceiveWindows.TryGetValue(packet.SenderPetId, out var session) || !session.Accept(packet))
+                {
+                    continue;
+                }
 
                 MusicFrameReceived?.Invoke(this, new MusicFrameReceivedEventArgs(
                     packet.SenderPetId,
@@ -621,328 +559,11 @@ public sealed class LanP2pTransport : ISocialTransport
         }
     }
 
-    private async Task TcpAcceptLoopAsync(CancellationToken ct)
-    {
-        var listener = _tcpListener;
-        if (listener is null)
-        {
-            return;
-        }
-
-        while (!ct.IsCancellationRequested)
-        {
-            try
-            {
-                var client = await listener.AcceptTcpClientAsync(ct).ConfigureAwait(false);
-                _ = Task.Run(() => HandleIncomingTcpClientAsync(client, ct), ct);
-            }
-            catch (OperationCanceledException)
-            {
-                break;
-            }
-            catch (ObjectDisposedException)
-            {
-                break;
-            }
-            catch (SocketException)
-            {
-                break;
-            }
-        }
-    }
-
-    private async Task HandleIncomingTcpClientAsync(TcpClient client, CancellationToken ct)
-    {
-        using (client)
-        {
-            try
-            {
-                client.ReceiveTimeout = 4000;
-                client.SendTimeout = 4000;
-
-                var remoteEndPoint = client.Client.RemoteEndPoint as IPEndPoint;
-                var remoteIp = remoteEndPoint is not null
-                    ? (remoteEndPoint.Address.IsIPv4MappedToIPv6 ? remoteEndPoint.Address.MapToIPv4().ToString() : remoteEndPoint.Address.ToString())
-                    : string.Empty;
-                await using var stream = client.GetStream();
-
-                var envelope = await ReadFramedJsonAsync<ControlPacketEnvelope>(stream, ct).ConfigureAwait(false);
-                if (envelope?.Header is null)
-                {
-                    return;
-                }
-
-                var ack = ProcessIncomingControlEnvelope(envelope, remoteIp);
-                var ackEnvelope = new ControlPacketEnvelope
-                {
-                    Header = new PacketHeader
-                    {
-                        ProtocolVersion = ProtocolConstants.CurrentProtocolVersion,
-                        AppVersion = _localPresence.AppVersion,
-                        PacketType = PacketType.Ack,
-                        SenderPetId = _localPetId
-                    },
-                    PayloadJson = JsonSerializer.Serialize(ack, ProtocolJson.PacketOptions)
-                };
-
-                await WriteFramedJsonAsync(stream, ackEnvelope, ct).ConfigureAwait(false);
-            }
-            catch
-            {
-                // 비정상 TCP 연결 종료 무시
-            }
-        }
-    }
-
-    private AckPayload ProcessIncomingControlEnvelope(ControlPacketEnvelope envelope, string remoteIp)
-    {
-        var header = envelope.Header;
-
-        // 1. 프로토콜 버전 호환성 차단
-        var compat = ProtocolConstants.EvaluateCompatibility(header.ProtocolVersion);
-        if (compat != ProtocolCompatibility.Compatible)
-        {
-            return new AckPayload
-            {
-                AckMessageId = header.MessageId,
-                Accepted = false,
-                ErrorCode = "PROTOCOL_MISMATCH"
-            };
-        }
-
-        // 2. 친구 전용 패킷은 AES-256-GCM 암호화 + HMAC-SHA256 서명 검증 필수
-        var requiresFriendAuth = header.PacketType is
-            PacketType.BubbleMessage or
-            PacketType.QuickReaction or
-            PacketType.PetInteraction or
-            PacketType.MusicFollowOn or
-            PacketType.MusicFollowOff or
-            PacketType.GameEvent;
-
-        string? verifiedPairSecret = null;
-        var effectivePayloadJson = envelope.PayloadJson;
-        if (requiresFriendAuth)
-        {
-            if (!_friendsByPetId.TryGetValue(header.SenderPetId, out var friend))
-            {
-                return new AckPayload { AckMessageId = header.MessageId, Accepted = false, ErrorCode = "NOT_FRIEND" };
-            }
-
-            if (!envelope.IsEncrypted)
-            {
-                return RejectAck(header.MessageId, "ENCRYPTION_REQUIRED");
-            }
-
-            var signatureInput = PacketCrypto.BuildEncryptedPayloadSignatureInput(envelope);
-            var canonical = PacketSigner.BuildControlCanonicalString(header, signatureInput);
-            lock (friend)
-            {
-                verifiedPairSecret = friend.PairSecretBase64;
-                if (!PacketSigner.VerifySignature(canonical, header.SignatureBase64, verifiedPairSecret))
-                {
-                    return new AckPayload { AckMessageId = header.MessageId, Accepted = false, ErrorCode = "INVALID_SIGNATURE" };
-                }
-
-                if (!PacketCrypto.TryDecryptControlPayload(envelope, verifiedPairSecret, out effectivePayloadJson))
-                {
-                    return RejectAck(header.MessageId, "DECRYPTION_FAILED");
-                }
-
-                if (!string.IsNullOrWhiteSpace(remoteIp))
-                {
-                    friend.LastKnownIp = remoteIp;
-                }
-
-                friend.LastSeenAtUtc = DateTimeOffset.UtcNow;
-            }
-
-            if (!string.IsNullOrWhiteSpace(remoteIp) && _peers.TryGetValue(header.SenderPetId, out var livePeer))
-            {
-                livePeer.IpAddress = remoteIp;
-                livePeer.LastSeenUtc = DateTimeOffset.UtcNow;
-            }
-        }
-
-        // 3. 패킷 유형별 이벤트 디스패치 (수락 패킷 Ack 응답 전에 인증 테이블이 먼저 갱신되도록 동기 구간 실행)
-        switch (header.PacketType)
-        {
-            case PacketType.FriendRequest:
-            {
-                var p = JsonSerializer.Deserialize<FriendRequestPayload>(effectivePayloadJson, ProtocolJson.PacketOptions);
-                if (p is null) return RejectAck(header.MessageId, "INVALID_PAYLOAD");
-
-                FriendRequestReceived?.Invoke(this, new FriendRequestReceivedEventArgs(
-                    header.SenderPetId, p.RequesterOwnerName ?? string.Empty, p.RequesterName, p.Appearance ?? new PetAppearance(), p.Level, remoteIp, p.TcpPort));
-                break;
-            }
-
-            case PacketType.FriendAccept:
-            {
-                var p = JsonSerializer.Deserialize<FriendAcceptPayload>(effectivePayloadJson, ProtocolJson.PacketOptions);
-                if (p is null || string.IsNullOrWhiteSpace(p.PairSecretBase64)) return RejectAck(header.MessageId, "INVALID_PAYLOAD");
-
-                FriendAccepted?.Invoke(this, new FriendAcceptedEventArgs(
-                    header.SenderPetId, p.AccepterOwnerName ?? string.Empty, p.AccepterName, p.Appearance ?? new PetAppearance(), p.PairSecretBase64, remoteIp, p.TcpPort));
-                break;
-            }
-
-            case PacketType.FriendReject:
-            {
-                var p = JsonSerializer.Deserialize<FriendRejectPayload>(effectivePayloadJson, ProtocolJson.PacketOptions);
-                FriendRejected?.Invoke(this, new FriendRejectedEventArgs(header.SenderPetId, p?.Reason));
-                break;
-            }
-
-            case PacketType.BubbleMessage:
-            {
-                var p = JsonSerializer.Deserialize<BubbleMessagePayload>(effectivePayloadJson, ProtocolJson.PacketOptions);
-                if (p is null || string.IsNullOrWhiteSpace(p.Text)) return RejectAck(header.MessageId, "INVALID_PAYLOAD");
-
-                var safeText = p.Text.Length > ProtocolConstants.MaxBubbleMessageLength
-                    ? p.Text[..ProtocolConstants.MaxBubbleMessageLength]
-                    : p.Text;
-                BubbleMessageReceived?.Invoke(this, new BubbleMessageReceivedEventArgs(
-                    header.SenderPetId, header.MessageId, safeText, header.TimestampUtc));
-                break;
-            }
-
-            case PacketType.QuickReaction:
-            {
-                var p = JsonSerializer.Deserialize<QuickReactionPayload>(effectivePayloadJson, ProtocolJson.PacketOptions);
-                if (p is null) return RejectAck(header.MessageId, "INVALID_PAYLOAD");
-
-                QuickReactionReceived?.Invoke(this, new QuickReactionReceivedEventArgs(header.SenderPetId, p.ReactionId));
-                break;
-            }
-
-            case PacketType.PetInteraction:
-            {
-                var p = JsonSerializer.Deserialize<PetInteractionPayload>(effectivePayloadJson, ProtocolJson.PacketOptions);
-                PetInteractionReceived?.Invoke(this, new PetInteractionReceivedEventArgs(
-                    header.SenderPetId, p?.InteractionType ?? "pet"));
-                break;
-            }
-
-            case PacketType.MusicFollowOn:
-            {
-                var p = JsonSerializer.Deserialize<MusicFollowPayload>(effectivePayloadJson, ProtocolJson.PacketOptions);
-                var udpPort = p?.ListenerUdpPort ?? _udpMusicPort;
-                if (IPAddress.TryParse(remoteIp, out var parsedIp) && verifiedPairSecret is not null)
-                {
-                    _musicSubscribers[header.SenderPetId] = new MusicSubscriber(
-                        header.SenderPetId,
-                        new IPEndPoint(parsedIp, udpPort),
-                        verifiedPairSecret,
-                        DateTimeOffset.UtcNow);
-                    MusicFollowStateChanged?.Invoke(this, new MusicFollowStateChangedEventArgs(header.SenderPetId, true));
-                }
-
-                break;
-            }
-
-            case PacketType.MusicFollowOff:
-            {
-                if (_musicSubscribers.TryRemove(header.SenderPetId, out _))
-                {
-                    MusicFollowStateChanged?.Invoke(this, new MusicFollowStateChangedEventArgs(header.SenderPetId, false));
-                }
-
-                break;
-            }
-
-            case PacketType.GameEvent:
-            {
-                var p = JsonSerializer.Deserialize<GameEventPayload>(effectivePayloadJson, ProtocolJson.PacketOptions);
-                if (p is null || string.IsNullOrWhiteSpace(p.GameType) || string.IsNullOrWhiteSpace(p.Action))
-                {
-                    return RejectAck(header.MessageId, "INVALID_PAYLOAD");
-                }
-
-                GameEventReceived?.Invoke(this, new GameEventReceivedEventArgs(header.SenderPetId, p));
-                break;
-            }
-        }
-
-        return new AckPayload { AckMessageId = header.MessageId, Accepted = true };
-    }
-
-    private async Task<AckPayload?> SendControlPacketAsync<TPayload>(
-        string remoteIp,
-        int remotePort,
-        PacketType packetType,
-        TPayload payload,
-        string? pairSecretBase64,
-        CancellationToken ct)
-    {
-        try
-        {
-            var payloadJson = JsonSerializer.Serialize(payload, ProtocolJson.PacketOptions);
-            var header = new PacketHeader
-            {
-                ProtocolVersion = ProtocolConstants.CurrentProtocolVersion,
-                AppVersion = _localPresence.AppVersion,
-                PacketType = packetType,
-                SenderPetId = _localPetId,
-                MessageId = Guid.NewGuid().ToString("N"),
-                TimestampUtc = DateTimeOffset.UtcNow
-            };
-
-            ControlPacketEnvelope envelope;
-            if (!string.IsNullOrWhiteSpace(pairSecretBase64))
-            {
-                var (ciphertextBase64, nonceBase64, tagBase64) =
-                    PacketCrypto.EncryptControlPayload(header, payloadJson, pairSecretBase64);
-
-                envelope = new ControlPacketEnvelope
-                {
-                    Header = header,
-                    PayloadJson = ciphertextBase64,
-                    IsEncrypted = true,
-                    NonceBase64 = nonceBase64,
-                    AuthTagBase64 = tagBase64
-                };
-
-                var signatureInput = PacketCrypto.BuildEncryptedPayloadSignatureInput(envelope);
-                var canonical = PacketSigner.BuildControlCanonicalString(header, signatureInput);
-                header.SignatureBase64 = PacketSigner.ComputeSignature(canonical, pairSecretBase64);
-            }
-            else
-            {
-                envelope = new ControlPacketEnvelope
-                {
-                    Header = header,
-                    PayloadJson = payloadJson,
-                    IsEncrypted = false
-                };
-            }
-
-            using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-            timeoutCts.CancelAfter(TimeSpan.FromSeconds(3));
-
-            using var client = new TcpClient();
-            await client.ConnectAsync(remoteIp, remotePort, timeoutCts.Token).ConfigureAwait(false);
-            await using var stream = client.GetStream();
-
-            await WriteFramedJsonAsync(stream, envelope, timeoutCts.Token).ConfigureAwait(false);
-            var ackEnvelope = await ReadFramedJsonAsync<ControlPacketEnvelope>(stream, timeoutCts.Token).ConfigureAwait(false);
-            if (ackEnvelope is null || ackEnvelope.Header.PacketType != PacketType.Ack)
-            {
-                return null;
-            }
-
-            return JsonSerializer.Deserialize<AckPayload>(ackEnvelope.PayloadJson, ProtocolJson.PacketOptions);
-        }
-        catch (Exception ex)
-        {
-            TransportError?.Invoke(this, new TransportErrorEventArgs($"Send:{packetType}", ex.Message, ex));
-            return null;
-        }
-    }
-
     private bool TryResolveFriendEndpoint(FriendEntry friend, out string ip, out int port)
     {
         // 최신 탐색 캐시가 있으면 우선 사용 (DHCP IP 변경 자동 반영)
-        if (_peers.TryGetValue(friend.PetId, out var livePeer) && !livePeer.RequiresUpdate && !string.IsNullOrWhiteSpace(livePeer.IpAddress))
+        if (_peers.TryGetValue(friend.PetId, out var livePeer) && livePeer.IsFriend && !livePeer.RequiresUpdate
+            && !string.IsNullOrWhiteSpace(livePeer.IpAddress))
         {
             ip = livePeer.IpAddress;
             port = livePeer.TcpPort;
@@ -963,6 +584,10 @@ public sealed class LanP2pTransport : ISocialTransport
 
     private void PruneStalePeers()
     {
+        lock (_pairingLock)
+        {
+            PrunePairings(DateTimeOffset.UtcNow);
+        }
         var cutoff = DateTimeOffset.UtcNow - TimeSpan.FromSeconds(ProtocolConstants.PeerOfflineTimeoutSeconds);
         var removed = false;
 
@@ -1006,58 +631,5 @@ public sealed class LanP2pTransport : ISocialTransport
         return udp;
     }
 
-    private static async Task WriteFramedJsonAsync<T>(NetworkStream stream, T value, CancellationToken ct)
-    {
-        var body = JsonSerializer.SerializeToUtf8Bytes(value, ProtocolJson.PacketOptions);
-        var lengthPrefix = new byte[4];
-        BinaryPrimitives.WriteInt32BigEndian(lengthPrefix, body.Length);
-        await stream.WriteAsync(lengthPrefix, ct).ConfigureAwait(false);
-        await stream.WriteAsync(body, ct).ConfigureAwait(false);
-        await stream.FlushAsync(ct).ConfigureAwait(false);
-    }
 
-    private static async Task<T?> ReadFramedJsonAsync<T>(NetworkStream stream, CancellationToken ct)
-    {
-        var lengthPrefix = new byte[4];
-        if (!await ReadExactAsync(stream, lengthPrefix, ct).ConfigureAwait(false))
-        {
-            return default;
-        }
-
-        var length = BinaryPrimitives.ReadInt32BigEndian(lengthPrefix);
-        if (length <= 0 || length > 65536)
-        {
-            return default;
-        }
-
-        var body = new byte[length];
-        if (!await ReadExactAsync(stream, body, ct).ConfigureAwait(false))
-        {
-            return default;
-        }
-
-        return JsonSerializer.Deserialize<T>(body, ProtocolJson.PacketOptions);
-    }
-
-    private static async Task<bool> ReadExactAsync(NetworkStream stream, byte[] buffer, CancellationToken ct)
-    {
-        var offset = 0;
-        while (offset < buffer.Length)
-        {
-            var read = await stream.ReadAsync(buffer.AsMemory(offset, buffer.Length - offset), ct).ConfigureAwait(false);
-            if (read == 0)
-            {
-                return false;
-            }
-
-            offset += read;
-        }
-
-        return true;
-    }
-
-    public async ValueTask DisposeAsync()
-    {
-        await StopAsync().ConfigureAwait(false);
-    }
 }

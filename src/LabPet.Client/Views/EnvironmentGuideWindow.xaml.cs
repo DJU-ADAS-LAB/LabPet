@@ -11,7 +11,14 @@ public partial class EnvironmentGuideWindow : Window
     {
         InitializeComponent();
 
-        FirewallCommandBox.Text = FirewallRegistrationService.BuildPowerShellRegisterCommand(Environment.ProcessPath);
+        try
+        {
+            FirewallCommandBox.Text = FirewallRegistrationService.BuildPowerShellRegisterCommand(Environment.ProcessPath);
+        }
+        catch (ArgumentException ex)
+        {
+            FirewallCommandBox.Text = ex.Message;
+        }
 
         DataPathText.Text =
             $"모든 펫 프로필(profile.json)과 친구 목록(friends.json)은 설치 폴더가 아닌 '{store.DataDirectory}'에 원자적 저장(.tmp + .bak)으로 보관되어 Velopack 자동 업데이트 후에도 유지됩니다.";
@@ -35,12 +42,12 @@ public partial class EnvironmentGuideWindow : Window
 
     private void AutoRegisterFirewall_Click(object sender, RoutedEventArgs e)
     {
-        var ok = FirewallRegistrationService.TryRegisterRulesElevated();
+        var ok = FirewallRegistrationService.TryRegisterRulesElevated(out var error);
         RefreshFirewallStatus();
         MessageBox.Show(
             ok
                 ? "LabPet LAN 방화벽 규칙(UDP 45678~45679, TCP 45680 · 로컬 서브넷 · LabPet 전용)이 자동으로 허용되었습니다."
-                : "방화벽 규칙을 등록하지 못했습니다. 관리자 권한(UAC) 허용 여부를 확인해 주세요.",
+                : error,
             "LabPet",
             MessageBoxButton.OK,
             ok ? MessageBoxImage.Information : MessageBoxImage.Warning);
