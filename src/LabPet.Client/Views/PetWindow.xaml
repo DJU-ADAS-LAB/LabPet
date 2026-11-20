@@ -104,7 +104,8 @@
         </tb:TaskbarIcon>
 
         <!-- 펫 상단 꼬리 말풍선 (업데이트 확인 + 친구 신청 + 일반 알림) -->
-        <StackPanel Grid.Row="0" Panel.ZIndex="1" VerticalAlignment="Bottom" HorizontalAlignment="Center" Margin="6,5,6,2">
+        <StackPanel Grid.Row="0" Panel.ZIndex="1" VerticalAlignment="Bottom" HorizontalAlignment="Center"
+                    Margin="6,5,6,2" Opacity="{Binding PetOpacity}">
             <!-- 새 버전 업데이트 확인 말풍선 -->
             <StackPanel Visibility="{Binding IsUpdateBubbleVisible, Converter={StaticResource BoolToVis}}" Margin="0,0,0,4">
                 <Border Padding="12,8"
@@ -291,6 +292,7 @@
                PopupAnimation="Fade">
             <Border x:Name="FriendOverlayCard"
                     Width="262"
+                    Opacity="{Binding PetOpacity}"
                     Margin="8"
                     Padding="10,9"
                     CornerRadius="15"
