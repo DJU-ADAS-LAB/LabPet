@@ -91,6 +91,12 @@ public sealed class PetAnimationController
         }
     }
 
+    internal void DetachRig()
+    {
+        _rig = null;
+        _particleStates = [];
+    }
+
     /// <summary>쓰다듬기 3D 반응(부피 보존형 점프 + 발광)을 트리거한다.</summary>
     public void TriggerPetReaction() => _petReactionTime = 0.85;
 

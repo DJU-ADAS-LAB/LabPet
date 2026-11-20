@@ -25,6 +25,7 @@ public partial class SocialWindow : Window
     private bool _isRotating;
     private Point _lastDragPoint;
     private string _renderedSignature = string.Empty;
+    private bool _previewUpdateQueued;
 
     public SocialWindow(SocialViewModel viewModel, IPetMeshFactory meshFactory)
     {
@@ -54,6 +55,7 @@ public partial class SocialWindow : Window
             _previewTimer.Stop();
             _viewModel.PropertyChanged -= OnViewModelPropertyChanged;
             _viewModel.Detach();
+            ClearFriendPreviewMesh();
         };
 
         UpdateFriendPreviewMesh();
@@ -61,9 +63,18 @@ public partial class SocialWindow : Window
 
     private void OnViewModelPropertyChanged(object? sender, PropertyChangedEventArgs e)
     {
-        if (e.PropertyName == nameof(SocialViewModel.SelectedFriend))
+        if (e.PropertyName == nameof(SocialViewModel.SelectedFriend) && !_previewUpdateQueued)
         {
-            UpdateFriendPreviewMesh();
+            // 목록을 갱신하는 도중의 임시 선택 해제와 최종 선택을 한 번에 반영한다.
+            _previewUpdateQueued = true;
+            Dispatcher.BeginInvoke(DispatcherPriority.DataBind, () =>
+            {
+                _previewUpdateQueued = false;
+                if (_previewTimer.IsEnabled)
+                {
+                    UpdateFriendPreviewMesh();
+                }
+            });
         }
     }
 
@@ -72,8 +83,7 @@ public partial class SocialWindow : Window
         var selected = _viewModel.SelectedFriend;
         if (selected is null)
         {
-            FriendPreviewPet.Content = null;
-            _renderedSignature = string.Empty;
+            ClearFriendPreviewMesh();
             return;
         }
 
@@ -85,9 +95,16 @@ public partial class SocialWindow : Window
         }
 
         _renderedSignature = sig;
-        var rig = _meshFactory.BuildPetRig(appearance);
+        var rig = _meshFactory.BuildPetRig(appearance, PetRigEffects.None);
         FriendPreviewPet.Content = rig.RootModel;
         _previewAnimator.AttachRig(rig, appearance.AccentColorHex);
+    }
+
+    private void ClearFriendPreviewMesh()
+    {
+        FriendPreviewPet.Content = null;
+        _renderedSignature = string.Empty;
+        _previewAnimator.DetachRig();
     }
 
     private void OnPreviewTick(object? sender, EventArgs e)

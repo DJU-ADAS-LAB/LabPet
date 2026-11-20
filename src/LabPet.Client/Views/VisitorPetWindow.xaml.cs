@@ -97,7 +97,7 @@ public partial class VisitorPetWindow : Window
         }
 
         _appliedAppearanceSignature = sig;
-        var rig = _meshFactory.BuildPetRig(appearance);
+        var rig = _meshFactory.BuildPetRig(appearance, PetRigEffects.MusicParticles);
         VisitorPetVisual.Content = rig.RootModel;
         _animator.AttachRig(rig, appearance.AccentColorHex);
     }

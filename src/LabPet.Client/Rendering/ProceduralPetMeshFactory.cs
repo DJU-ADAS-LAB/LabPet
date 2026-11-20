@@ -3,6 +3,7 @@ using System.Windows.Media;
 using System.Windows.Media.Media3D;
 using HelixToolkit.Geometry;
 using LabPet.Shared.Models;
+using HelixMeshGeometry3D = HelixToolkit.Geometry.MeshGeometry3D;
 using WpfMeshGeometry3D = System.Windows.Media.Media3D.MeshGeometry3D;
 
 namespace LabPet.Client.Rendering;
@@ -15,6 +16,10 @@ namespace LabPet.Client.Rendering;
 /// </summary>
 public sealed class ProceduralPetMeshFactory : IPetMeshFactory
 {
+    private const int MaxCachedMeshes = 256;
+    private readonly Dictionary<int, WeakReference<WpfMeshGeometry3D>> _meshCache = [];
+    private readonly object _meshCacheLock = new();
+
     public Model3DGroup CreateStudioLights()
     {
         var lights = new Model3DGroup();
@@ -40,7 +45,7 @@ public sealed class ProceduralPetMeshFactory : IPetMeshFactory
         return lights;
     }
 
-    public PetRigHandle BuildPetRig(PetAppearance appearance)
+    public PetRigHandle BuildPetRig(PetAppearance appearance, PetRigEffects effects = PetRigEffects.All)
     {
         var bodyColor = ParseHexColor(appearance.BodyColorHex, Color.FromRgb(255, 245, 247));
         var accentColor = ParseHexColor(appearance.AccentColorHex, Color.FromRgb(255, 158, 181));
@@ -98,7 +103,6 @@ public sealed class ProceduralPetMeshFactory : IPetMeshFactory
         AxisAngleRotation3D? rightArmRot = null;
         AxisAngleRotation3D? leftArmPitch = null;
         AxisAngleRotation3D? rightArmPitch = null;
-        var musicParticles = new List<MusicParticleHandle>();
 
         float headPivotY;
         float headSocketY;
@@ -491,70 +495,13 @@ public sealed class ProceduralPetMeshFactory : IPetMeshFactory
 
         bodyGroup.Children.Add(headGroup);
 
-        // 3종 캐릭터 공통: 타이핑 시 앞쪽 하단에 뿅 나타나는 파스텔 3D 미니 키보드 (평소 스케일 0)
-        var kbCenterY = -0.76f;
-        var kbCenterZ = 0.82f;
-        var typingKeyboardScale = new ScaleTransform3D(0, 0, 0, 0, kbCenterY, kbCenterZ);
-        var kbGroup = new Model3DGroup { Transform = typingKeyboardScale };
-        var kbBaseMat = CreateClayMaterial(Color.FromRgb(242, 245, 252), null, 22, 80);
-        var kbKeyMat = CreateClayMaterial(Colors.White, null, 18, 70);
-        var kbAccentMat = CreateClayMaterial(accentColor, null, 20, 75);
-
-        var kbBaseMb = new MeshBuilder(true, false);
-        kbBaseMb.AddBox(new Vector3(0, kbCenterY, kbCenterZ), 1.16f, 0.085f, 0.44f);
-        triangleCount += AddGeometry(kbGroup, kbBaseMb, kbBaseMat);
-
-        var kbKeysMb = new MeshBuilder(true, false);
-        for (var row = 0; row < 3; row++)
-        {
-            var kz = kbCenterZ - 0.11f + row * 0.11f;
-            for (var col = 0; col < 7; col++)
-            {
-                var kx = -0.45f + col * 0.15f;
-                kbKeysMb.AddBox(new Vector3(kx, kbCenterY + 0.055f, kz), 0.11f, 0.04f, 0.08f);
-            }
-        }
-
-        triangleCount += AddGeometry(kbGroup, kbKeysMb, kbKeyMat);
-
-        // 스페이스바(포인트 컬러)
-        var spaceMb = new MeshBuilder(true, false);
-        spaceMb.AddBox(new Vector3(0, kbCenterY + 0.055f, kbCenterZ + 0.16f), 0.44f, 0.04f, 0.07f);
-        triangleCount += AddGeometry(kbGroup, spaceMb, kbAccentMat);
-        rootGroup.Children.Add(kbGroup);
-
-        // 3종 캐릭터 공통: 댄스/음악 반응 시 방출되는 풀링 3D 음표/별 파티클 6개 사전 생성
-        var particleMat = CreateClayMaterial(Lighten(accentColor, 0.25), auraEmissiveBrush, 32, 110);
-        for (var i = 0; i < 6; i++)
-        {
-            var pScale = new ScaleTransform3D(0, 0, 0);
-            var pRot = new AxisAngleRotation3D(new Vector3D(0, 1, 0), 0);
-            var pTrans = new TranslateTransform3D(0, 0, 0);
-            var pTransform = new Transform3DGroup();
-            pTransform.Children.Add(pScale);
-            pTransform.Children.Add(new RotateTransform3D(pRot));
-            pTransform.Children.Add(pTrans);
-
-            var pMb = new MeshBuilder(true, false);
-            if (i % 2 == 0)
-            {
-                pMb.AddEllipsoid(new Vector3(0, 0, 0), 0.10f, 0.08f, 0.06f, 12, 8);
-                pMb.AddCylinder(new Vector3(0.08f, 0, 0), new Vector3(0.08f, 0.26f, 0), 0.022f, 8);
-                pMb.AddBox(new Vector3(0.14f, 0.23f, 0), 0.12f, 0.05f, 0.03f);
-            }
-            else
-            {
-                pMb.AddOctahedron(Vector3.Zero, Vector3.UnitY, Vector3.UnitZ, 0.12f, 0.12f);
-            }
-
-            triangleCount += AddGeometry(rootGroup, pMb, particleMat, pTransform);
-            musicParticles.Add(new MusicParticleHandle
-            {
-                Scale = pScale,
-                Translate = pTrans,
-                Rotation = pRot
-            });
-        }
+        (int keyboardTriangles, ScaleTransform3D? typingKeyboardScale) = effects.HasFlag(PetRigEffects.TypingKeyboard)
+            ? BuildTypingKeyboard(rootGroup, accentColor)
+            : (0, null);
+        var (particleTriangles, musicParticles) = effects.HasFlag(PetRigEffects.MusicParticles)
+            ? BuildMusicParticles(rootGroup, accentColor, auraEmissiveBrush)
+            : (0, Array.Empty<MusicParticleHandle>());
+        triangleCount += keyboardTriangles + particleTriangles;
 
         // 3D 오라/주변 이펙트
         AxisAngleRotation3D? auraRot = null;
@@ -607,7 +554,71 @@ public sealed class ProceduralPetMeshFactory : IPetMeshFactory
         };
     }
 
-    private static (int Triangles, ScaleTransform3D? EyeBlinkScale) BuildExpressionParts(
+    private (int Triangles, ScaleTransform3D Scale) BuildTypingKeyboard(Model3DGroup rootGroup, Color accentColor)
+    {
+        const float centerY = -0.76f;
+        const float centerZ = 0.82f;
+        var scale = new ScaleTransform3D(0, 0, 0, 0, centerY, centerZ);
+        var keyboard = new Model3DGroup { Transform = scale };
+
+        var keyboardBase = new MeshBuilder(true, false);
+        keyboardBase.AddBox(new Vector3(0, centerY, centerZ), 1.16f, 0.085f, 0.44f);
+        var triangles = AddGeometry(keyboard, keyboardBase, CreateClayMaterial(Color.FromRgb(242, 245, 252), null, 22, 80));
+
+        var keys = new MeshBuilder(true, false);
+        for (var row = 0; row < 3; row++)
+        {
+            var z = centerZ - 0.11f + row * 0.11f;
+            for (var col = 0; col < 7; col++)
+            {
+                var x = -0.45f + col * 0.15f;
+                keys.AddBox(new Vector3(x, centerY + 0.055f, z), 0.11f, 0.04f, 0.08f);
+            }
+        }
+
+        triangles += AddGeometry(keyboard, keys, CreateClayMaterial(Colors.White, null, 18, 70));
+
+        var spacebar = new MeshBuilder(true, false);
+        spacebar.AddBox(new Vector3(0, centerY + 0.055f, centerZ + 0.16f), 0.44f, 0.04f, 0.07f);
+        triangles += AddGeometry(keyboard, spacebar, CreateClayMaterial(accentColor, null, 20, 75));
+        rootGroup.Children.Add(keyboard);
+        return (triangles, scale);
+    }
+
+    private (int Triangles, MusicParticleHandle[] Particles) BuildMusicParticles(
+        Model3DGroup rootGroup, Color accentColor, SolidColorBrush auraEmissiveBrush)
+    {
+        var material = CreateClayMaterial(Lighten(accentColor, 0.25), auraEmissiveBrush, 32, 110);
+        var note = new MeshBuilder(true, false);
+        note.AddEllipsoid(Vector3.Zero, 0.10f, 0.08f, 0.06f, 12, 8);
+        note.AddCylinder(new Vector3(0.08f, 0, 0), new Vector3(0.08f, 0.26f, 0), 0.022f, 8);
+        note.AddBox(new Vector3(0.14f, 0.23f, 0), 0.12f, 0.05f, 0.03f);
+        var noteMesh = GetSharedMesh(note.ToMesh());
+
+        var star = new MeshBuilder(true, false);
+        star.AddOctahedron(Vector3.Zero, Vector3.UnitY, Vector3.UnitZ, 0.12f, 0.12f);
+        var starMesh = GetSharedMesh(star.ToMesh());
+
+        var triangles = 0;
+        var particles = new MusicParticleHandle[6];
+        for (var i = 0; i < particles.Length; i++)
+        {
+            var scale = new ScaleTransform3D(0, 0, 0);
+            var rotation = new AxisAngleRotation3D(new Vector3D(0, 1, 0), 0);
+            var translation = new TranslateTransform3D(0, 0, 0);
+            var transform = new Transform3DGroup();
+            transform.Children.Add(scale);
+            transform.Children.Add(new RotateTransform3D(rotation));
+            transform.Children.Add(translation);
+
+            triangles += AddGeometry(rootGroup, i % 2 == 0 ? noteMesh : starMesh, material, transform);
+            particles[i] = new MusicParticleHandle { Scale = scale, Translate = translation, Rotation = rotation };
+        }
+
+        return (triangles, particles);
+    }
+
+    private (int Triangles, ScaleTransform3D? EyeBlinkScale) BuildExpressionParts(
         Model3DGroup parent,
         string expressionId,
         float faceCenterY,
@@ -731,7 +742,7 @@ public sealed class ProceduralPetMeshFactory : IPetMeshFactory
         return (tris, eyeBlinkScale);
     }
 
-    private static int BuildHeadAccessory(
+    private int BuildHeadAccessory(
         Model3DGroup parent,
         string accessoryId,
         float socketY,
@@ -844,7 +855,7 @@ public sealed class ProceduralPetMeshFactory : IPetMeshFactory
         return tris;
     }
 
-    private static int BuildAuraEffect(
+    private int BuildAuraEffect(
         Model3DGroup parent,
         string auraId,
         Color accentColor,
@@ -945,9 +956,11 @@ public sealed class ProceduralPetMeshFactory : IPetMeshFactory
         mb.AddTube(pts, diameter: tubeDiameter, thetaDiv: 14, isTubeClosed: true);
     }
 
-    private static int AddGeometry(Model3DGroup group, MeshBuilder builder, Material material, Transform3D? transform = null)
+    private int AddGeometry(Model3DGroup group, MeshBuilder builder, Material material, Transform3D? transform = null)
+        => AddGeometry(group, GetSharedMesh(builder.ToMesh()), material, transform);
+
+    private static int AddGeometry(Model3DGroup group, WpfMeshGeometry3D mesh, Material material, Transform3D? transform)
     {
-        var mesh = ToWpfMesh(builder);
         var model = new GeometryModel3D(mesh, material)
         {
             BackMaterial = material
@@ -962,9 +975,99 @@ public sealed class ProceduralPetMeshFactory : IPetMeshFactory
         return mesh.TriangleIndices.Count / 3;
     }
 
-    private static WpfMeshGeometry3D ToWpfMesh(MeshBuilder builder)
+    private WpfMeshGeometry3D GetSharedMesh(HelixMeshGeometry3D source)
     {
-        var helixMesh = builder.ToMesh();
+        var hash = new HashCode();
+        hash.Add(source.Positions.Count);
+        foreach (var position in source.Positions)
+        {
+            hash.Add(position);
+        }
+
+        hash.Add(source.Normals?.Count ?? 0);
+        if (source.Normals is { } normals)
+        {
+            foreach (var normal in normals)
+            {
+                hash.Add(normal);
+            }
+        }
+
+        hash.Add(source.TriangleIndices.Count);
+        foreach (var index in source.TriangleIndices)
+        {
+            hash.Add(index);
+        }
+
+        var key = hash.ToHashCode();
+        lock (_meshCacheLock)
+        {
+            _meshCache.TryGetValue(key, out var entry);
+            // 해시가 같은 경우에도 정점, 법선, 인덱스가 모두 같은 메시만 재사용한다.
+            if (entry is not null && entry.TryGetTarget(out var cached) && MatchesMesh(cached, source))
+            {
+                return cached;
+            }
+
+            var mesh = ToWpfMesh(source);
+            if (entry is null && _meshCache.Count == MaxCachedMeshes)
+            {
+                var released = _meshCache.FirstOrDefault(pair => !pair.Value.TryGetTarget(out _));
+                _meshCache.Remove(released.Value is null ? _meshCache.Keys.First() : released.Key);
+            }
+
+            // 열린 장면이 모두 닫히면 캐시가 메시를 계속 보유하지 않게 한다.
+            _meshCache[key] = new WeakReference<WpfMeshGeometry3D>(mesh);
+            return mesh;
+        }
+    }
+
+    private static bool MatchesMesh(WpfMeshGeometry3D cached, HelixMeshGeometry3D source)
+    {
+        var cachedPositions = cached.Positions;
+        var cachedNormals = cached.Normals;
+        var cachedIndices = cached.TriangleIndices;
+        if (cachedPositions.Count != source.Positions.Count
+            || cachedNormals.Count != (source.Normals?.Count ?? 0)
+            || cachedIndices.Count != source.TriangleIndices.Count)
+        {
+            return false;
+        }
+
+        for (var i = 0; i < cachedPositions.Count; i++)
+        {
+            var p = source.Positions[i];
+            if (!cachedPositions[i].Equals(new Point3D(p.X, p.Y, p.Z)))
+            {
+                return false;
+            }
+        }
+
+        if (source.Normals is { } normals)
+        {
+            for (var i = 0; i < normals.Count; i++)
+            {
+                var n = normals[i];
+                if (!cachedNormals[i].Equals(new Vector3D(n.X, n.Y, n.Z)))
+                {
+                    return false;
+                }
+            }
+        }
+
+        for (var i = 0; i < cachedIndices.Count; i++)
+        {
+            if (cachedIndices[i] != source.TriangleIndices[i])
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private static WpfMeshGeometry3D ToWpfMesh(HelixMeshGeometry3D helixMesh)
+    {
         var wpfMesh = new WpfMeshGeometry3D();
 
         var positions = new Point3DCollection(helixMesh.Positions.Count);

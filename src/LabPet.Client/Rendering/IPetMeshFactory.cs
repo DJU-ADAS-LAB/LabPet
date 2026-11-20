@@ -14,6 +14,15 @@ public sealed class MusicParticleHandle
     public required AxisAngleRotation3D Rotation { get; init; }
 }
 
+[Flags]
+public enum PetRigEffects
+{
+    None = 0,
+    TypingKeyboard = 1,
+    MusicParticles = 2,
+    All = TypingKeyboard | MusicParticles
+}
+
 /// <summary>
 /// 60fps UI 타이머가 Transform3D와 EmissiveMaterial만 저부하로 갱신하기 위해 보관하는 3D 리그 핸들.
 /// </summary>
@@ -74,6 +83,6 @@ public sealed class PetRigHandle
 /// </summary>
 public interface IPetMeshFactory
 {
-    PetRigHandle BuildPetRig(PetAppearance appearance);
+    PetRigHandle BuildPetRig(PetAppearance appearance, PetRigEffects effects = PetRigEffects.All);
     Model3DGroup CreateStudioLights();
 }
