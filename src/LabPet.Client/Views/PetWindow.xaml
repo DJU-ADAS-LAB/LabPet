@@ -52,7 +52,7 @@
         <Grid.RowDefinitions>
             <RowDefinition x:Name="PetMessageRow" Height="Auto" MinHeight="78" />
             <RowDefinition Height="Auto" />
-            <RowDefinition x:Name="PetNameplateRow" Height="24" />
+            <RowDefinition x:Name="PetNameplateRow" Height="74" />
         </Grid.RowDefinitions>
 
         <!-- 시스템 트레이 아이콘 (H.NotifyIcon.Wpf) -->
@@ -222,7 +222,7 @@
                     ClipToBounds="False"
                     RenderOptions.BitmapScalingMode="HighQuality"
                     MouseEnter="PetViewport_MouseEnter"
-                    MouseLeave="PetViewport_MouseLeave"
+                    MouseLeave="OverlaySurface_MouseLeave"
                     MouseLeftButtonDown="PetViewport_MouseLeftButtonDown"
                     MouseMove="PetViewport_MouseMove"
                     MouseLeftButtonUp="PetViewport_MouseLeftButtonUp">
@@ -298,8 +298,8 @@
                     BorderBrush="#FFE6EAF2"
                     BorderThickness="1"
                     Effect="{StaticResource MenuShadow}"
-                    MouseEnter="FriendOverlayCard_MouseEnter"
-                    MouseLeave="FriendOverlayCard_MouseLeave">
+                    MouseEnter="OverlaySurface_MouseEnter"
+                    MouseLeave="OverlaySurface_MouseLeave">
                 <StackPanel>
                     <!-- 미니멀 헤더 -->
                     <DockPanel Margin="2,0,2,6" LastChildFill="False">
@@ -327,56 +327,78 @@
                                         CornerRadius="9"
                                         Padding="8,5"
                                         Margin="0,0,0,4">
-                                    <DockPanel LastChildFill="False">
-                                        <StackPanel DockPanel.Dock="Left" Orientation="Horizontal" VerticalAlignment="Center" MaxWidth="112">
-                                            <Ellipse Width="6" Height="6" Fill="#FF34D399" Margin="0,0,5,0" VerticalAlignment="Center" />
-                                            <TextBlock Text="{Binding DisplayTitle}"
-                                                       FontSize="11.5"
-                                                       FontWeight="SemiBold"
-                                                       Foreground="#FF1F2430"
-                                                       TextTrimming="CharacterEllipsis" />
-                                        </StackPanel>
+                                    <StackPanel>
+                                        <DockPanel LastChildFill="False">
+                                            <StackPanel DockPanel.Dock="Left" Orientation="Horizontal" VerticalAlignment="Center" MaxWidth="112">
+                                                <Ellipse Width="6" Height="6" Fill="#FF34D399" Margin="0,0,5,0" VerticalAlignment="Center" />
+                                                <TextBlock Text="{Binding DisplayTitle}"
+                                                           FontSize="11.5"
+                                                           FontWeight="SemiBold"
+                                                           Foreground="#FF1F2430"
+                                                           TextTrimming="CharacterEllipsis" />
+                                            </StackPanel>
 
-                                        <!-- 친구인 경우: 메시지 / 쓰다듬기 / 노래 따라하기 / 데려오기 -->
-                                        <StackPanel DockPanel.Dock="Right"
-                                                    Orientation="Horizontal"
-                                                    Visibility="{Binding IsFriend, Converter={StaticResource BoolToVis}}">
-                                            <Button Content="💬"
-                                                    ToolTip="빠른 메시지"
-                                                    Style="{StaticResource MiniActionIconButton}"
-                                                    Command="{Binding DataContext.OpenQuickMessageCommand, RelativeSource={RelativeSource AncestorType=Window}}"
-                                                    CommandParameter="{Binding}"
-                                                    Margin="0,0,3,0" />
-                                            <Button Content="👋"
-                                                    ToolTip="쓰다듬기"
-                                                    Style="{StaticResource MiniActionIconButton}"
-                                                    Command="{Binding DataContext.QuickPetFriendCommand, RelativeSource={RelativeSource AncestorType=Window}}"
-                                                    CommandParameter="{Binding}"
-                                                    Margin="0,0,3,0" />
-                                            <Button Content="🎵"
-                                                    ToolTip="{Binding MusicTooltip}"
-                                                    Style="{StaticResource MiniActionIconButton}"
-                                                    IsEnabled="{Binding CanFollowMusic}"
-                                                    Command="{Binding DataContext.QuickToggleMusicFollowCommand, RelativeSource={RelativeSource AncestorType=Window}}"
-                                                    CommandParameter="{Binding}"
-                                                    Margin="0,0,3,0" />
-                                            <Button Content="🏠"
-                                                    ToolTip="내 바탕화면에 데려오기 / 돌려보내기"
-                                                    Style="{StaticResource MiniActionIconButton}"
-                                                    Command="{Binding DataContext.QuickToggleVisitFriendCommand, RelativeSource={RelativeSource AncestorType=Window}}"
-                                                    CommandParameter="{Binding}" />
-                                        </StackPanel>
+                                            <!-- 친구인 경우: 메시지 / 쓰다듬기 / 노래 따라하기 / 데려오기 -->
+                                            <StackPanel DockPanel.Dock="Right"
+                                                        Orientation="Horizontal"
+                                                        Visibility="{Binding IsFriend, Converter={StaticResource BoolToVis}}">
+                                                <Button Content="💬"
+                                                        ToolTip="빠른 메시지"
+                                                        Style="{StaticResource MiniActionIconButton}"
+                                                        Command="{Binding DataContext.OpenQuickMessageCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
+                                                        CommandParameter="{Binding}"
+                                                        Margin="0,0,3,0" />
+                                                <Button Content="👋"
+                                                        ToolTip="쓰다듬기"
+                                                        Style="{StaticResource MiniActionIconButton}"
+                                                        Command="{Binding DataContext.QuickPetFriendCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
+                                                        CommandParameter="{Binding}"
+                                                        Margin="0,0,3,0" />
+                                                <Button Content="🎵"
+                                                        ToolTip="{Binding MusicTooltip}"
+                                                        Style="{StaticResource MiniActionIconButton}"
+                                                        IsEnabled="{Binding CanFollowMusic}"
+                                                        Command="{Binding DataContext.QuickToggleMusicFollowCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
+                                                        CommandParameter="{Binding}"
+                                                        Margin="0,0,3,0" />
+                                                <Button Content="🏠"
+                                                        ToolTip="내 바탕화면에 데려오기 / 돌려보내기"
+                                                        Style="{StaticResource MiniActionIconButton}"
+                                                        Command="{Binding DataContext.QuickToggleVisitFriendCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
+                                                        CommandParameter="{Binding}" />
+                                            </StackPanel>
 
-                                        <!-- 주변 미등록 LAN 피어인 경우: + 신청 -->
-                                        <Button DockPanel.Dock="Right"
-                                                Content="+ 신청"
-                                                Padding="7,2"
-                                                FontSize="10.5"
-                                                Height="22"
-                                                Command="{Binding DataContext.QuickSendFriendRequestCommand, RelativeSource={RelativeSource AncestorType=Window}}"
-                                                CommandParameter="{Binding}"
-                                                Visibility="{Binding CanSendFriendRequest, Converter={StaticResource BoolToVis}}" />
-                                    </DockPanel>
+                                            <!-- 주변 미등록 LAN 피어인 경우: + 신청 -->
+                                            <Button DockPanel.Dock="Right"
+                                                    Content="+ 신청"
+                                                    Padding="7,2"
+                                                    FontSize="10.5"
+                                                    Height="22"
+                                                    Command="{Binding DataContext.QuickSendFriendRequestCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
+                                                    CommandParameter="{Binding}"
+                                                    Visibility="{Binding CanSendFriendRequest, Converter={StaticResource BoolToVis}}" />
+                                        </DockPanel>
+                                        <DockPanel Margin="0,6,0,1"
+                                                   Visibility="{Binding IsComposingMessage, Converter={StaticResource BoolToVis}}">
+                                            <Button DockPanel.Dock="Right"
+                                                    Content="전송"
+                                                    Style="{StaticResource PrimaryButtonStyle}"
+                                                    Command="{Binding DataContext.SendQuickMessageCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
+                                                    Focusable="False"
+                                                    Padding="9,4"
+                                                    FontSize="11"
+                                                    Margin="5,0,0,0" />
+                                            <TextBox Text="{Binding DataContext.QuickMessageText, RelativeSource={RelativeSource AncestorType=ItemsControl}, UpdateSourceTrigger=PropertyChanged}"
+                                                     ToolTip="{Binding DisplayTitle, StringFormat={}{0}에게 메시지}"
+                                                     MaxLength="100"
+                                                     Height="28"
+                                                     FontSize="11.5"
+                                                     Padding="7,3"
+                                                     IsVisibleChanged="QuickMessageInput_IsVisibleChanged"
+                                                     PreviewMouseDown="QuickMessageInput_PreviewMouseDown"
+                                                     KeyDown="QuickMessageInput_KeyDown" />
+                                        </DockPanel>
+                                    </StackPanel>
                                 </Border>
                             </DataTemplate>
                         </ItemsControl.ItemTemplate>
@@ -389,108 +411,77 @@
                                HorizontalAlignment="Center"
                                Margin="0,4,0,2"
                                Visibility="{Binding HasNoQuickOverlayEntries, Converter={StaticResource BoolToVis}}" />
-
-                    <!-- 빠른 메시지 1줄 입력창 (💬 클릭 시에만 펼쳐짐) -->
-                    <DockPanel Margin="0,5,0,0"
-                               Visibility="{Binding HasQuickMessageTarget, Converter={StaticResource BoolToVis}}">
-                        <Button DockPanel.Dock="Right"
-                                Content="전송"
-                                Style="{StaticResource PrimaryButtonStyle}"
-                                Command="{Binding SendQuickMessageCommand}"
-                                Padding="9,4"
-                                FontSize="11"
-                                Margin="5,0,0,0" />
-                        <TextBox x:Name="QuickMessageInput"
-                                 Text="{Binding QuickMessageText, UpdateSourceTrigger=PropertyChanged}"
-                                 ToolTip="{Binding QuickMessagePlaceholder}"
-                                 MaxLength="100"
-                                 Height="28"
-                                 FontSize="11.5"
-                                 Padding="7,3"
-                                 PreviewMouseDown="QuickMessageInput_PreviewMouseDown"
-                                 KeyDown="QuickMessageInput_KeyDown" />
-                    </DockPanel>
-
-                    <!-- 하단 미니멀 크기 · 투명도 조절 바 -->
-                    <Separator Margin="2,7,2,6" />
-                    <Grid Margin="2,0,2,0">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="30" />
-                            <ColumnDefinition Width="*" />
-                            <ColumnDefinition Width="34" />
-                        </Grid.ColumnDefinitions>
-                        <Grid.RowDefinitions>
-                            <RowDefinition Height="20" />
-                            <RowDefinition Height="20" />
-                        </Grid.RowDefinitions>
-
-                        <TextBlock Grid.Row="0" Grid.Column="0" Text="크기" FontSize="10.5" Foreground="#FF6B7280" VerticalAlignment="Center" />
-                        <Slider Grid.Row="0" Grid.Column="1"
-                                Minimum="0.65"
-                                Maximum="1.45"
-                                Value="{Binding PetScale, Mode=TwoWay}"
-                                TickFrequency="0.05"
-                                IsSnapToTickEnabled="True"
-                                VerticalAlignment="Center"
-                                Margin="4,0" />
-                        <TextBlock Grid.Row="0" Grid.Column="2" Text="{Binding PetScalePercentText}" FontSize="10" FontWeight="SemiBold" Foreground="#FF4B5563" HorizontalAlignment="Right" VerticalAlignment="Center" />
-
-                        <TextBlock Grid.Row="1" Grid.Column="0" Text="투명" FontSize="10.5" Foreground="#FF6B7280" VerticalAlignment="Center" />
-                        <Slider Grid.Row="1" Grid.Column="1"
-                                Minimum="0.25"
-                                Maximum="1.0"
-                                Value="{Binding PetOpacity, Mode=TwoWay}"
-                                TickFrequency="0.05"
-                                IsSnapToTickEnabled="True"
-                                VerticalAlignment="Center"
-                                Margin="4,0" />
-                        <TextBlock Grid.Row="1" Grid.Column="2" Text="{Binding PetOpacityPercentText}" FontSize="10" FontWeight="SemiBold" Foreground="#FF4B5563" HorizontalAlignment="Right" VerticalAlignment="Center" />
-                    </Grid>
                 </StackPanel>
             </Border>
         </Popup>
 
-        <!-- 펫 호버 시 부드럽게 나타나는 미니 글래스 이름표 -->
-        <Border Grid.Row="2"
-                HorizontalAlignment="Center"
-                VerticalAlignment="Top"
-                Padding="10,2"
-                CornerRadius="10"
-                Background="#DCFFFFFF"
-                BorderBrush="#FFE8ECF4"
-                BorderThickness="1"
-                IsHitTestVisible="False">
-            <Border.RenderTransform>
+        <!-- 이름·레벨 바와 외형 조절바가 함께 펫 하단에 표시된다. -->
+        <StackPanel x:Name="PetControls"
+                    Grid.Row="2"
+                    HorizontalAlignment="Center"
+                    VerticalAlignment="Top"
+                    Width="166"
+                    Background="Transparent"
+                    Opacity="0"
+                    IsHitTestVisible="False"
+                    MouseEnter="OverlaySurface_MouseEnter"
+                    MouseLeave="OverlaySurface_MouseLeave"
+                    LostMouseCapture="OverlaySurface_MouseLeave">
+            <StackPanel.RenderTransform>
                 <TranslateTransform x:Name="PetNameplateOffset" />
-            </Border.RenderTransform>
-            <Border.Style>
-                <Style TargetType="Border">
-                    <Setter Property="Opacity" Value="0" />
-                    <Style.Triggers>
-                        <DataTrigger Binding="{Binding IsMouseOver, ElementName=PetViewport}" Value="True">
-                            <DataTrigger.EnterActions>
-                                <BeginStoryboard>
-                                    <Storyboard>
-                                        <DoubleAnimation Storyboard.TargetProperty="Opacity" To="0.95" Duration="0:0:0.18" />
-                                    </Storyboard>
-                                </BeginStoryboard>
-                            </DataTrigger.EnterActions>
-                            <DataTrigger.ExitActions>
-                                <BeginStoryboard>
-                                    <Storyboard>
-                                        <DoubleAnimation Storyboard.TargetProperty="Opacity" To="0" Duration="0:0:0.25" />
-                                    </Storyboard>
-                                </BeginStoryboard>
-                            </DataTrigger.ExitActions>
-                        </DataTrigger>
-                    </Style.Triggers>
-                </Style>
-            </Border.Style>
-            <TextBlock Text="{Binding TrayTooltip}"
-                       FontSize="10.5"
-                       FontWeight="Bold"
-                       TextTrimming="CharacterEllipsis"
-                       Foreground="#FF4B5563" />
-        </Border>
+            </StackPanel.RenderTransform>
+            <Border HorizontalAlignment="Center"
+                    Padding="10,2"
+                    CornerRadius="10"
+                    Background="#DCFFFFFF"
+                    BorderBrush="#FFE8ECF4"
+                    BorderThickness="1">
+                <TextBlock Text="{Binding TrayTooltip}"
+                           FontSize="10.5"
+                           FontWeight="Bold"
+                           TextTrimming="CharacterEllipsis"
+                           Foreground="#FF4B5563" />
+            </Border>
+            <Border Margin="0,4,0,0"
+                    Padding="7,3"
+                    CornerRadius="11"
+                    Background="#F5FFFFFF"
+                    BorderBrush="#FFE6EAF2"
+                    BorderThickness="1">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="26" />
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="32" />
+                    </Grid.ColumnDefinitions>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="20" />
+                        <RowDefinition Height="20" />
+                    </Grid.RowDefinitions>
+
+                    <TextBlock Grid.Row="0" Grid.Column="0" Text="크기" FontSize="10.5" Foreground="#FF6B7280" VerticalAlignment="Center" />
+                    <Slider Grid.Row="0" Grid.Column="1"
+                            Minimum="0.65"
+                            Maximum="1.45"
+                            Value="{Binding PetScale, Mode=TwoWay}"
+                            TickFrequency="0.05"
+                            IsSnapToTickEnabled="True"
+                            VerticalAlignment="Center"
+                            Margin="4,0" />
+                    <TextBlock Grid.Row="0" Grid.Column="2" Text="{Binding PetScalePercentText}" FontSize="10" FontWeight="SemiBold" Foreground="#FF4B5563" HorizontalAlignment="Right" VerticalAlignment="Center" />
+
+                    <TextBlock Grid.Row="1" Grid.Column="0" Text="투명" FontSize="10.5" Foreground="#FF6B7280" VerticalAlignment="Center" />
+                    <Slider Grid.Row="1" Grid.Column="1"
+                            Minimum="0.25"
+                            Maximum="1.0"
+                            Value="{Binding PetOpacity, Mode=TwoWay}"
+                            TickFrequency="0.05"
+                            IsSnapToTickEnabled="True"
+                            VerticalAlignment="Center"
+                            Margin="4,0" />
+                    <TextBlock Grid.Row="1" Grid.Column="2" Text="{Binding PetOpacityPercentText}" FontSize="10" FontWeight="SemiBold" Foreground="#FF4B5563" HorizontalAlignment="Right" VerticalAlignment="Center" />
+                </Grid>
+            </Border>
+        </StackPanel>
     </Grid>
 </Window>

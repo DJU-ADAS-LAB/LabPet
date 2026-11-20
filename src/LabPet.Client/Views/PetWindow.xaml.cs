@@ -1,8 +1,10 @@
 using System.Diagnostics;
 using System.IO;
 using System.Windows;
+using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
+using System.Windows.Media.Animation;
 using System.Windows.Media.Imaging;
 using System.Windows.Media.Media3D;
 using System.Windows.Threading;
@@ -23,6 +25,7 @@ public partial class PetWindow : Window
     private const double DefaultWindowHeight = 274.0;
     private const double BaseCameraDistanceZ = 5.95;
     private const double NameplateGap = 3.0;
+    private const double BaseNameplateHeight = 24.0;
 
     /// <summary>
     /// 친구 메시지·소셜 알림 말풍선 줄의 표시 시간(ms). 새 메시지가 와도 기존 줄은 이 시간 동안 유지된다.
@@ -46,8 +49,6 @@ public partial class PetWindow : Window
     private double _lastFrameSeconds;
     private double _lastMusicPublishSeconds;
     private bool _lastReportedMusicActive;
-    private bool _isMouseOverPet;
-    private bool _isMouseOverOverlay;
     private Point3D _nameplateAnchor;
 
     private double BaseLayoutHeight => PetMessageRow.MinHeight + PetViewport.Height + PetNameplateRow.Height.Value;
@@ -119,10 +120,10 @@ public partial class PetWindow : Window
         _overlayCloseTimer.Tick += (_, _) =>
         {
             _overlayCloseTimer.Stop();
-            if (!_isMouseOverPet && !_isMouseOverOverlay && !QuickMessageInput.IsKeyboardFocusWithin)
+            if (!PetViewport.IsMouseOver && !FriendOverlayCard.IsMouseOver && !PetControls.IsMouseOver
+                && !PetControls.IsMouseCaptureWithin && _viewModel.QuickMessageTarget is null)
             {
-                FriendOverlayPopup.IsOpen = false;
-                _viewModel.QuickMessageTarget = null;
+                ClosePetOverlays();
             }
         };
 
@@ -203,18 +204,18 @@ public partial class PetWindow : Window
     private void OnPetScaleChanged(object? sender, double scale)
     {
         var clamped = Math.Clamp(scale, 0.65, 1.45);
-        var prevRight = Left + Width;
+        var previousWidth = Width;
 
         Width = Math.Max(180.0, Math.Round(BaseWindowWidth * clamped));
         PetViewport.Height = Math.Max(220.0, Math.Round(DefaultWindowHeight * clamped))
-            - PetMessageRow.MinHeight - PetNameplateRow.Height.Value;
+            - PetMessageRow.MinHeight - BaseNameplateHeight;
         PetCamera.Position = new Point3D(0, 0.34, BaseCameraDistanceZ / Math.Sqrt(clamped));
         UpdateNameplatePosition();
 
-        // 크기 변경 시 우하단 기준점이 자연스럽게 유지되도록 보정
+        // 슬라이더를 끌 때는 조절바 가운데를 유지하고, 메뉴에서 변경할 때는 우하단을 유지한다.
         if (IsLoaded)
         {
-            Left = prevRight - Width;
+            Left += (previousWidth - Width) * (PetControls.IsMouseCaptureWithin ? 0.5 : 1.0);
         }
     }
 
@@ -239,60 +240,71 @@ public partial class PetWindow : Window
             return;
         }
 
-        _isMouseOverPet = true;
         _overlayCloseTimer.Stop();
         _viewModel.RefreshQuickOverlayEntries();
         FriendOverlayPopup.IsOpen = true;
+        SetPetControlsVisible(true);
     }
 
-    private void PetViewport_MouseLeave(object sender, MouseEventArgs e)
+    private void OverlaySurface_MouseEnter(object sender, MouseEventArgs e) => _overlayCloseTimer.Stop();
+
+    private void OverlaySurface_MouseLeave(object sender, MouseEventArgs e) => ScheduleOverlayClose();
+
+    private void ScheduleOverlayClose()
     {
-        _isMouseOverPet = false;
         _overlayCloseTimer.Stop();
         _overlayCloseTimer.Start();
     }
 
-    private void FriendOverlayCard_MouseEnter(object sender, MouseEventArgs e)
+    private void SetPetControlsVisible(bool visible)
     {
-        _isMouseOverOverlay = true;
-        _overlayCloseTimer.Stop();
+        if (PetControls.IsHitTestVisible != visible)
+        {
+            PetControls.IsHitTestVisible = visible;
+            PetControls.BeginAnimation(OpacityProperty,
+                new DoubleAnimation(visible ? 0.95 : 0.0, TimeSpan.FromMilliseconds(visible ? 180 : 250)));
+        }
     }
 
-    private void FriendOverlayCard_MouseLeave(object sender, MouseEventArgs e)
+    private void ClosePetOverlays()
     {
-        _isMouseOverOverlay = false;
         _overlayCloseTimer.Stop();
-        _overlayCloseTimer.Start();
+        FriendOverlayPopup.IsOpen = false;
+        _viewModel.QuickMessageTarget = null;
+        SetPetControlsVisible(false);
     }
 
     private void OnViewModelPropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
     {
-        if (e.PropertyName == nameof(PetWindowViewModel.QuickMessageTarget) && _viewModel.QuickMessageTarget is not null)
+        if (e.PropertyName == nameof(PetWindowViewModel.QuickMessageTarget)
+            && _viewModel.QuickMessageTarget is null && FriendOverlayPopup.IsOpen)
         {
-            FocusQuickMessageInput();
+            ScheduleOverlayClose();
         }
     }
 
-    private void FocusQuickMessageInput()
+    private void QuickMessageInput_IsVisibleChanged(object sender, DependencyPropertyChangedEventArgs e)
     {
-        Dispatcher.BeginInvoke(DispatcherPriority.Input, () =>
+        if (sender is TextBox { IsVisible: true } input)
         {
-            if (!FriendOverlayPopup.IsOpen || _viewModel.QuickMessageTarget is null)
+            Dispatcher.BeginInvoke(DispatcherPriority.Input, () =>
             {
-                return;
-            }
-
-            Win32WindowHelper.ActivatePopupForKeyboardInput(QuickMessageInput);
-            QuickMessageInput.Focus();
-            Keyboard.Focus(QuickMessageInput);
-        });
+                if (FriendOverlayPopup.IsOpen && input.IsVisible)
+                {
+                    FocusQuickMessageInput(input);
+                }
+            });
+        }
     }
 
     private void QuickMessageInput_PreviewMouseDown(object sender, MouseButtonEventArgs e)
+        => FocusQuickMessageInput((TextBox)sender);
+
+    private static void FocusQuickMessageInput(TextBox input)
     {
-        Win32WindowHelper.ActivatePopupForKeyboardInput(QuickMessageInput);
-        QuickMessageInput.Focus();
-        Keyboard.Focus(QuickMessageInput);
+        Win32WindowHelper.ActivatePopupForKeyboardInput(input);
+        input.Focus();
+        Keyboard.Focus(input);
     }
 
     private void QuickMessageInput_KeyDown(object sender, KeyEventArgs e)
@@ -314,7 +326,7 @@ public partial class PetWindow : Window
         Win32WindowHelper.SetClickThrough(this, enable);
         if (enable)
         {
-            FriendOverlayPopup.IsOpen = false;
+            ClosePetOverlays();
         }
     }
 
@@ -512,7 +524,7 @@ public partial class PetWindow : Window
         if (!_isDraggingWindow && distance > DragThresholdPixels)
         {
             _isDraggingWindow = true;
-            FriendOverlayPopup.IsOpen = false;
+            ClosePetOverlays();
         }
 
         if (_isDraggingWindow)
@@ -614,7 +626,9 @@ public partial class PetWindow : Window
         if (profile.LastWindowLeft is double savedLeft && profile.LastWindowTop is double savedTop)
         {
             var clampedLeft = Math.Clamp(savedLeft, workArea.Left - 40, workArea.Right - Width + 40);
-            var clampedTop = Math.Clamp(savedTop, workArea.Top - 40, workArea.Bottom - BaseLayoutHeight + 40);
+            var minTop = workArea.Top - 40;
+            var maxTop = Math.Max(minTop, workArea.Bottom - BaseLayoutHeight);
+            var clampedTop = Math.Clamp(savedTop, minTop, maxTop);
             Left = clampedLeft;
             Top = clampedTop - MessageOverflow;
             return;

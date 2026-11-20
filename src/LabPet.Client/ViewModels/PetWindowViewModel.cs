@@ -10,18 +10,23 @@ namespace LabPet.Client.ViewModels;
 /// <summary>
 /// 펫 마우스 오버레이 팝업에 표시되는 미니멀 주변/친구 항목.
 /// </summary>
-public sealed class QuickOverlayEntry
+public sealed partial class QuickOverlayEntry : ObservableObject
 {
     public string PetId { get; init; } = string.Empty;
-    public string DisplayTitle { get; init; } = string.Empty;
-    public bool IsFriend { get; init; }
-    public bool IsMusicActive { get; init; }
-    public bool IsFollowingMusic { get; init; }
+    [ObservableProperty] private string _displayTitle = string.Empty;
+    [ObservableProperty, NotifyPropertyChangedFor(nameof(CanFollowMusic), nameof(CanSendFriendRequest))]
+    private bool _isFriend;
+    [ObservableProperty, NotifyPropertyChangedFor(nameof(CanFollowMusic), nameof(MusicTooltip))]
+    private bool _isMusicActive;
+    [ObservableProperty, NotifyPropertyChangedFor(nameof(CanFollowMusic), nameof(MusicTooltip))]
+    private bool _isFollowingMusic;
+    [ObservableProperty, NotifyPropertyChangedFor(nameof(CanSendFriendRequest))]
+    private bool _requiresUpdate;
+    [ObservableProperty] private bool _isComposingMessage;
     public bool CanFollowMusic => IsFriend && (IsMusicActive || IsFollowingMusic);
     public bool CanSendFriendRequest => !IsFriend && !RequiresUpdate;
-    public bool RequiresUpdate { get; init; }
-    public FriendEntry? Friend { get; init; }
-    public PeerSnapshot? Peer { get; init; }
+    public FriendEntry? Friend { get; set; }
+    public PeerSnapshot? Peer { get; set; }
 
     public string MusicTooltip => IsFollowingMusic
         ? "노래 따라하기 중지"
@@ -96,12 +101,9 @@ public sealed partial class PetWindowViewModel : ObservableObject
     [ObservableProperty] private string _quickMessageText = string.Empty;
 
     public bool HasPendingFriendRequest => PendingFriendRequest is not null;
-    public bool HasQuickMessageTarget => QuickMessageTarget is not null;
     public bool HasNoQuickOverlayEntries => QuickOverlayEntries.Count == 0;
     public string QuickOverlayHeaderText => $"주변 · 온라인 친구 ({QuickOverlayEntries.Count})";
-    public string QuickMessagePlaceholder => QuickMessageTarget is null
-        ? string.Empty
-        : $"{QuickMessageTarget.DisplayTitle}에게 메시지...";
+    private int _quickMessageDraftRevision;
 
     public string PendingFriendRequestText => PendingFriendRequest is null
         ? string.Empty
@@ -254,14 +256,39 @@ public sealed partial class PetWindowViewModel : ObservableObject
             });
         }
 
-        QuickOverlayEntries.Clear();
-        foreach (var item in items)
+        // 친구 상태가 바뀌어도 같은 행과 입력 컨트롤을 유지한다.
+        for (var index = 0; index < items.Count; index++)
         {
-            QuickOverlayEntries.Add(item);
+            var item = items[index];
+            var existing = QuickOverlayEntries.Skip(index)
+                .FirstOrDefault(entry => string.Equals(entry.PetId, item.PetId, StringComparison.OrdinalIgnoreCase));
+            if (existing is null)
+            {
+                QuickOverlayEntries.Insert(index, item);
+                continue;
+            }
+
+            existing.DisplayTitle = item.DisplayTitle;
+            existing.IsFriend = item.IsFriend;
+            existing.IsMusicActive = item.IsMusicActive;
+            existing.IsFollowingMusic = item.IsFollowingMusic;
+            existing.RequiresUpdate = item.RequiresUpdate;
+            existing.Friend = item.Friend;
+            existing.Peer = item.Peer;
+            var oldIndex = QuickOverlayEntries.IndexOf(existing);
+            if (oldIndex != index)
+            {
+                QuickOverlayEntries.Move(oldIndex, index);
+            }
         }
 
-        // 메시지 대상이 오프라인이 되면 입력창 닫기
-        if (QuickMessageTarget is not null && !items.Any(i => string.Equals(i.PetId, QuickMessageTarget.PetId, StringComparison.OrdinalIgnoreCase)))
+        while (QuickOverlayEntries.Count > items.Count)
+        {
+            QuickOverlayEntries.RemoveAt(QuickOverlayEntries.Count - 1);
+        }
+
+        // 메시지 대상이 친구 목록에서 사라지면 입력창을 닫는다.
+        if (QuickMessageTarget is { } target && (!target.IsFriend || !QuickOverlayEntries.Contains(target)))
         {
             QuickMessageTarget = null;
         }
@@ -312,11 +339,21 @@ public sealed partial class PetWindowViewModel : ObservableObject
         OnPropertyChanged(nameof(PendingFriendRequestText));
     }
 
-    partial void OnQuickMessageTargetChanged(QuickOverlayEntry? value)
+    partial void OnQuickMessageTargetChanged(QuickOverlayEntry? oldValue, QuickOverlayEntry? newValue)
     {
-        OnPropertyChanged(nameof(HasQuickMessageTarget));
-        OnPropertyChanged(nameof(QuickMessagePlaceholder));
+        if (oldValue is not null)
+        {
+            oldValue.IsComposingMessage = false;
+        }
+
+        QuickMessageText = string.Empty;
+        if (newValue is not null)
+        {
+            newValue.IsComposingMessage = true;
+        }
     }
+
+    partial void OnQuickMessageTextChanged(string value) => _quickMessageDraftRevision++;
 
     partial void OnIsStartupAutoRunEnabledChanged(bool value)
     {
@@ -384,7 +421,7 @@ public sealed partial class PetWindowViewModel : ObservableObject
     [RelayCommand]
     private async Task SendQuickMessageAsync()
     {
-        if (QuickMessageTarget?.Friend is null)
+        if (QuickMessageTarget is not { Friend: { } friend } target)
         {
             return;
         }
@@ -395,12 +432,16 @@ public sealed partial class PetWindowViewModel : ObservableObject
             return;
         }
 
-        var targetName = QuickMessageTarget.DisplayTitle;
-        var ok = await _social.SendBubbleMessageAsync(QuickMessageTarget.Friend, trimmed);
+        var targetName = target.DisplayTitle;
+        var revision = _quickMessageDraftRevision;
+        var ok = await _social.SendBubbleMessageAsync(friend, trimmed);
         if (ok)
         {
-            QuickMessageText = string.Empty;
-            QuickMessageTarget = null;
+            if (revision == _quickMessageDraftRevision)
+            {
+                QuickMessageText = string.Empty;
+            }
+
             ShowBubble($"{targetName}에게 메시지를 전송했습니다.", 2000);
         }
         else

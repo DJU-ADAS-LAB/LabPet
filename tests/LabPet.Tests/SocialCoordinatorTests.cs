@@ -4,6 +4,7 @@ using LabPet.Client.Network;
 using LabPet.Client.Social;
 using LabPet.Client.Solo;
 using LabPet.Client.Storage;
+using LabPet.Client.ViewModels;
 using LabPet.Shared.Models;
 using LabPet.Shared.Protocol;
 using Xunit;
@@ -167,6 +168,61 @@ public sealed class SocialCoordinatorTests : IAsyncLifetime
         Assert.True(await _host.SendBubbleMessageAsync(guest, "다음 메시지"));
         Assert.Equal(3, Assert.Single((await _store.LoadFriendsAsync()).Friends).Intimacy);
         Assert.Equal(4, (await _store.LoadProfileAsync()).SoloProgress.Coins);
+    }
+
+    [Fact]
+    public async Task QuickMessage_SuccessKeepsSameFriendEditorOpenForAnotherMessage()
+    {
+        var viewModel = new PetWindowViewModel(_store, _host);
+        var friend = Assert.Single(_host.Friends);
+        var row = new QuickOverlayEntry { PetId = friend.PetId, DisplayTitle = friend.PetName, IsFriend = true, Friend = friend };
+
+        viewModel.OpenQuickMessageCommand.Execute(row);
+        viewModel.QuickMessageText = "첫 메시지";
+        await viewModel.SendQuickMessageCommand.ExecuteAsync(null);
+
+        Assert.Same(row, viewModel.QuickMessageTarget);
+        Assert.True(row.IsComposingMessage);
+        Assert.Empty(viewModel.QuickMessageText);
+        Assert.Contains(viewModel.BubbleLines, bubble => bubble.Text.Contains("전송했습니다", StringComparison.Ordinal));
+
+        viewModel.QuickMessageText = "두 번째 메시지";
+        await viewModel.SendQuickMessageCommand.ExecuteAsync(null);
+        Assert.Same(row, viewModel.QuickMessageTarget);
+        Assert.Equal(3, Assert.Single((await _store.LoadFriendsAsync()).Friends).Intimacy);
+    }
+
+    [Fact]
+    public async Task QuickMessage_LeavesTextTypedDuringAnInFlightSend()
+    {
+        var viewModel = new PetWindowViewModel(_store, _host);
+        var friend = Assert.Single(_host.Friends);
+        var row = new QuickOverlayEntry { PetId = friend.PetId, IsFriend = true, Friend = friend };
+        var saveStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var resumeSave = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        _coordinationStore.BeforeSaveFriendsAsync = () =>
+        {
+            saveStarted.TrySetResult();
+            return resumeSave.Task;
+        };
+
+        viewModel.OpenQuickMessageCommand.Execute(row);
+        viewModel.QuickMessageText = "전송 시작";
+        var send = viewModel.SendQuickMessageCommand.ExecuteAsync(null);
+        try
+        {
+            await saveStarted.Task.WaitAsync(TimeSpan.FromSeconds(10));
+            viewModel.QuickMessageText = "전송 중 작성한 다음 메시지";
+        }
+        finally
+        {
+            resumeSave.TrySetResult();
+        }
+
+        await send;
+        Assert.Equal("전송 중 작성한 다음 메시지", viewModel.QuickMessageText);
+        Assert.True(row.IsComposingMessage);
+        Assert.Same(row, viewModel.QuickMessageTarget);
     }
 
     public async Task DisposeAsync()
