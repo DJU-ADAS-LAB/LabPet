@@ -29,6 +29,7 @@ public sealed class PetAnimationController
     // 위상 점프(떨림) 없이 속도가 부드럽게 변하도록 누적 위상 사용
     private double _dancePhase;
     private double _tailPhase;
+    private double _auraPhase;
 
     // 자연스러운 자동 눈 깜빡임 상태
     private double _nextBlinkInSeconds = 2.6;
@@ -165,6 +166,8 @@ public sealed class PetAnimationController
         // 누적 위상 갱신 (속도가 변해도 위상 점프 없이 매끄럽게 춤춤)
         _dancePhase += deltaSeconds * (2.2 + groove * 2.4);
         _tailPhase += deltaSeconds * (3.2 + groove * 2.8);
+        // 오라는 작업 중 시선을 방해하지 않도록 초당 12~22도로 차분하게 회전
+        _auraPhase = (_auraPhase + deltaSeconds * (12.0 + treble * 10.0)) % 360.0;
 
         double scaleY = 1.0;
         double offsetY = 0.0;
@@ -293,12 +296,12 @@ public sealed class PetAnimationController
 
         if (rig.AuraRotation is not null)
         {
-            rig.AuraRotation.Angle = (_elapsedSeconds * (38.0 + treble * 85.0 + beat * 35.0)) % 360.0;
+            rig.AuraRotation.Angle = _auraPhase;
         }
 
         if (rig.AuraTranslate is not null)
         {
-            rig.AuraTranslate.OffsetY = Math.Sin(_elapsedSeconds * 1.8) * 0.08 + offsetY * 0.35;
+            rig.AuraTranslate.OffsetY = Math.Sin(_elapsedSeconds * 1.2) * 0.035;
         }
 
         emissiveStrength = Math.Clamp(emissiveStrength, 0.0, 0.52);

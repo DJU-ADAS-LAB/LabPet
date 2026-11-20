@@ -31,6 +31,9 @@ public sealed partial class OnboardingViewModel : ObservableObject
     private string _submitButtonText = "LabPet 시작하기";
 
     [ObservableProperty]
+    private string _ownerName = string.Empty;
+
+    [ObservableProperty]
     private string _petName = "모찌";
 
     [ObservableProperty]
@@ -71,6 +74,7 @@ public sealed partial class OnboardingViewModel : ObservableObject
         WindowTitle = isEditMode ? "LabPet · 외형 및 이름 변경" : "LabPet · 나만의 3D 펫 만들기";
         SubmitButtonText = isEditMode ? "변경 내용 저장" : "LabPet 시작하기";
 
+        OwnerName = string.IsNullOrWhiteSpace(profile.OwnerName) ? Environment.UserName : profile.OwnerName;
         PetName = string.IsNullOrWhiteSpace(profile.PetName) ? "모찌" : profile.PetName;
         SelectedSpeciesId = profile.Appearance.SpeciesId;
         SelectedBodyColorHex = profile.Appearance.BodyColorHex;
@@ -108,15 +112,23 @@ public sealed partial class OnboardingViewModel : ObservableObject
     [RelayCommand]
     private async Task SaveAsync()
     {
-        var trimmed = (PetName ?? string.Empty).Trim();
-        if (trimmed.Length is < 1 or > 16)
+        var trimmedOwner = (OwnerName ?? string.Empty).Trim();
+        if (trimmedOwner.Length is < 1 or > 16)
+        {
+            ValidationMessage = "내 이름은 1~16자 사이로 입력해 주세요.";
+            return;
+        }
+
+        var trimmedPet = (PetName ?? string.Empty).Trim();
+        if (trimmedPet.Length is < 1 or > 16)
         {
             ValidationMessage = "펫 이름은 1~16자 사이로 입력해 주세요.";
             return;
         }
 
         ValidationMessage = string.Empty;
-        _profile.PetName = trimmed;
+        _profile.OwnerName = trimmedOwner;
+        _profile.PetName = trimmedPet;
         _profile.Appearance = BuildCurrentAppearance();
         _profile.IsOnboardingCompleted = true;
 

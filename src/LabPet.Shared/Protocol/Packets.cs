@@ -43,6 +43,7 @@ public sealed class DiscoveryHelloPacket
     public int ProtocolVersion { get; set; } = ProtocolConstants.CurrentProtocolVersion;
     public string AppVersion { get; set; } = "0.1.0";
     public string PetId { get; set; } = string.Empty;
+    public string OwnerName { get; set; } = string.Empty;
     public string PetName { get; set; } = string.Empty;
     public PetAppearance Appearance { get; set; } = new();
     public int Level { get; set; } = 1;
@@ -77,6 +78,7 @@ public sealed class ControlPacketEnvelope
 
 public sealed class FriendRequestPayload
 {
+    public string RequesterOwnerName { get; set; } = string.Empty;
     public string RequesterName { get; set; } = string.Empty;
     public PetAppearance Appearance { get; set; } = new();
     public int Level { get; set; } = 1;
@@ -85,6 +87,7 @@ public sealed class FriendRequestPayload
 
 public sealed class FriendAcceptPayload
 {
+    public string AccepterOwnerName { get; set; } = string.Empty;
     public string AccepterName { get; set; } = string.Empty;
     public PetAppearance Appearance { get; set; } = new();
     public string PairSecretBase64 { get; set; } = string.Empty;

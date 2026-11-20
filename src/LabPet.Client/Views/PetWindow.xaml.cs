@@ -254,7 +254,12 @@ public partial class PetWindow : Window
 
     private async void OnFriendRequestResponded(object? sender, (PendingFriendRequest Request, bool Accept) args)
     {
-        await _social.RespondFriendRequestAsync(args.Request, args.Accept);
+        var ok = await _social.RespondFriendRequestAsync(args.Request, args.Accept);
+        if (args.Accept && !ok)
+        {
+            // 상대 PC 방화벽 등으로 수락 전송이 실패한 경우 재시도할 수 있도록 요청 복원
+            _viewModel.PendingFriendRequest = args.Request;
+        }
     }
 
     private void OnFrameTick(object? sender, EventArgs e)

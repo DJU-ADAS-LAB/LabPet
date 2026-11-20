@@ -60,6 +60,7 @@ public interface ISocialTransport : IAsyncDisposable
 
 public sealed class FriendRequestReceivedEventArgs(
     string requesterPetId,
+    string requesterOwnerName,
     string requesterName,
     PetAppearance appearance,
     int level,
@@ -67,6 +68,7 @@ public sealed class FriendRequestReceivedEventArgs(
     int remoteTcpPort) : EventArgs
 {
     public string RequesterPetId { get; } = requesterPetId;
+    public string RequesterOwnerName { get; } = requesterOwnerName;
     public string RequesterName { get; } = requesterName;
     public PetAppearance Appearance { get; } = appearance;
     public int Level { get; } = level;
@@ -76,6 +78,7 @@ public sealed class FriendRequestReceivedEventArgs(
 
 public sealed class FriendAcceptedEventArgs(
     string accepterPetId,
+    string accepterOwnerName,
     string accepterName,
     PetAppearance appearance,
     string pairSecretBase64,
@@ -83,6 +86,7 @@ public sealed class FriendAcceptedEventArgs(
     int remoteTcpPort) : EventArgs
 {
     public string AccepterPetId { get; } = accepterPetId;
+    public string AccepterOwnerName { get; } = accepterOwnerName;
     public string AccepterName { get; } = accepterName;
     public PetAppearance Appearance { get; } = appearance;
     public string PairSecretBase64 { get; } = pairSecretBase64;

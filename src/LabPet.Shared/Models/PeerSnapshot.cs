@@ -8,6 +8,7 @@ namespace LabPet.Shared.Models;
 public sealed class PeerSnapshot
 {
     public string PetId { get; set; } = string.Empty;
+    public string OwnerName { get; set; } = string.Empty;
     public string PetName { get; set; } = string.Empty;
     public PetAppearance Appearance { get; set; } = new();
     public int Level { get; set; } = 1;
@@ -28,6 +29,7 @@ public sealed class PeerSnapshot
 /// 로컬 펫이 네트워크에 송출하는 현재 상태 스냅샷.
 /// </summary>
 public sealed record LocalPresenceState(
+    string OwnerName,
     string PetName,
     PetAppearance Appearance,
     int Level,

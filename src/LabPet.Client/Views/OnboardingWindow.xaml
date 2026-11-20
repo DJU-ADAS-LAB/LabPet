@@ -219,8 +219,23 @@
                                       PanningMode="VerticalOnly"
                                       Padding="0,0,10,0">
                             <StackPanel>
-                                <TextBlock Text="펫 이름" Style="{StaticResource SectionTitleStyle}" Margin="0,0,0,7" />
-                                <TextBox Text="{Binding PetName, UpdateSourceTrigger=PropertyChanged}" MaxLength="16" Height="40" />
+                                <Grid Margin="0,0,0,4">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="12" />
+                                        <ColumnDefinition Width="*" />
+                                    </Grid.ColumnDefinitions>
+
+                                    <StackPanel Grid.Column="0">
+                                        <TextBlock Text="내 이름 (주인 닉네임)" Style="{StaticResource SectionTitleStyle}" Margin="0,0,0,7" />
+                                        <TextBox Text="{Binding OwnerName, UpdateSourceTrigger=PropertyChanged}" MaxLength="16" Height="40" />
+                                    </StackPanel>
+
+                                    <StackPanel Grid.Column="2">
+                                        <TextBlock Text="펫 이름" Style="{StaticResource SectionTitleStyle}" Margin="0,0,0,7" />
+                                        <TextBox Text="{Binding PetName, UpdateSourceTrigger=PropertyChanged}" MaxLength="16" Height="40" />
+                                    </StackPanel>
+                                </Grid>
 
                                 <TextBlock Text="1. 캐릭터 종" Style="{StaticResource SectionTitleStyle}" />
                                 <ListBox Style="{StaticResource PillListBoxStyle}"

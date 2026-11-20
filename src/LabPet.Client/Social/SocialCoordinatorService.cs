@@ -9,11 +9,15 @@ namespace LabPet.Client.Social;
 
 public sealed record PendingFriendRequest(
     string RequesterPetId,
+    string RequesterOwnerName,
     string RequesterName,
     PetAppearance Appearance,
     int Level,
     string RemoteIp,
-    int RemoteTcpPort);
+    int RemoteTcpPort)
+{
+    public string DisplayName => SocialCoordinatorService.FormatDisplayName(RequesterOwnerName, RequesterName);
+}
 
 /// <summary>
 /// ISocialTransport, friends.json 저장소, 보너스 코인, 노래 따라하기(팔로워 타임아웃·우선순위)를 조정하는 소셜 코디네이터.
@@ -67,6 +71,7 @@ public sealed class SocialCoordinatorService : IAsyncDisposable
         _transport.QuickReactionReceived += OnQuickReactionReceived;
         _transport.PetInteractionReceived += OnPetInteractionReceived;
         _transport.MusicFrameReceived += OnMusicFrameReceived;
+        _transport.TransportError += OnTransportError;
     }
 
     public async Task StartAsync(PetProfile localProfile, CancellationToken cancellationToken = default)
@@ -77,12 +82,26 @@ public sealed class SocialCoordinatorService : IAsyncDisposable
         StateChanged?.Invoke(this, EventArgs.Empty);
     }
 
+    public static string FormatDisplayName(string? ownerName, string? petName)
+    {
+        var owner = (ownerName ?? string.Empty).Trim();
+        var pet = (petName ?? string.Empty).Trim();
+
+        if (!string.IsNullOrEmpty(owner) && !string.IsNullOrEmpty(pet))
+        {
+            return $"{owner} ({pet})";
+        }
+
+        return !string.IsNullOrEmpty(owner) ? owner : (string.IsNullOrEmpty(pet) ? "이름 없음" : pet);
+    }
+
     public async Task UpdateLocalPresenceAsync(PetProfile profile, bool isMusicActive, CancellationToken cancellationToken = default)
     {
         _localProfile = profile;
         var version = typeof(SocialCoordinatorService).Assembly.GetName().Version?.ToString(3) ?? "0.1.0";
         await _transport.UpdateLocalPresenceAsync(
             new LocalPresenceState(
+                profile.OwnerName,
                 profile.PetName,
                 profile.Appearance.Clone(),
                 profile.SoloProgress.Level,
@@ -149,8 +168,11 @@ public sealed class SocialCoordinatorService : IAsyncDisposable
     public Task<bool> SendFriendRequestAsync(PeerSnapshot peer)
         => _transport.SendFriendRequestAsync(peer);
 
+    private string? _lastTransportError;
+
     public async Task<bool> RespondFriendRequestAsync(PendingFriendRequest request, bool accept)
     {
+        _lastTransportError = null;
         string? secret = accept ? PacketSigner.GeneratePairSecretBase64() : null;
         var sent = await _transport.RespondFriendRequestAsync(
             request.RequesterPetId,
@@ -164,6 +186,7 @@ public sealed class SocialCoordinatorService : IAsyncDisposable
             await UpsertFriendAsync(new FriendEntry
             {
                 PetId = request.RequesterPetId,
+                OwnerName = request.RequesterOwnerName,
                 PetName = request.RequesterName,
                 LastKnownIp = request.RemoteIp,
                 LastKnownTcpPort = request.RemoteTcpPort,
@@ -174,7 +197,15 @@ public sealed class SocialCoordinatorService : IAsyncDisposable
                 LastSeenAtUtc = DateTimeOffset.UtcNow
             }).ConfigureAwait(false);
 
-            SocialNotification?.Invoke(this, $"{request.RequesterName}(와)과 친구가 되었어요!");
+            SocialNotification?.Invoke(this, $"{request.DisplayName}(와)과 친구가 되었어요!");
+            PetReactionTriggered?.Invoke(this, EventArgs.Empty);
+        }
+        else if (accept && !sent)
+        {
+            var reason = string.IsNullOrWhiteSpace(_lastTransportError)
+                ? "상대 PC 방화벽(TCP 45680) 또는 네트워크를 확인해 주세요."
+                : $"연결 실패({request.RemoteIp}:{request.RemoteTcpPort}) · 상대 PC 방화벽(TCP 45680)을 확인해 주세요.";
+            SocialNotification?.Invoke(this, $"{request.DisplayName} 수락 전송 실패: {reason}");
         }
 
         return sent;
@@ -257,6 +288,11 @@ public sealed class SocialCoordinatorService : IAsyncDisposable
         return ok;
     }
 
+    private void OnTransportError(object? sender, TransportErrorEventArgs e)
+    {
+        _lastTransportError = e.Message;
+    }
+
     private void OnPeersChanged(object? sender, IReadOnlyList<PeerSnapshot> peers)
     {
         StateChanged?.Invoke(this, EventArgs.Empty);
@@ -266,6 +302,7 @@ public sealed class SocialCoordinatorService : IAsyncDisposable
     {
         FriendRequestArrived?.Invoke(this, new PendingFriendRequest(
             e.RequesterPetId,
+            e.RequesterOwnerName,
             e.RequesterName,
             e.Appearance,
             e.Level,
@@ -278,6 +315,7 @@ public sealed class SocialCoordinatorService : IAsyncDisposable
         await UpsertFriendAsync(new FriendEntry
         {
             PetId = e.AccepterPetId,
+            OwnerName = e.AccepterOwnerName,
             PetName = e.AccepterName,
             LastKnownIp = e.RemoteIp,
             LastKnownTcpPort = e.RemoteTcpPort,
@@ -288,7 +326,8 @@ public sealed class SocialCoordinatorService : IAsyncDisposable
             LastSeenAtUtc = DateTimeOffset.UtcNow
         }).ConfigureAwait(false);
 
-        SocialNotification?.Invoke(this, $"{e.AccepterName}(이)가 친구 신청을 수락했어요!");
+        var display = FormatDisplayName(e.AccepterOwnerName, e.AccepterName);
+        SocialNotification?.Invoke(this, $"{display}(이)가 친구 신청을 수락했어요!");
         PetReactionTriggered?.Invoke(this, EventArgs.Empty);
     }
 
@@ -300,7 +339,7 @@ public sealed class SocialCoordinatorService : IAsyncDisposable
     private async void OnBubbleMessageReceived(object? sender, BubbleMessageReceivedEventArgs e)
     {
         var friend = FindFriend(e.SenderPetId);
-        var name = friend?.PetName ?? "친구";
+        var name = friend is null ? "친구" : FormatDisplayName(friend.OwnerName, friend.PetName);
         if (friend is not null)
         {
             await RewardSocialBonusAsync(friend, coins: 2).ConfigureAwait(false);
@@ -313,7 +352,7 @@ public sealed class SocialCoordinatorService : IAsyncDisposable
     private async void OnQuickReactionReceived(object? sender, QuickReactionReceivedEventArgs e)
     {
         var friend = FindFriend(e.SenderPetId);
-        var name = friend?.PetName ?? "친구";
+        var name = friend is null ? "친구" : FormatDisplayName(friend.OwnerName, friend.PetName);
         if (friend is not null)
         {
             await RewardSocialBonusAsync(friend, coins: 1).ConfigureAwait(false);
@@ -326,7 +365,7 @@ public sealed class SocialCoordinatorService : IAsyncDisposable
     private async void OnPetInteractionReceived(object? sender, PetInteractionReceivedEventArgs e)
     {
         var friend = FindFriend(e.SenderPetId);
-        var name = friend?.PetName ?? "친구";
+        var name = friend is null ? "친구" : FormatDisplayName(friend.OwnerName, friend.PetName);
         if (friend is not null)
         {
             await RewardSocialBonusAsync(friend, coins: 2).ConfigureAwait(false);
@@ -362,6 +401,7 @@ public sealed class SocialCoordinatorService : IAsyncDisposable
         var existing = _friendsStore.Friends.FirstOrDefault(f => string.Equals(f.PetId, entry.PetId, StringComparison.OrdinalIgnoreCase));
         if (existing is not null)
         {
+            existing.OwnerName = entry.OwnerName;
             existing.PetName = entry.PetName;
             existing.LastKnownIp = entry.LastKnownIp;
             existing.LastKnownTcpPort = entry.LastKnownTcpPort;
@@ -392,7 +432,10 @@ public sealed class SocialCoordinatorService : IAsyncDisposable
         => _friendsStore.Friends.FirstOrDefault(f => string.Equals(f.PetId, petId, StringComparison.OrdinalIgnoreCase));
 
     private string FindFriendName(string petId)
-        => FindFriend(petId)?.PetName ?? "친구";
+    {
+        var f = FindFriend(petId);
+        return f is null ? "친구" : FormatDisplayName(f.OwnerName, f.PetName);
+    }
 
     public async ValueTask DisposeAsync()
     {
@@ -404,6 +447,7 @@ public sealed class SocialCoordinatorService : IAsyncDisposable
         _transport.QuickReactionReceived -= OnQuickReactionReceived;
         _transport.PetInteractionReceived -= OnPetInteractionReceived;
         _transport.MusicFrameReceived -= OnMusicFrameReceived;
+        _transport.TransportError -= OnTransportError;
         await _transport.StopAsync().ConfigureAwait(false);
     }
 }

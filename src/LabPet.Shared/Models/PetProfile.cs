@@ -15,6 +15,9 @@ public sealed class PetProfile
     /// <summary>사용자에게 표시되는 짧은 친구 코드 (예: LP-XXXX-XXXX).</summary>
     public string FriendCode { get; set; } = GenerateFriendCode();
 
+    /// <summary>사용자가 설정한 내 이름(주인 닉네임).</summary>
+    public string OwnerName { get; set; } = string.Empty;
+
     /// <summary>사용자가 설정한 펫 이름.</summary>
     public string PetName { get; set; } = "모찌";
 

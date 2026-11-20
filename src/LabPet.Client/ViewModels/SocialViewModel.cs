@@ -11,6 +11,7 @@ namespace LabPet.Client.ViewModels;
 public sealed class PeerListItemViewModel
 {
     public PeerSnapshot Snapshot { get; }
+    public string DisplayTitle => SocialCoordinatorService.FormatDisplayName(Snapshot.OwnerName, Snapshot.PetName);
     public string PetName => Snapshot.PetName;
     public string SubInfo => $"Lv.{Snapshot.Level} · {Snapshot.IpAddress} · v{Snapshot.AppVersion}";
     public bool IsFriend => Snapshot.IsFriend;
@@ -47,7 +48,10 @@ public sealed class FriendListItemViewModel
     public bool RequiresUpdate { get; }
     public string UpdateBadgeText { get; }
 
+    public string DisplayTitle => SocialCoordinatorService.FormatDisplayName(Entry.OwnerName, Entry.PetName);
+    public string OwnerName => string.IsNullOrWhiteSpace(Entry.OwnerName) ? "주인 미설정" : Entry.OwnerName;
     public string PetName => Entry.PetName;
+    public string PetNameSubtitle => $"펫: {Entry.PetName}";
     public string StatusText => RequiresUpdate
         ? UpdateBadgeText
         : IsOnline
@@ -150,8 +154,8 @@ public sealed partial class SocialViewModel : ObservableObject
 
         var ok = await _social.SendFriendRequestAsync(peer.Snapshot);
         StatusBanner = ok
-            ? $"{peer.PetName}에게 친구 신청을 보냈습니다."
-            : $"{peer.PetName}에게 친구 신청을 보내지 못했습니다. (방화벽/네트워크 확인)";
+            ? $"{peer.DisplayTitle}에게 친구 신청을 보냈습니다."
+            : $"{peer.DisplayTitle}에게 친구 신청을 보내지 못했습니다. (방화벽/네트워크 확인)";
     }
 
     [RelayCommand]
@@ -173,7 +177,7 @@ public sealed partial class SocialViewModel : ObservableObject
         if (ok)
         {
             MessageText = string.Empty;
-            StatusBanner = $"{SelectedFriend.PetName}에게 메시지를 전송했습니다. (+2 코인)";
+            StatusBanner = $"{SelectedFriend.DisplayTitle}에게 메시지를 전송했습니다. (+2 코인)";
         }
         else
         {
@@ -191,7 +195,7 @@ public sealed partial class SocialViewModel : ObservableObject
 
         var ok = await _social.SendQuickReactionAsync(SelectedFriend.Entry, emoji);
         StatusBanner = ok
-            ? $"{SelectedFriend.PetName}에게 {emoji} 반응을 보냈습니다. (+1 코인)"
+            ? $"{SelectedFriend.DisplayTitle}에게 {emoji} 반응을 보냈습니다. (+1 코인)"
             : "반응 전송에 실패했습니다.";
     }
 
@@ -205,7 +209,7 @@ public sealed partial class SocialViewModel : ObservableObject
 
         var ok = await _social.SendPetInteractionAsync(SelectedFriend.Entry);
         StatusBanner = ok
-            ? $"{SelectedFriend.PetName}을(를) 쓰다듬어 주었습니다! (+2 코인)"
+            ? $"{SelectedFriend.DisplayTitle}을(를) 쓰다듬어 주었습니다! (+2 코인)"
             : "쓰다듬기 전송에 실패했습니다.";
     }
 

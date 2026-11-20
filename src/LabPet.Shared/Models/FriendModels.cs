@@ -18,6 +18,7 @@ public sealed class FriendsStore
 public sealed class FriendEntry
 {
     public string PetId { get; set; } = string.Empty;
+    public string OwnerName { get; set; } = string.Empty;
     public string PetName { get; set; } = string.Empty;
     public string? LastKnownIp { get; set; }
     public int LastKnownTcpPort { get; set; } = ProtocolConstants.TcpControlPort;

@@ -35,7 +35,7 @@ public sealed class LanP2pTransport : ISocialTransport
     private TcpListener? _tcpListener;
 
     private string _localPetId = string.Empty;
-    private LocalPresenceState _localPresence = new("모찌", new PetAppearance(), 1, false, "0.1.0");
+    private LocalPresenceState _localPresence = new(string.Empty, "모찌", new PetAppearance(), 1, false, "0.1.0");
     private int _boundTcpPort;
 
     public string TransportName => "LAN-P2P";
@@ -75,6 +75,7 @@ public sealed class LanP2pTransport : ISocialTransport
 
             _localPetId = localProfile.PetId;
             _localPresence = new LocalPresenceState(
+                localProfile.OwnerName,
                 localProfile.PetName,
                 localProfile.Appearance.Clone(),
                 localProfile.SoloProgress.Level,
@@ -189,6 +190,7 @@ public sealed class LanP2pTransport : ISocialTransport
         var presence = _localPresence;
         var payload = new FriendRequestPayload
         {
+            RequesterOwnerName = presence.OwnerName,
             RequesterName = presence.PetName,
             Appearance = presence.Appearance.Clone(),
             Level = presence.Level,
@@ -224,6 +226,7 @@ public sealed class LanP2pTransport : ISocialTransport
             var presence = _localPresence;
             var payload = new FriendAcceptPayload
             {
+                AccepterOwnerName = presence.OwnerName,
                 AccepterName = presence.PetName,
                 Appearance = presence.Appearance.Clone(),
                 PairSecretBase64 = pairSecretBase64,
@@ -421,6 +424,7 @@ public sealed class LanP2pTransport : ISocialTransport
             ProtocolVersion = ProtocolConstants.CurrentProtocolVersion,
             AppVersion = presence.AppVersion,
             PetId = _localPetId,
+            OwnerName = presence.OwnerName,
             PetName = presence.PetName,
             Appearance = presence.Appearance.Clone(),
             Level = presence.Level,
@@ -470,20 +474,32 @@ public sealed class LanP2pTransport : ISocialTransport
                 }
 
                 var compat = ProtocolConstants.EvaluateCompatibility(hello.ProtocolVersion);
-                var remoteIp = result.RemoteEndPoint.Address.ToString();
+                var remoteIp = result.RemoteEndPoint.Address.IsIPv4MappedToIPv6
+                    ? result.RemoteEndPoint.Address.MapToIPv4().ToString()
+                    : result.RemoteEndPoint.Address.ToString();
                 var isFriend = _friendsByPetId.TryGetValue(hello.PetId, out var friendEntry);
 
-                // DHCP IP 변경 시 영구 petId 기준으로 최신 IP/포트 자동 갱신
+                // DHCP IP 및 이름 변경 시 영구 petId 기준으로 자동 갱신
                 if (isFriend && friendEntry is not null)
                 {
                     friendEntry.LastKnownIp = remoteIp;
                     friendEntry.LastKnownTcpPort = hello.TcpPort;
                     friendEntry.LastSeenAtUtc = DateTimeOffset.UtcNow;
+                    if (!string.IsNullOrWhiteSpace(hello.OwnerName))
+                    {
+                        friendEntry.OwnerName = hello.OwnerName;
+                    }
+
+                    if (!string.IsNullOrWhiteSpace(hello.PetName))
+                    {
+                        friendEntry.PetName = hello.PetName;
+                    }
                 }
 
                 var snapshot = new PeerSnapshot
                 {
                     PetId = hello.PetId,
+                    OwnerName = hello.OwnerName ?? string.Empty,
                     PetName = hello.PetName,
                     Appearance = hello.Appearance ?? new PetAppearance(),
                     Level = hello.Level,
@@ -609,7 +625,10 @@ public sealed class LanP2pTransport : ISocialTransport
                 client.ReceiveTimeout = 4000;
                 client.SendTimeout = 4000;
 
-                var remoteIp = (client.Client.RemoteEndPoint as IPEndPoint)?.Address.ToString() ?? string.Empty;
+                var remoteEndPoint = client.Client.RemoteEndPoint as IPEndPoint;
+                var remoteIp = remoteEndPoint is not null
+                    ? (remoteEndPoint.Address.IsIPv4MappedToIPv6 ? remoteEndPoint.Address.MapToIPv4().ToString() : remoteEndPoint.Address.ToString())
+                    : string.Empty;
                 await using var stream = client.GetStream();
 
                 var envelope = await ReadFramedJsonAsync<ControlPacketEnvelope>(stream, ct).ConfigureAwait(false);
@@ -691,7 +710,7 @@ public sealed class LanP2pTransport : ISocialTransport
                 if (p is null) return RejectAck(header.MessageId, "INVALID_PAYLOAD");
 
                 FriendRequestReceived?.Invoke(this, new FriendRequestReceivedEventArgs(
-                    header.SenderPetId, p.RequesterName, p.Appearance ?? new PetAppearance(), p.Level, remoteIp, p.TcpPort));
+                    header.SenderPetId, p.RequesterOwnerName ?? string.Empty, p.RequesterName, p.Appearance ?? new PetAppearance(), p.Level, remoteIp, p.TcpPort));
                 break;
             }
 
@@ -701,7 +720,7 @@ public sealed class LanP2pTransport : ISocialTransport
                 if (p is null || string.IsNullOrWhiteSpace(p.PairSecretBase64)) return RejectAck(header.MessageId, "INVALID_PAYLOAD");
 
                 FriendAccepted?.Invoke(this, new FriendAcceptedEventArgs(
-                    header.SenderPetId, p.AccepterName, p.Appearance ?? new PetAppearance(), p.PairSecretBase64, remoteIp, p.TcpPort));
+                    header.SenderPetId, p.AccepterOwnerName ?? string.Empty, p.AccepterName, p.Appearance ?? new PetAppearance(), p.PairSecretBase64, remoteIp, p.TcpPort));
                 break;
             }
 

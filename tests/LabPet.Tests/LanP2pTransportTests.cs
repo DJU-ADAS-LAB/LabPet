@@ -37,19 +37,20 @@ public sealed class LanP2pTransportTests
         await using var host = new LanP2pTransport(udpDiscoveryPort: 46678, udpMusicPort: 46679, tcpControlPort: 0);
         await using var guest = new LanP2pTransport(udpDiscoveryPort: 46688, udpMusicPort: 46689, tcpControlPort: 0);
 
-        var hostProfile = new PetProfile { PetName = "호스트모찌" };
-        var guestProfile = new PetProfile { PetName = "게스트냥이" };
+        var hostProfile = new PetProfile { OwnerName = "승우", PetName = "호스트모찌" };
+        var guestProfile = new PetProfile { OwnerName = "민수", PetName = "게스트냥이" };
 
         await host.StartAsync(hostProfile, []);
         await guest.StartAsync(guestProfile, []);
 
-        // 1. 친구 신청 -> 호스트 수신 확인
-        var requestTcs = new TaskCompletionSource<string>();
-        host.FriendRequestReceived += (_, e) => requestTcs.TrySetResult(e.RequesterName);
+        // 1. 친구 신청 -> 호스트 수신 확인 (주인 이름 + 펫 이름 모두 전달)
+        var requestTcs = new TaskCompletionSource<(string Owner, string Pet)>();
+        host.FriendRequestReceived += (_, e) => requestTcs.TrySetResult((e.RequesterOwnerName, e.RequesterName));
 
         var hostPeerSnapshot = new PeerSnapshot
         {
             PetId = hostProfile.PetId,
+            OwnerName = hostProfile.OwnerName,
             PetName = hostProfile.PetName,
             IpAddress = "127.0.0.1",
             TcpPort = host.BoundTcpPort,
@@ -58,7 +59,9 @@ public sealed class LanP2pTransportTests
 
         var reqSent = await guest.SendFriendRequestAsync(hostPeerSnapshot);
         Assert.True(reqSent);
-        Assert.Equal("게스트냥이", await requestTcs.Task.WaitAsync(TimeSpan.FromSeconds(3)));
+        var (reqOwner, reqPet) = await requestTcs.Task.WaitAsync(TimeSpan.FromSeconds(3));
+        Assert.Equal("민수", reqOwner);
+        Assert.Equal("게스트냥이", reqPet);
 
         // 2. 호스트 친구 수락 -> 비밀키 교환
         var acceptTcs = new TaskCompletionSource<string>();

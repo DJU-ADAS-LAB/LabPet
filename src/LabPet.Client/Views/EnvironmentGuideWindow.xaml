@@ -52,11 +52,19 @@
                                      FontFamily="Consolas"
                                      FontSize="11"
                                      Padding="10" />
-                            <Button Content="관리자 PowerShell 방화벽 허용 명령 복사"
-                                    Style="{StaticResource PrimaryButtonStyle}"
-                                    Click="CopyFirewallCommand_Click"
-                                    HorizontalAlignment="Left"
-                                    Margin="0,10,0,0" />
+                            <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
+                                <Button Content="🛡️ 원클릭 방화벽 자동 허용 (권장)"
+                                        Style="{StaticResource PrimaryButtonStyle}"
+                                        Click="AutoRegisterFirewall_Click"
+                                        Margin="0,0,8,0" />
+                                <Button Content="명령어 복사"
+                                        Click="CopyFirewallCommand_Click" />
+                            </StackPanel>
+                            <TextBlock x:Name="FirewallStatusText"
+                                       FontSize="11.5"
+                                       FontWeight="SemiBold"
+                                       Foreground="{StaticResource BrandPinkBrush}"
+                                       Margin="0,8,0,0" />
                         </StackPanel>
                     </Border>
 

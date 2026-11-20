@@ -59,7 +59,7 @@ public sealed partial class PetWindowViewModel : ObservableObject
 
     public string PendingFriendRequestText => PendingFriendRequest is null
         ? string.Empty
-        : $"{PendingFriendRequest.RequesterName}(이)가 친구 신청!";
+        : $"{PendingFriendRequest.DisplayName} 친구 신청!";
 
     [ObservableProperty]
     private string _trayTooltip = "LabPet";
@@ -76,7 +76,8 @@ public sealed partial class PetWindowViewModel : ObservableObject
         CurrentProfile = profile;
         PetName = profile.PetName;
         FriendCode = profile.FriendCode;
-        TrayTooltip = $"LabPet · {profile.PetName} (Lv.{profile.SoloProgress.Level})";
+        var label = SocialCoordinatorService.FormatDisplayName(profile.OwnerName, profile.PetName);
+        TrayTooltip = $"{label} · Lv.{profile.SoloProgress.Level}";
         ProfileUpdated?.Invoke(this, profile);
     }
 
@@ -209,7 +210,8 @@ public sealed partial class PetWindowViewModel : ObservableObject
     public async Task SaveCurrentProfileAsync()
     {
         await _store.SaveProfileAsync(CurrentProfile);
-        TrayTooltip = $"LabPet · {CurrentProfile.PetName} (Lv.{CurrentProfile.SoloProgress.Level})";
+        var label = SocialCoordinatorService.FormatDisplayName(CurrentProfile.OwnerName, CurrentProfile.PetName);
+        TrayTooltip = $"{label} · Lv.{CurrentProfile.SoloProgress.Level}";
     }
 
     [RelayCommand]

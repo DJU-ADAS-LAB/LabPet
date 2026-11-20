@@ -45,7 +45,7 @@ public sealed class ProceduralPetMeshFactory : IPetMeshFactory
         var accentColor = ParseHexColor(appearance.AccentColorHex, Color.FromRgb(255, 158, 181));
 
         var bodyEmissiveBrush = new SolidColorBrush(Colors.Black);
-        var auraEmissiveBrush = new SolidColorBrush(Color.FromArgb(145, accentColor.R, accentColor.G, accentColor.B));
+        var auraEmissiveBrush = new SolidColorBrush(Color.FromArgb(60, accentColor.R, accentColor.G, accentColor.B));
 
         // 부드러운 무광 소프트 클레이 재질
         var bodyMaterial = CreateClayMaterial(bodyColor, bodyEmissiveBrush, specularPower: 16, specularAlpha: 68);
@@ -668,31 +668,35 @@ public sealed class ProceduralPetMeshFactory : IPetMeshFactory
         SolidColorBrush auraEmissiveBrush)
     {
         var tris = 0;
-        var auraMat = CreateClayMaterial(Lighten(accentColor, 0.25), auraEmissiveBrush, 32, 110);
+        var softColor = Lighten(accentColor, 0.35);
+        // 캐릭터 얼굴을 가리지 않고 은은하게 어우러지는 반투명 파스텔 오라 재질
+        var auraMat = CreateTranslucentAuraMaterial(Color.FromArgb(135, softColor.R, softColor.G, softColor.B), auraEmissiveBrush);
 
         switch (auraId)
         {
             case "halo_ring":
             {
+                // 캐릭터 발밑 주변에 차분하게 깔리는 얇은 반투명 링 (얼굴 가림 방지)
                 var ringMb = new MeshBuilder(true, false);
-                AddRingTube(ringMb, new Vector3(0, -0.05f, 0), radius: 1.42f, tubeDiameter: 0.065f, segments: 38);
+                AddRingTube(ringMb, new Vector3(0, -0.78f, 0), radius: 1.24f, tubeDiameter: 0.030f, segments: 42);
                 tris += AddGeometry(parent, ringMb, auraMat);
                 break;
             }
 
             case "music_notes":
             {
+                // 작고 은은한 반투명 3D 음표 3개가 외곽에서 천천히 맴돔
                 var noteMb = new MeshBuilder(true, false);
-                for (var i = 0; i < 4; i++)
+                for (var i = 0; i < 3; i++)
                 {
-                    var angle = i * MathF.PI * 0.5f + 0.4f;
-                    var x = MathF.Cos(angle) * 1.38f;
-                    var z = MathF.Sin(angle) * 1.38f;
-                    var y = (i % 2 == 0) ? 0.35f : -0.15f;
+                    var angle = i * (2.0f * MathF.PI / 3.0f) + 0.5f;
+                    var x = MathF.Cos(angle) * 1.32f;
+                    var z = MathF.Sin(angle) * 1.32f;
+                    var y = 0.25f + (i % 2 == 0 ? 0.14f : -0.10f);
 
-                    noteMb.AddEllipsoid(new Vector3(x, y, z), 0.12f, 0.09f, 0.07f, 14, 10);
-                    noteMb.AddCylinder(new Vector3(x + 0.09f, y, z), new Vector3(x + 0.09f, y + 0.34f, z), 0.028f, 10);
-                    noteMb.AddBox(new Vector3(x + 0.16f, y + 0.30f, z), 0.15f, 0.06f, 0.04f);
+                    noteMb.AddEllipsoid(new Vector3(x, y, z), 0.075f, 0.056f, 0.045f, 12, 8);
+                    noteMb.AddCylinder(new Vector3(x + 0.056f, y, z), new Vector3(x + 0.056f, y + 0.21f, z), 0.018f, 8);
+                    noteMb.AddBox(new Vector3(x + 0.10f, y + 0.19f, z), 0.095f, 0.038f, 0.025f);
                 }
 
                 tris += AddGeometry(parent, noteMb, auraMat);
@@ -701,15 +705,16 @@ public sealed class ProceduralPetMeshFactory : IPetMeshFactory
 
             case "snowflakes":
             {
-                var snowMat = CreateClayMaterial(Color.FromRgb(220, 242, 255), auraEmissiveBrush, 38, 125);
+                // 작고 차분한 반투명 눈결정 4개
+                var snowMat = CreateTranslucentAuraMaterial(Color.FromArgb(145, 224, 244, 255), auraEmissiveBrush);
                 var snowMb = new MeshBuilder(true, false);
-                for (var i = 0; i < 6; i++)
+                for (var i = 0; i < 4; i++)
                 {
-                    var angle = i * MathF.PI / 3.0f;
-                    var x = MathF.Cos(angle) * 1.40f;
-                    var z = MathF.Sin(angle) * 1.40f;
-                    var y = MathF.Sin(i * 1.7f) * 0.45f;
-                    snowMb.AddOctahedron(new Vector3(x, y, z), Vector3.UnitY, Vector3.UnitZ, 0.11f, 0.11f);
+                    var angle = i * (MathF.PI * 0.5f) + 0.35f;
+                    var x = MathF.Cos(angle) * 1.34f;
+                    var z = MathF.Sin(angle) * 1.34f;
+                    var y = 0.12f + MathF.Sin(i * 1.8f) * 0.28f;
+                    snowMb.AddOctahedron(new Vector3(x, y, z), Vector3.UnitY, Vector3.UnitZ, 0.068f, 0.068f);
                 }
 
                 tris += AddGeometry(parent, snowMb, snowMat);
@@ -718,6 +723,15 @@ public sealed class ProceduralPetMeshFactory : IPetMeshFactory
         }
 
         return tris;
+    }
+
+    private static MaterialGroup CreateTranslucentAuraMaterial(Color translucentColor, SolidColorBrush emissiveBrush)
+    {
+        var group = new MaterialGroup();
+        group.Children.Add(new DiffuseMaterial(new SolidColorBrush(translucentColor)));
+        group.Children.Add(new SpecularMaterial(new SolidColorBrush(Color.FromArgb(45, 255, 255, 255)), 18));
+        group.Children.Add(new EmissiveMaterial(emissiveBrush));
+        return group;
     }
 
     private static void AddEyeArc(MeshBuilder mb, float cx, float cy, float cz, float halfWidth, float archHeight)
