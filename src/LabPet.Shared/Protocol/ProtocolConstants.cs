@@ -29,11 +29,17 @@ public static class ProtocolConstants
     /// <summary>피어 무응답 시 오프라인으로 판정하는 기준(초).</summary>
     public const int PeerOfflineTimeoutSeconds = 10;
 
-    /// <summary>노래 따라하기 호스트 무음 판정 기준(ms).</summary>
-    public const int MusicHostSilenceTimeoutMs = 2000;
+    /// <summary>
+    /// 노래 따라하기 호스트 무음 자동 해제 기준(ms).
+    /// 곡 간 전환·잔잔한 구간·짧은 일시정지 시 바로 끊기지 않도록 3분(180,000ms) 여유를 둔다.
+    /// </summary>
+    public const int MusicHostSilenceTimeoutMs = 180_000;
 
-    /// <summary>노래 따라하기 프레임 미수신 시 로컬 모드 복귀 기준(ms).</summary>
-    public const int MusicFrameTimeoutMs = 1500;
+    /// <summary>
+    /// 노래 따라하기 UDP 프레임 미수신(호스트 종료/오프라인) 시 로컬 모드 복귀 기준(ms).
+    /// 일시적 Wi-Fi 지터로 끊기지 않도록 15초(15,000ms)로 설정한다.
+    /// </summary>
+    public const int MusicFrameTimeoutMs = 15_000;
 
     /// <summary>말풍선 메시지 최대 글자 수.</summary>
     public const int MaxBubbleMessageLength = 100;

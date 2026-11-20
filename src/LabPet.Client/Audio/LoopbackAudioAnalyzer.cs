@@ -21,6 +21,7 @@ public sealed class LoopbackAudioAnalyzer : IAudioAnalyzer, IMMNotificationClien
     private const double SilenceThresholdMs = 120.0;
     private const double FullDecayDurationMs = 450.0;
     private const double BeatHoldDurationMs = 95.0;
+    private const double MusicActiveHoldDurationMs = 15_000.0;
     private const float MusicActiveEnergyThreshold = 0.035f;
 
     private readonly AudioSpectrumProcessor _processor = new();
@@ -42,6 +43,7 @@ public sealed class LoopbackAudioAnalyzer : IAudioAnalyzer, IMMNotificationClien
     private volatile float _rawTreble;
     private long _lastDataReceivedTicks;
     private long _lastBeatTicks;
+    private long _lastMusicEnergyTicks;
     private volatile bool _hasAudioDevice;
     private volatile string _activeDeviceName = "재생 장치 없음";
 
@@ -124,7 +126,19 @@ public sealed class LoopbackAudioAnalyzer : IAudioAnalyzer, IMMNotificationClien
             : double.MaxValue;
 
         var isBeat = decayFactor > 0.5f && elapsedSinceBeatMs <= BeatHoldDurationMs;
-        var isMusicActive = (bass + mid + treble) / 3.0f >= MusicActiveEnergyThreshold && decayFactor > 0.1f;
+        var hasInstantMusicEnergy = (bass + mid + treble) / 3.0f >= MusicActiveEnergyThreshold && decayFactor > 0.1f;
+        if (hasInstantMusicEnergy)
+        {
+            Interlocked.Exchange(ref _lastMusicEnergyTicks, nowTicks);
+        }
+
+        var lastMusicTicks = Interlocked.Read(ref _lastMusicEnergyTicks);
+        var elapsedSinceMusicMs = lastMusicTicks > 0
+            ? (nowTicks - lastMusicTicks) * 1000.0 / Stopwatch.Frequency
+            : double.MaxValue;
+
+        // 곡 중 잔잔한 구간·트랙 전환·잠시 일시정지 시 음악 활성 상태가 바로 꺼지지 않도록 15초간 유지
+        var isMusicActive = hasInstantMusicEnergy || elapsedSinceMusicMs <= MusicActiveHoldDurationMs;
 
         return new AudioFrameSnapshot(bass, mid, treble, isBeat, isMusicActive, _hasAudioDevice, _activeDeviceName);
     }

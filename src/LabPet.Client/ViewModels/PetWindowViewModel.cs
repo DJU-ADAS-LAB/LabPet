@@ -17,9 +17,9 @@ public sealed partial class QuickOverlayEntry : ObservableObject
     [ObservableProperty] private string _displayTitle = string.Empty;
     [ObservableProperty, NotifyPropertyChangedFor(nameof(CanFollowMusic), nameof(CanSendFriendRequest))]
     private bool _isFriend;
-    [ObservableProperty, NotifyPropertyChangedFor(nameof(CanFollowMusic), nameof(MusicTooltip))]
+    [ObservableProperty, NotifyPropertyChangedFor(nameof(CanFollowMusic), nameof(MusicTooltip), nameof(MusicButtonIcon))]
     private bool _isMusicActive;
-    [ObservableProperty, NotifyPropertyChangedFor(nameof(CanFollowMusic), nameof(MusicTooltip))]
+    [ObservableProperty, NotifyPropertyChangedFor(nameof(CanFollowMusic), nameof(MusicTooltip), nameof(MusicButtonIcon))]
     private bool _isFollowingMusic;
     [ObservableProperty, NotifyPropertyChangedFor(nameof(CanSendFriendRequest))]
     private bool _requiresUpdate;
@@ -29,9 +29,11 @@ public sealed partial class QuickOverlayEntry : ObservableObject
     public FriendEntry? Friend { get; set; }
     public PeerSnapshot? Peer { get; set; }
 
+    public string MusicButtonIcon => IsFollowingMusic ? "⏹" : "🎵";
+
     public string MusicTooltip => IsFollowingMusic
         ? "노래 따라하기 중지"
-        : (IsMusicActive ? "노래 따라하기" : "음악 재생 중이 아님");
+        : (IsMusicActive ? "노래 따라하기 시작" : "음악 재생 중이 아님");
 }
 
 /// <summary>
@@ -68,6 +70,7 @@ public sealed partial class PetWindowViewModel : ObservableObject
     public event EventHandler<bool>? ClickThroughChanged;
     public event EventHandler<PetProfile>? ProfileUpdated;
     public event EventHandler<double>? PetScaleChanged;
+    public event EventHandler<double>? PetOpacityChanged;
     public event EventHandler<(PendingFriendRequest Request, bool Accept)>? FriendRequestResponded;
     public event EventHandler<(FriendEntry Friend, PetAppearance Appearance)>? ToggleVisitFriendRequested;
 
@@ -166,6 +169,7 @@ public sealed partial class PetWindowViewModel : ObservableObject
         TrayTooltip = $"{label} · Lv.{profile.SoloProgress.Level}";
         ProfileUpdated?.Invoke(this, profile);
         PetScaleChanged?.Invoke(this, PetScale);
+        PetOpacityChanged?.Invoke(this, PetOpacity);
     }
 
     partial void OnPetScaleChanged(double value)
@@ -184,7 +188,9 @@ public sealed partial class PetWindowViewModel : ObservableObject
         OnPropertyChanged(nameof(PetOpacityPercentText));
         if (_suppressSliderSideEffects) return;
 
-        CurrentProfile.PetOpacity = Math.Clamp(value, 0.25, 1.0);
+        var clamped = Math.Clamp(value, 0.25, 1.0);
+        CurrentProfile.PetOpacity = clamped;
+        PetOpacityChanged?.Invoke(this, clamped);
         ScheduleDebouncedProfileSave();
     }
 

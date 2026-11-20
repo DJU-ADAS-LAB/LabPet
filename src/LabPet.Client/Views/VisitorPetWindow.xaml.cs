@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Windows;
 using System.Windows.Input;
 using System.Windows.Media;
+using System.Windows.Media.Animation;
 using System.Windows.Media.Media3D;
 using System.Windows.Threading;
 using LabPet.Client.Audio;
@@ -18,6 +19,10 @@ namespace LabPet.Client.Views;
 public partial class VisitorPetWindow : Window
 {
     private const double DragThresholdPixels = 5.0;
+    private const double BaseWindowWidth = 176.0;
+    private const double BaseViewportHeight = 168.0;
+    private const double BaseBubbleHeight = 34.0;
+    private const double BaseNameplateHeight = 24.0;
 
     private readonly IPetMeshFactory _meshFactory;
     private readonly IAudioAnalyzer _audioAnalyzer;
@@ -25,6 +30,7 @@ public partial class VisitorPetWindow : Window
     private readonly PetAnimationController _animator = new();
 
     private readonly DispatcherTimer _frameTimer;
+    private readonly DispatcherTimer _dismissHideTimer;
     private readonly Stopwatch _clock = Stopwatch.StartNew();
     private double _lastFrameSeconds;
     private CancellationTokenSource? _bubbleCts;
@@ -66,13 +72,84 @@ public partial class VisitorPetWindow : Window
         _frameTimer.Tick += OnFrameTick;
         _frameTimer.Start();
 
+        _dismissHideTimer = new DispatcherTimer
+        {
+            Interval = TimeSpan.FromMilliseconds(220)
+        };
+        _dismissHideTimer.Tick += OnDismissHideTick;
+
         Closed += (_, _) =>
         {
             _frameTimer.Stop();
+            _dismissHideTimer.Stop();
             _social.StateChanged -= OnSocialStateChanged;
             _bubbleCts?.Cancel();
             _bubbleCts?.Dispose();
         };
+    }
+
+    /// <summary>
+    /// 내 펫과 동일한 크기 배율과 투명도를 방문 친구 펫에도 적용한다.
+    /// </summary>
+    public void ApplyDisplaySettings(double scale, double opacity)
+    {
+        var clampedScale = PetProfile.NormalizePetScale(scale);
+        var clampedOpacity = Math.Clamp(opacity, 0.25, 1.0);
+
+        var prevWidth = Width;
+        var prevHeight = Height;
+
+        VisitorViewport.Width = Math.Round(BaseWindowWidth * clampedScale);
+        Width = Math.Max(140.0, VisitorViewport.Width);
+
+        var viewportHeight = Math.Max(96.0, Math.Round(BaseViewportHeight * clampedScale));
+        VisitorViewport.Height = viewportHeight;
+        Height = BaseBubbleHeight + viewportHeight + BaseNameplateHeight;
+
+        VisitorViewport.Opacity = clampedOpacity;
+        VisitorNameplate.Opacity = clampedOpacity;
+
+        if (IsLoaded)
+        {
+            Left += (prevWidth - Width) * 0.5;
+            Top += prevHeight - Height;
+        }
+    }
+
+    private void VisitorSurface_MouseEnter(object sender, MouseEventArgs e)
+    {
+        if (_isDraggingWindow)
+        {
+            return;
+        }
+
+        _dismissHideTimer.Stop();
+        SetDismissButtonVisible(true);
+    }
+
+    private void VisitorSurface_MouseLeave(object sender, MouseEventArgs e)
+    {
+        _dismissHideTimer.Stop();
+        _dismissHideTimer.Start();
+    }
+
+    private void OnDismissHideTick(object? sender, EventArgs e)
+    {
+        _dismissHideTimer.Stop();
+        if (!VisitorViewport.IsMouseOver && !DismissButton.IsMouseOver)
+        {
+            SetDismissButtonVisible(false);
+        }
+    }
+
+    private void SetDismissButtonVisible(bool visible)
+    {
+        if (DismissButton.IsHitTestVisible != visible)
+        {
+            DismissButton.IsHitTestVisible = visible;
+            DismissButton.BeginAnimation(OpacityProperty,
+                new DoubleAnimation(visible ? 1.0 : 0.0, TimeSpan.FromMilliseconds(visible ? 160 : 200)));
+        }
     }
 
     public void PlaceBeside(Window hostWindow)
@@ -270,10 +347,46 @@ public partial class VisitorPetWindow : Window
         ShowVisitorBubble(ok ? "쓰다듬기 전송!" : "오프라인 상태예요", 1800);
     }
 
+    private void VisitorContextMenu_Opened(object sender, RoutedEventArgs e)
+    {
+        var isFollowing = string.Equals(_social.FollowingHostPetId, _friend.PetId, StringComparison.OrdinalIgnoreCase);
+        var livePeer = _social.DiscoveredPeers.FirstOrDefault(p => string.Equals(p.PetId, _friend.PetId, StringComparison.OrdinalIgnoreCase));
+        var isMusicActive = livePeer?.IsMusicActive ?? false;
+
+        if (isFollowing)
+        {
+            MusicFollowMenuItem.Header = "⏹  노래 따라하기 중지";
+            MusicFollowMenuItem.IsEnabled = true;
+        }
+        else if (livePeer is null)
+        {
+            MusicFollowMenuItem.Header = "🎵  오프라인";
+            MusicFollowMenuItem.IsEnabled = false;
+        }
+        else if (isMusicActive)
+        {
+            MusicFollowMenuItem.Header = "🎵  노래 따라하기 시작";
+            MusicFollowMenuItem.IsEnabled = true;
+        }
+        else
+        {
+            MusicFollowMenuItem.Header = "🎵  음악 재생 중이 아님";
+            MusicFollowMenuItem.IsEnabled = false;
+        }
+    }
+
     private async void ToggleMusicFollowMenu_Click(object sender, RoutedEventArgs e)
     {
+        var wasFollowing = string.Equals(_social.FollowingHostPetId, _friend.PetId, StringComparison.OrdinalIgnoreCase);
         var ok = await _social.ToggleMusicFollowAsync(_friend);
-        ShowVisitorBubble(ok ? "노래 따라하기 전환!" : "현재 음악 재생 중이 아니에요", 2000);
+        if (ok)
+        {
+            ShowVisitorBubble(wasFollowing ? "노래 따라하기 중지" : "노래 따라하기 시작!", 2000);
+        }
+        else
+        {
+            ShowVisitorBubble("현재 음악 재생 중이 아니에요", 2000);
+        }
     }
 
     private void DismissMenu_Click(object sender, RoutedEventArgs e) => Close();

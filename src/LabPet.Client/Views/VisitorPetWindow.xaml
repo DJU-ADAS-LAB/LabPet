@@ -11,6 +11,45 @@
         ShowInTaskbar="False"
         ResizeMode="NoResize">
 
+    <Window.Resources>
+        <Style x:Key="VisitorDismissButtonStyle" TargetType="Button">
+            <Setter Property="Width" Value="22" />
+            <Setter Property="Height" Value="22" />
+            <Setter Property="Padding" Value="0" />
+            <Setter Property="FontSize" Value="10" />
+            <Setter Property="FontWeight" Value="Bold" />
+            <Setter Property="Background" Value="#EBFFFFFF" />
+            <Setter Property="BorderBrush" Value="#FFD8DEE9" />
+            <Setter Property="Foreground" Value="#FF6B7280" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="Bg"
+                                Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}"
+                                CornerRadius="11"
+                                Effect="{StaticResource SoftCardShadow}">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Bg" Property="Background" Value="#FFFF5D8F" />
+                                <Setter TargetName="Bg" Property="BorderBrush" Value="#FFF43F78" />
+                                <Setter Property="Foreground" Value="White" />
+                            </Trigger>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Setter TargetName="Bg" Property="Opacity" Value="0.86" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+    </Window.Resources>
+
     <Grid Background="Transparent">
         <Grid.RowDefinitions>
             <RowDefinition Height="34" />
@@ -41,14 +80,17 @@
         <!-- 친구 3D 펫 뷰포트 -->
         <Viewport3D x:Name="VisitorViewport"
                     Grid.Row="1"
+                    HorizontalAlignment="Center"
                     ClipToBounds="False"
+                    MouseEnter="VisitorSurface_MouseEnter"
+                    MouseLeave="VisitorSurface_MouseLeave"
                     MouseLeftButtonDown="VisitorViewport_MouseLeftButtonDown"
                     MouseMove="VisitorViewport_MouseMove"
                     MouseLeftButtonUp="VisitorViewport_MouseLeftButtonUp">
             <Viewport3D.ContextMenu>
-                <ContextMenu>
+                <ContextMenu Opened="VisitorContextMenu_Opened">
                     <MenuItem Header="👋  쓰다듬기 보내기" Click="PetFriendMenu_Click" />
-                    <MenuItem Header="🎵  노래 따라하기 토글" Click="ToggleMusicFollowMenu_Click" />
+                    <MenuItem x:Name="MusicFollowMenuItem" Header="🎵  노래 따라하기" Click="ToggleMusicFollowMenu_Click" />
                     <Separator />
                     <MenuItem Header="✕  친구 돌려보내기" Click="DismissMenu_Click" />
                 </ContextMenu>
@@ -65,8 +107,24 @@
             <ModelVisual3D x:Name="VisitorPetVisual" />
         </Viewport3D>
 
+        <!-- 마우스 오버레이 시 우측 상단에 나타나는 돌려보내기(✕) 버튼 -->
+        <Button x:Name="DismissButton"
+                Grid.Row="1"
+                Content="✕"
+                ToolTip="친구 돌려보내기"
+                Style="{StaticResource VisitorDismissButtonStyle}"
+                HorizontalAlignment="Right"
+                VerticalAlignment="Top"
+                Margin="0,6,8,0"
+                Opacity="0"
+                IsHitTestVisible="False"
+                MouseEnter="VisitorSurface_MouseEnter"
+                MouseLeave="VisitorSurface_MouseLeave"
+                Click="DismissMenu_Click" />
+
         <!-- 하단 글래스 이름표 -->
-        <Border Grid.Row="2"
+        <Border x:Name="VisitorNameplate"
+                Grid.Row="2"
                 HorizontalAlignment="Center"
                 VerticalAlignment="Top"
                 Padding="9,2"

@@ -10,6 +10,72 @@
 
     <Window.Resources>
         <BooleanToVisibilityConverter x:Key="BoolToVis" />
+        <!-- 노래 따라하기 상태별 버튼 (비활성 / 따라하기 가능 / 따라하기 중) -->
+        <Style x:Key="MusicFollowActionButtonStyle" TargetType="Button">
+            <Setter Property="Background" Value="{StaticResource BrandGradientBrush}" />
+            <Setter Property="Foreground" Value="White" />
+            <Setter Property="BorderBrush" Value="Transparent" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="FontWeight" Value="Bold" />
+            <Setter Property="FontSize" Value="13" />
+            <Setter Property="Padding" Value="16,9" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="BtnBorder"
+                                Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}"
+                                CornerRadius="12"
+                                Padding="{TemplateBinding Padding}"
+                                Effect="{StaticResource BrandGlowShadow}">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Setter TargetName="BtnBorder" Property="Opacity" Value="0.88" />
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter TargetName="BtnBorder" Property="Background" Value="#FFE5E7EB" />
+                                <Setter TargetName="BtnBorder" Property="BorderThickness" Value="0" />
+                                <Setter TargetName="BtnBorder" Property="Effect" Value="{x:Null}" />
+                                <Setter Property="Foreground" Value="#FF9CA3AF" />
+                            </Trigger>
+                            <DataTrigger Binding="{Binding SelectedFriend.IsFollowingMusic, FallbackValue=False}" Value="True">
+                                <Setter TargetName="BtnBorder" Property="Effect" Value="{x:Null}" />
+                            </DataTrigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+            <Style.Triggers>
+                <!-- 따라하기 가능 상태 호버 -->
+                <MultiDataTrigger>
+                    <MultiDataTrigger.Conditions>
+                        <Condition Binding="{Binding SelectedFriend.IsFollowingMusic, FallbackValue=False}" Value="False" />
+                        <Condition Binding="{Binding IsMouseOver, RelativeSource={RelativeSource Self}}" Value="True" />
+                        <Condition Binding="{Binding IsEnabled, RelativeSource={RelativeSource Self}}" Value="True" />
+                    </MultiDataTrigger.Conditions>
+                    <Setter Property="Background" Value="{StaticResource BrandGradientHoverBrush}" />
+                </MultiDataTrigger>
+                <!-- 노래 따라하기 중: 로즈 아웃라인 중지 버튼 -->
+                <DataTrigger Binding="{Binding SelectedFriend.IsFollowingMusic, FallbackValue=False}" Value="True">
+                    <Setter Property="Background" Value="#FFFFF1F2" />
+                    <Setter Property="BorderBrush" Value="#FFFF5D8F" />
+                    <Setter Property="BorderThickness" Value="1.5" />
+                    <Setter Property="Foreground" Value="#FFE11D48" />
+                </DataTrigger>
+                <MultiDataTrigger>
+                    <MultiDataTrigger.Conditions>
+                        <Condition Binding="{Binding SelectedFriend.IsFollowingMusic, FallbackValue=False}" Value="True" />
+                        <Condition Binding="{Binding IsMouseOver, RelativeSource={RelativeSource Self}}" Value="True" />
+                    </MultiDataTrigger.Conditions>
+                    <Setter Property="Background" Value="#FFFFE4E6" />
+                    <Setter Property="BorderBrush" Value="#FFE11D48" />
+                </MultiDataTrigger>
+            </Style.Triggers>
+        </Style>
     </Window.Resources>
 
     <Border Margin="14"
@@ -223,8 +289,8 @@
                                     <Separator Margin="0,2,0,12" />
 
                                     <TextBlock Text="노래 따라하기 (30Hz 구독형 유니캐스트)" FontWeight="Bold" FontSize="12.5" Foreground="{StaticResource TextPrimaryBrush}" Margin="0,0,0,8" />
-                                    <Button Content="{Binding SelectedFriend.MusicFollowButtonText, FallbackValue='노래 따라하기'}"
-                                            Style="{StaticResource PrimaryButtonStyle}"
+                                    <Button Content="{Binding SelectedFriend.MusicFollowButtonText, FallbackValue='🎵  음악 재생 중이 아님'}"
+                                            Style="{StaticResource MusicFollowActionButtonStyle}"
                                             Command="{Binding ToggleMusicFollowCommand}"
                                             CommandParameter="{Binding SelectedFriend}"
                                             IsEnabled="{Binding SelectedFriend.CanFollowMusic, FallbackValue=False}"

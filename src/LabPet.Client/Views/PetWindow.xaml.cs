@@ -24,10 +24,16 @@ public partial class PetWindow : Window
     private const double DragThresholdPixels = 5.0;
     private const double BaseWindowWidth = 214.0;
     private const double DefaultWindowHeight = 274.0;
-    private const double NameplateGap = 3.0;
+    private const double NameplateGap = 4.0;
     private const double BaseNameplateHeight = 24.0;
     private const double FriendOverlayGap = 4.0;
     private const double FriendOverlayTopInset = 12.0;
+
+    /// <summary>
+    /// 타이핑 미니 키보드(Y=-0.80, Z=1.04)와 바닥 회전 링 오라(Y=-0.78, Z=1.24)의 앞쪽 하단 기준점.
+    /// 네임태그가 캐릭터 발바닥뿐 아니라 키보드·오라 효과도 가리지 않도록 함께 비교한다.
+    /// </summary>
+    private static readonly Point3D KeyboardAuraAnchor = new(0, -0.81, 1.12);
 
     /// <summary>
     /// 친구 메시지·소셜 알림 말풍선 줄의 표시 시간(ms). 새 메시지가 와도 기존 줄은 이 시간 동안 유지된다.
@@ -224,10 +230,19 @@ public partial class PetWindow : Window
 
     private void UpdateNameplatePosition()
     {
-        if (PetViewport.ActualHeight > 0 && PetVisual.Content is not null
-            && PetVisual.TransformToAncestor(PetViewport).TryTransform(_nameplateAnchor, out var anchor))
+        if (PetViewport.ActualHeight > 0 && PetVisual.Content is not null)
         {
-            PetNameplateOffset.Y = Math.Min(0, anchor.Y + NameplateGap - PetViewport.ActualHeight);
+            var transform = PetVisual.TransformToAncestor(PetViewport);
+            if (transform.TryTransform(_nameplateAnchor, out var bodyAnchor))
+            {
+                var lowestY = bodyAnchor.Y;
+                if (transform.TryTransform(KeyboardAuraAnchor, out var effectAnchor))
+                {
+                    lowestY = Math.Max(lowestY, effectAnchor.Y);
+                }
+
+                PetNameplateOffset.Y = Math.Min(0, lowestY + NameplateGap - PetViewport.ActualHeight);
+            }
         }
     }
 
@@ -291,6 +306,13 @@ public partial class PetWindow : Window
     private void OnOverlayCloseTick(object? sender, EventArgs e)
     {
         _overlayCloseTimer.Stop();
+
+        // 전송 입력창에 키보드 커서가 살아있는 동안에는 마우스가 밖으로 나가도 오버레이를 닫지 않는다.
+        if (FriendOverlayCard.IsKeyboardFocusWithin)
+        {
+            return;
+        }
+
         if (!PetViewport.IsMouseOver && !FriendOverlayCard.IsMouseOver && !PetControls.IsMouseOver
             && !FriendOverlayCard.IsMouseCaptureWithin && !PetControls.IsMouseCaptureWithin)
         {
@@ -300,7 +322,7 @@ public partial class PetWindow : Window
 
         var editor = _messageEditorToClose;
         _messageEditorToClose = null;
-        if (editor is { IsMouseOver: false, IsMouseCaptureWithin: false, DataContext: QuickOverlayEntry target }
+        if (editor is { IsMouseOver: false, IsMouseCaptureWithin: false, IsKeyboardFocusWithin: false, DataContext: QuickOverlayEntry target }
             && ReferenceEquals(_viewModel.QuickMessageTarget, target))
         {
             _viewModel.QuickMessageTarget = null;
@@ -334,10 +356,19 @@ public partial class PetWindow : Window
 
     private void QuickMessageEditor_MouseLeave(object sender, MouseEventArgs e)
     {
-        if (sender is FrameworkElement { IsMouseOver: false, DataContext: QuickOverlayEntry target } editor
+        if (sender is FrameworkElement { IsMouseOver: false, IsKeyboardFocusWithin: false, DataContext: QuickOverlayEntry target } editor
             && ReferenceEquals(_viewModel.QuickMessageTarget, target))
         {
             _messageEditorToClose = editor;
+            ScheduleOverlayClose();
+        }
+    }
+
+    private void QuickMessageInput_LostKeyboardFocus(object sender, KeyboardFocusChangedEventArgs e)
+    {
+        // 입력창에서 포커스가 빠졌을 때 마우스가 이미 오버레이 바깥에 있다면 자연스럽게 닫는다.
+        if (!FriendOverlayCard.IsKeyboardFocusWithin && !FriendOverlayCard.IsMouseOver && !PetViewport.IsMouseOver && !PetControls.IsMouseOver)
+        {
             ScheduleOverlayClose();
         }
     }

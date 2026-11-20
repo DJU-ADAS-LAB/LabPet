@@ -48,6 +48,72 @@
                 </Setter.Value>
             </Setter>
         </Style>
+        <!-- 노래 따라하기 상태별 미니 아이콘 버튼 (미재생 / 재생 중 / 따라하기 중) -->
+        <Style x:Key="MusicFollowMiniButton" TargetType="Button">
+            <Setter Property="Width" Value="26" />
+            <Setter Property="Height" Value="24" />
+            <Setter Property="Padding" Value="0" />
+            <Setter Property="FontSize" Value="11.5" />
+            <Setter Property="Background" Value="#FFF3F5FA" />
+            <Setter Property="BorderBrush" Value="#FFE5EAF2" />
+            <Setter Property="Foreground" Value="#FF4B5563" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="Bg"
+                                Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}"
+                                CornerRadius="7">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter TargetName="Bg" Property="Opacity" Value="0.32" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+            <Style.Triggers>
+                <!-- 음악 재생 중 (따라하기 가능): 산뜻한 민트 포인트 -->
+                <MultiDataTrigger>
+                    <MultiDataTrigger.Conditions>
+                        <Condition Binding="{Binding IsMusicActive}" Value="True" />
+                        <Condition Binding="{Binding IsFollowingMusic}" Value="False" />
+                    </MultiDataTrigger.Conditions>
+                    <Setter Property="Background" Value="#FFECFDF5" />
+                    <Setter Property="BorderBrush" Value="#FF6EE7B7" />
+                    <Setter Property="Foreground" Value="#FF059669" />
+                </MultiDataTrigger>
+                <MultiDataTrigger>
+                    <MultiDataTrigger.Conditions>
+                        <Condition Binding="{Binding IsMusicActive}" Value="True" />
+                        <Condition Binding="{Binding IsFollowingMusic}" Value="False" />
+                        <Condition Binding="{Binding IsMouseOver, RelativeSource={RelativeSource Self}}" Value="True" />
+                    </MultiDataTrigger.Conditions>
+                    <Setter Property="Background" Value="#FFD1FAE5" />
+                    <Setter Property="BorderBrush" Value="#FF34D399" />
+                </MultiDataTrigger>
+                <!-- 노래 따라하기 중: 선명한 브랜드 핑크 솔리드 -->
+                <DataTrigger Binding="{Binding IsFollowingMusic}" Value="True">
+                    <Setter Property="Background" Value="#FFFF5D8F" />
+                    <Setter Property="BorderBrush" Value="#FFF43F78" />
+                    <Setter Property="Foreground" Value="White" />
+                    <Setter Property="FontSize" Value="10.5" />
+                </DataTrigger>
+                <MultiDataTrigger>
+                    <MultiDataTrigger.Conditions>
+                        <Condition Binding="{Binding IsFollowingMusic}" Value="True" />
+                        <Condition Binding="{Binding IsMouseOver, RelativeSource={RelativeSource Self}}" Value="True" />
+                    </MultiDataTrigger.Conditions>
+                    <Setter Property="Background" Value="#FFF43F78" />
+                    <Setter Property="BorderBrush" Value="#FFE11D48" />
+                </MultiDataTrigger>
+            </Style.Triggers>
+        </Style>
         <Style x:Key="CompactAppearanceSlider" TargetType="Slider">
             <Setter Property="Height" Value="16" />
             <Setter Property="Cursor" Value="Hand" />
@@ -427,9 +493,9 @@
                                                         Command="{Binding DataContext.QuickPetFriendCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
                                                         CommandParameter="{Binding}"
                                                         Margin="0,0,3,0" />
-                                                <Button Content="🎵"
+                                                <Button Content="{Binding MusicButtonIcon}"
                                                         ToolTip="{Binding MusicTooltip}"
-                                                        Style="{StaticResource MiniActionIconButton}"
+                                                        Style="{StaticResource MusicFollowMiniButton}"
                                                         IsEnabled="{Binding CanFollowMusic}"
                                                         Command="{Binding DataContext.QuickToggleMusicFollowCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
                                                         CommandParameter="{Binding}"
@@ -473,6 +539,7 @@
                                                      Padding="7,3"
                                                      IsVisibleChanged="QuickMessageInput_IsVisibleChanged"
                                                      PreviewMouseDown="QuickMessageInput_PreviewMouseDown"
+                                                     LostKeyboardFocus="QuickMessageInput_LostKeyboardFocus"
                                                      KeyDown="QuickMessageInput_KeyDown" />
                                         </DockPanel>
                                     </StackPanel>

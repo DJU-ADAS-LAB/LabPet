@@ -97,6 +97,8 @@ public partial class App : Application
         petVm.OpenSocialRequested += OnOpenSocialRequested;
         petVm.OpenEnvironmentGuideRequested += OnOpenEnvironmentGuideRequested;
         petVm.ToggleVisitFriendRequested += (_, args) => ToggleVisitorPetWindow(args.Friend, args.Appearance);
+        petVm.PetScaleChanged += (_, scale) => SyncVisitorDisplaySettings(scale, petVm.PetOpacity);
+        petVm.PetOpacityChanged += (_, opacity) => SyncVisitorDisplaySettings(petVm.PetScale, opacity);
         petVm.StartupAutoRunToggled += async (_, enabled) =>
         {
             var ok = startupService.SetEnabled(enabled);
@@ -232,6 +234,7 @@ public partial class App : Application
             _serviceProvider.GetRequiredService<IAudioAnalyzer>(),
             _serviceProvider.GetRequiredService<SocialCoordinatorService>());
 
+        visitor.ApplyDisplaySettings(petVm.PetScale, petVm.PetOpacity);
         visitor.PlaceBeside(_petWindow);
         visitor.Closed += (_, _) =>
         {
@@ -245,6 +248,14 @@ public partial class App : Application
         _visitorWindows[friend.PetId] = visitor;
         visitor.Show();
         visitor.ShowVisitorBubble("놀러 왔어!", 2200);
+    }
+
+    private void SyncVisitorDisplaySettings(double scale, double opacity)
+    {
+        foreach (var visitor in _visitorWindows.Values)
+        {
+            visitor.ApplyDisplaySettings(scale, opacity);
+        }
     }
 
     private void OnOpenEnvironmentGuideRequested(object? sender, EventArgs e)

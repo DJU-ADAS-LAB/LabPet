@@ -127,7 +127,8 @@ public sealed class SocialCoordinatorService : IAsyncDisposable
 
     /// <summary>
     /// 팔로워 모드일 때 수신된 호스트 오디오 프레임을 반환한다.
-    /// 1.5초 이상 미수신 또는 호스트 2초 이상 무음 시 자동으로 로컬 모드로 복귀한다.
+    /// 곡 간 전환·잠시 일시정지 중에는 팔로우를 끊지 않고 유지하며,
+    /// 호스트 패킷이 15초 이상 끊기거나 3분 이상 완전 무음일 때만 로컬 모드로 자동 복귀한다.
     /// </summary>
     public bool TryGetFollowedMusicFrame(bool isLocalMusicActive, out MusicFrameData frame)
     {
@@ -150,21 +151,28 @@ public sealed class SocialCoordinatorService : IAsyncDisposable
                 _followingHostPetId = null;
                 frame = default;
             }
-            else if (PreferLocalMusicWhenActive && isLocalMusicActive)
+            else if (PreferLocalMusicWhenActive && isLocalMusicActive && sinceSoundMs > 1200.0)
             {
-                // 내 음악 우선 옵션이 켜져 있으면 로컬 오디오 사용
+                // 호스트가 조용한 동안 내 PC에서 음악이 재생 중이면 로컬 오디오 사용 (팔로우 연결 자체는 유지)
                 frame = default;
                 return false;
             }
             else
             {
-                frame = _lastFollowedFrame;
+                // 일시적으로 패킷이 지연(350ms 초과)되거나 호스트가 잠시 일시정지한 동안에는 마지막 피크값 고정 대신 0(대기 호흡)으로 부드럽게 처리
+                frame = sincePacketMs > 350.0 ? default : _lastFollowedFrame;
                 return true;
             }
         }
 
         if (timedOutHost is not null)
         {
+            var hostFriend = FindFriend(timedOutHost);
+            if (hostFriend is not null)
+            {
+                _ = _transport.SetMusicFollowAsync(hostFriend, enable: false);
+            }
+
             var hostName = FindFriendName(timedOutHost);
             SocialNotification?.Invoke(this, $"{hostName}의 음악이 멈춰 로컬 모드로 복귀했어요.");
             StateChanged?.Invoke(this, EventArgs.Empty);

@@ -61,7 +61,15 @@ public sealed class FriendListItemViewModel
             : "오프라인";
 
     public string IntimacyText => $"친밀도 {Entry.Intimacy}";
-    public string MusicFollowButtonText => IsFollowingMusic ? "따라하기 중지" : "노래 따라하기";
+    public string MusicFollowButtonText => IsFollowingMusic
+        ? "⏹  노래 따라하기 중지"
+        : !IsOnline
+            ? "🎵  오프라인"
+            : RequiresUpdate
+                ? "🎵  업데이트 필요"
+                : IsMusicActive
+                    ? "🎵  노래 따라하기"
+                    : "🎵  음악 재생 중이 아님";
     public string VisitButtonText => IsVisitingDesktop ? "바탕화면에서 돌려보내기" : "내 바탕화면에 데려오기";
     public bool CanFollowMusic => IsOnline && !RequiresUpdate && (IsMusicActive || IsFollowingMusic);
     public bool CanInteract => IsOnline && !RequiresUpdate;
