@@ -23,7 +23,6 @@ public partial class PetWindow : Window
     private const double DragThresholdPixels = 5.0;
     private const double BaseWindowWidth = 214.0;
     private const double DefaultWindowHeight = 274.0;
-    private const double BaseCameraDistanceZ = 5.95;
     private const double NameplateGap = 3.0;
     private const double BaseNameplateHeight = 24.0;
 
@@ -203,13 +202,14 @@ public partial class PetWindow : Window
 
     private void OnPetScaleChanged(object? sender, double scale)
     {
-        var clamped = Math.Clamp(scale, 0.65, 1.45);
+        var clamped = PetProfile.NormalizePetScale(scale);
         var previousWidth = Width;
 
-        Width = Math.Max(180.0, Math.Round(BaseWindowWidth * clamped));
+        // 뷰포트 너비로 펫 배율을 맞추고, 창은 이름표와 조절바가 들어갈 너비를 확보한다.
+        PetViewport.Width = Math.Round(BaseWindowWidth * clamped);
+        Width = Math.Max(180.0, PetViewport.Width);
         PetViewport.Height = Math.Max(220.0, Math.Round(DefaultWindowHeight * clamped))
             - PetMessageRow.MinHeight - BaseNameplateHeight;
-        PetCamera.Position = new Point3D(0, 0.34, BaseCameraDistanceZ / Math.Sqrt(clamped));
         UpdateNameplatePosition();
 
         // 슬라이더를 끌 때는 조절바 가운데를 유지하고, 메뉴에서 변경할 때는 우하단을 유지한다.

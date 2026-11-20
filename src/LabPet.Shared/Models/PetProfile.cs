@@ -7,6 +7,10 @@ namespace LabPet.Shared.Models;
 /// </summary>
 public sealed class PetProfile
 {
+    public const double MinimumPetScale = 0.5;
+    public const double DefaultPetScale = 1.0;
+    public const double MaximumPetScale = 1.5;
+
     public int SchemaVersion { get; set; } = ProtocolConstants.CurrentStorageSchemaVersion;
 
     /// <summary>DHCP IP 변경과 무관하게 펫을 고유 식별하는 영구 UUID v4.</summary>
@@ -39,8 +43,8 @@ public sealed class PetProfile
     /// <summary>마지막 창 위치 Y (null이면 기본 우하단 배치).</summary>
     public double? LastWindowTop { get; set; }
 
-    /// <summary>바탕화면 펫 표시 배율 (0.65 ~ 1.45, 기본값 1.0).</summary>
-    public double PetScale { get; set; } = 1.0;
+    /// <summary>바탕화면 펫 표시 배율 (0.5 ~ 1.5, 기본값 1.0).</summary>
+    public double PetScale { get; set; } = DefaultPetScale;
 
     /// <summary>바탕화면 펫 투명도 (0.25 ~ 1.0, 기본값 1.0).</summary>
     public double PetOpacity { get; set; } = 1.0;
@@ -50,6 +54,10 @@ public sealed class PetProfile
 
     public DateTimeOffset CreatedAtUtc { get; set; } = DateTimeOffset.UtcNow;
     public DateTimeOffset UpdatedAtUtc { get; set; } = DateTimeOffset.UtcNow;
+
+    public static double NormalizePetScale(double scale) => double.IsFinite(scale) && scale > 0
+        ? Math.Clamp(scale, MinimumPetScale, MaximumPetScale)
+        : DefaultPetScale;
 
     public static string GenerateFriendCode()
     {

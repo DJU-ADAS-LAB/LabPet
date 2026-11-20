@@ -1,5 +1,9 @@
 using System.IO;
+using LabPet.Client.Network;
+using LabPet.Client.Social;
+using LabPet.Client.Solo;
 using LabPet.Client.Storage;
+using LabPet.Client.ViewModels;
 using LabPet.Shared.Models;
 using LabPet.Shared.Protocol;
 using Xunit;
@@ -68,6 +72,31 @@ public sealed class StorageAndMigratorTests : IDisposable
         Assert.Equal("레거시모찌", loaded.PetName);
         Assert.False(string.IsNullOrWhiteSpace(loaded.PetId));
         Assert.False(string.IsNullOrWhiteSpace(loaded.FriendCode));
+    }
+
+    [Theory]
+    [InlineData(0.5, "50%")]
+    [InlineData(1.5, "150%")]
+    public async Task SavePetScale_PreservesLimitsInBothViewModels(double scale, string label)
+    {
+        var store = new JsonAppDataStore(new StateMigrator(), _tempDir);
+        var appearanceEditor = new OnboardingViewModel(store);
+        appearanceEditor.LoadFromProfile(new PetProfile { OwnerName = "하늘", PetName = "솜구름" }, isEditMode: true);
+        appearanceEditor.PetScale = scale;
+        await appearanceEditor.SaveCommand.ExecuteAsync(null);
+
+        var restored = await store.LoadProfileAsync();
+        await using var transport = new LanP2pTransport();
+        await using var social = new SocialCoordinatorService(transport, store, new SoloProgressionService());
+        var desktop = new PetWindowViewModel(store, social);
+        desktop.ApplyProfile(restored);
+        appearanceEditor.LoadFromProfile(restored, isEditMode: true);
+
+        Assert.Equal(scale, restored.PetScale);
+        Assert.Equal(scale, desktop.PetScale);
+        Assert.Equal(label, desktop.PetScalePercentText);
+        Assert.Equal(scale, appearanceEditor.PetScale);
+        Assert.Equal(label, appearanceEditor.PetScalePercentText);
     }
 
     public void Dispose()

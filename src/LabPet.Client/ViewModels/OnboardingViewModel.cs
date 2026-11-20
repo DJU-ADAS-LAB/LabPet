@@ -56,7 +56,7 @@ public sealed partial class OnboardingViewModel : ObservableObject
     private string _selectedAuraEffectId = "none";
 
     [ObservableProperty]
-    private double _petScale = 1.0;
+    private double _petScale = PetProfile.DefaultPetScale;
 
     public string PetScalePercentText => $"{Math.Round(PetScale * 100)}%";
 
@@ -94,7 +94,7 @@ public sealed partial class OnboardingViewModel : ObservableObject
             SelectedExpressionId = profile.Appearance.ExpressionId;
             SelectedHeadAccessoryId = profile.Appearance.HeadAccessoryId;
             SelectedAuraEffectId = profile.Appearance.AuraEffectId;
-            PetScale = Math.Clamp(profile.PetScale <= 0 ? 1.0 : profile.PetScale, 0.65, 1.45);
+            PetScale = PetProfile.NormalizePetScale(profile.PetScale);
             ValidationMessage = string.Empty;
         }
         finally
@@ -161,7 +161,7 @@ public sealed partial class OnboardingViewModel : ObservableObject
         ValidationMessage = string.Empty;
         _profile.OwnerName = trimmedOwner;
         _profile.PetName = trimmedPet;
-        _profile.PetScale = Math.Clamp(PetScale, 0.65, 1.45);
+        _profile.PetScale = PetProfile.NormalizePetScale(PetScale);
         _profile.Appearance = BuildCurrentAppearance();
         _profile.IsOnboardingCompleted = true;
 

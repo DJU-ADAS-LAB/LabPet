@@ -90,7 +90,7 @@ public sealed partial class PetWindowViewModel : ObservableObject
     public ObservableCollection<BubbleLine> BubbleLines { get; } = [];
     [ObservableProperty] private PendingFriendRequest? _pendingFriendRequest;
     [ObservableProperty] private string _trayTooltip = "LabPet";
-    [ObservableProperty] private double _petScale = 1.0;
+    [ObservableProperty] private double _petScale = PetProfile.DefaultPetScale;
     [ObservableProperty] private double _petOpacity = 1.0;
 
     public string PetScalePercentText => $"{Math.Round(PetScale * 100)}%";
@@ -147,7 +147,7 @@ public sealed partial class PetWindowViewModel : ObservableObject
         _suppressSliderSideEffects = true;
         try
         {
-            PetScale = Math.Clamp(profile.PetScale <= 0 ? 1.0 : profile.PetScale, 0.65, 1.45);
+            PetScale = PetProfile.NormalizePetScale(profile.PetScale);
             PetOpacity = Math.Clamp(profile.PetOpacity <= 0 ? 1.0 : profile.PetOpacity, 0.25, 1.0);
         }
         finally
@@ -166,7 +166,7 @@ public sealed partial class PetWindowViewModel : ObservableObject
         OnPropertyChanged(nameof(PetScalePercentText));
         if (_suppressSliderSideEffects) return;
 
-        var clamped = Math.Clamp(value, 0.65, 1.45);
+        var clamped = PetProfile.NormalizePetScale(value);
         CurrentProfile.PetScale = clamped;
         PetScaleChanged?.Invoke(this, clamped);
         ScheduleDebouncedProfileSave();
@@ -397,7 +397,7 @@ public sealed partial class PetWindowViewModel : ObservableObject
             return;
         }
 
-        var clamped = Math.Clamp(parsed, 0.65, 1.45);
+        var clamped = PetProfile.NormalizePetScale(parsed);
         PetScale = clamped;
         CurrentProfile.PetScale = clamped;
         PetScaleChanged?.Invoke(this, clamped);

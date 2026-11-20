@@ -1,6 +1,7 @@
 <Window x:Class="LabPet.Client.Views.OnboardingWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:models="clr-namespace:LabPet.Shared.Models;assembly=LabPet.Shared"
         Title="{Binding WindowTitle}"
         Style="{StaticResource ModernDialogWindowStyle}"
         Width="900"
@@ -333,8 +334,8 @@
                                                Foreground="{StaticResource BrandPinkBrush}"
                                                VerticalAlignment="Center" />
                                 </DockPanel>
-                                <Slider Minimum="0.65"
-                                        Maximum="1.45"
+                                <Slider Minimum="{x:Static models:PetProfile.MinimumPetScale}"
+                                        Maximum="{x:Static models:PetProfile.MaximumPetScale}"
                                         Value="{Binding PetScale}"
                                         TickFrequency="0.05"
                                         IsSnapToTickEnabled="True"

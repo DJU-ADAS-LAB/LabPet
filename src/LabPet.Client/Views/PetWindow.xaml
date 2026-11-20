@@ -1,6 +1,7 @@
 <Window x:Class="LabPet.Client.Views.PetWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:models="clr-namespace:LabPet.Shared.Models;assembly=LabPet.Shared"
         xmlns:tb="clr-namespace:H.NotifyIcon;assembly=H.NotifyIcon.Wpf"
         Title="LabPet"
         Width="214"
@@ -46,13 +47,49 @@
                 </Setter.Value>
             </Setter>
         </Style>
+        <Style x:Key="CompactAppearanceSlider" TargetType="Slider">
+            <Setter Property="Height" Value="16" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="IsMoveToPointEnabled" Value="True" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Slider">
+                        <Grid Background="Transparent">
+                            <Border x:Name="Rail" Height="2" Margin="7,0" CornerRadius="1"
+                                    Background="#FFC9CFDC" VerticalAlignment="Center" />
+                            <Track x:Name="PART_Track">
+                                <Track.Thumb>
+                                    <Thumb Width="14" Height="16">
+                                        <Thumb.Template>
+                                            <ControlTemplate TargetType="Thumb">
+                                                <Grid Background="Transparent">
+                                                    <Ellipse Width="8" Height="8" Fill="{StaticResource BrandPinkBrush}" />
+                                                </Grid>
+                                            </ControlTemplate>
+                                        </Thumb.Template>
+                                    </Thumb>
+                                </Track.Thumb>
+                            </Track>
+                        </Grid>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsKeyboardFocused" Value="True">
+                                <Setter TargetName="Rail" Property="Background" Value="{StaticResource BrandPinkBrush}" />
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter Property="Opacity" Value="0.45" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
     </Window.Resources>
 
     <Grid Background="Transparent" UseLayoutRounding="True" TextOptions.TextFormattingMode="Display">
         <Grid.RowDefinitions>
             <RowDefinition x:Name="PetMessageRow" Height="Auto" MinHeight="78" />
             <RowDefinition Height="Auto" />
-            <RowDefinition x:Name="PetNameplateRow" Height="74" />
+            <RowDefinition x:Name="PetNameplateRow" Height="62" />
         </Grid.RowDefinitions>
 
         <!-- 시스템 트레이 아이콘 (H.NotifyIcon.Wpf) -->
@@ -71,10 +108,11 @@
                     <MenuItem Header="✨  성장 · 뽀모도로 · 3D 상점" Command="{Binding OpenSoloHubCommand}" />
                     <MenuItem Header="🎨  외형 · 이름 변경" Command="{Binding OpenCustomizationCommand}" />
                     <MenuItem Header="🔍  크기 조절">
+                        <MenuItem Header="아주 작게 (50%)" Command="{Binding SetPetScaleCommand}" CommandParameter="0.5" />
                         <MenuItem Header="작게 (75%)" Command="{Binding SetPetScaleCommand}" CommandParameter="0.75" />
                         <MenuItem Header="보통 (100%)" Command="{Binding SetPetScaleCommand}" CommandParameter="1.0" />
                         <MenuItem Header="크게 (125%)" Command="{Binding SetPetScaleCommand}" CommandParameter="1.25" />
-                        <MenuItem Header="아주 크게 (145%)" Command="{Binding SetPetScaleCommand}" CommandParameter="1.45" />
+                        <MenuItem Header="아주 크게 (150%)" Command="{Binding SetPetScaleCommand}" CommandParameter="1.5" />
                     </MenuItem>
                     <Separator />
                     <MenuItem Header="클릭 투과 집중 모드"
@@ -219,6 +257,7 @@
         <Viewport3D x:Name="PetViewport"
                     Grid.Row="1"
                     Height="172"
+                    HorizontalAlignment="Center"
                     Opacity="{Binding PetOpacity}"
                     ClipToBounds="False"
                     RenderOptions.BitmapScalingMode="HighQuality"
@@ -241,10 +280,11 @@
                     <MenuItem Header="✨  성장 · 뽀모도로 · 3D 상점" Command="{Binding OpenSoloHubCommand}" />
                     <MenuItem Header="🎨  외형 · 이름 변경" Command="{Binding OpenCustomizationCommand}" />
                     <MenuItem Header="🔍  크기 조절">
+                        <MenuItem Header="아주 작게 (50%)" Command="{Binding SetPetScaleCommand}" CommandParameter="0.5" />
                         <MenuItem Header="작게 (75%)" Command="{Binding SetPetScaleCommand}" CommandParameter="0.75" />
                         <MenuItem Header="보통 (100%)" Command="{Binding SetPetScaleCommand}" CommandParameter="1.0" />
                         <MenuItem Header="크게 (125%)" Command="{Binding SetPetScaleCommand}" CommandParameter="1.25" />
-                        <MenuItem Header="아주 크게 (145%)" Command="{Binding SetPetScaleCommand}" CommandParameter="1.45" />
+                        <MenuItem Header="아주 크게 (150%)" Command="{Binding SetPetScaleCommand}" CommandParameter="1.5" />
                     </MenuItem>
                     <Separator />
                     <MenuItem Header="클릭 투과 집중 모드"
@@ -270,8 +310,7 @@
             </Viewport3D.ContextMenu>
 
             <Viewport3D.Camera>
-                <PerspectiveCamera x:Name="PetCamera"
-                                   Position="0,0.34,5.95"
+                <PerspectiveCamera Position="0,0.34,5.95"
                                    LookDirection="0,-0.06,-1"
                                    UpDirection="0,1,0"
                                    FieldOfView="36" />
@@ -444,9 +483,9 @@
                            TextTrimming="CharacterEllipsis"
                            Foreground="#FF4B5563" />
             </Border>
-            <Border Margin="0,4,0,0"
-                    Padding="7,3"
-                    CornerRadius="11"
+            <Border Margin="0,3,0,0"
+                    Padding="7,2"
+                    CornerRadius="9"
                     Background="#F5FFFFFF"
                     BorderBrush="#FFE6EAF2"
                     BorderThickness="1">
@@ -457,14 +496,16 @@
                         <ColumnDefinition Width="32" />
                     </Grid.ColumnDefinitions>
                     <Grid.RowDefinitions>
-                        <RowDefinition Height="20" />
-                        <RowDefinition Height="20" />
+                        <RowDefinition Height="16" />
+                        <RowDefinition Height="16" />
                     </Grid.RowDefinitions>
 
                     <TextBlock Grid.Row="0" Grid.Column="0" Text="크기" FontSize="10.5" Foreground="#FF6B7280" VerticalAlignment="Center" />
                     <Slider Grid.Row="0" Grid.Column="1"
-                            Minimum="0.65"
-                            Maximum="1.45"
+                            Style="{StaticResource CompactAppearanceSlider}"
+                            AutomationProperties.Name="펫 크기"
+                            Minimum="{x:Static models:PetProfile.MinimumPetScale}"
+                            Maximum="{x:Static models:PetProfile.MaximumPetScale}"
                             Value="{Binding PetScale, Mode=TwoWay}"
                             TickFrequency="0.05"
                             IsSnapToTickEnabled="True"
@@ -474,6 +515,8 @@
 
                     <TextBlock Grid.Row="1" Grid.Column="0" Text="투명" FontSize="10.5" Foreground="#FF6B7280" VerticalAlignment="Center" />
                     <Slider Grid.Row="1" Grid.Column="1"
+                            Style="{StaticResource CompactAppearanceSlider}"
+                            AutomationProperties.Name="펫 투명도"
                             Minimum="0.25"
                             Maximum="1.0"
                             Value="{Binding PetOpacity, Mode=TwoWay}"
