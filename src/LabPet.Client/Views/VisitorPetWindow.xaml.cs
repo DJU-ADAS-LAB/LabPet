@@ -82,7 +82,7 @@ public partial class VisitorPetWindow : Window
         Left = leftCandidate >= workArea.Left
             ? leftCandidate
             : Math.Min(workArea.Right - Width, hostWindow.Left + hostWindow.Width - 14);
-        Top = Math.Clamp(hostWindow.Top + hostWindow.Height - Height, workArea.Top, workArea.Bottom - Height);
+        Top = Math.Clamp(hostWindow.Top + hostWindow.ActualHeight - Height, workArea.Top, workArea.Bottom - Height);
     }
 
     public void ApplyFriendState(FriendEntry friend, PetAppearance appearance)
@@ -163,25 +163,17 @@ public partial class VisitorPetWindow : Window
 
     private void ComputeNormalizedLookDirection(out double lookX, out double lookY)
     {
-        if (!Win32WindowHelper.TryGetGlobalCursorPosition(out var physicalCursor))
+        if (PresentationSource.FromVisual(VisitorViewport) is null
+            || !Win32WindowHelper.TryGetGlobalCursorPosition(out var physicalCursor))
         {
             lookX = 0;
             lookY = 0;
             return;
         }
 
-        var source = PresentationSource.FromVisual(this);
-        var dpiX = source?.CompositionTarget?.TransformToDevice.M11 ?? 1.0;
-        var dpiY = source?.CompositionTarget?.TransformToDevice.M22 ?? 1.0;
-
-        var cursorDipX = physicalCursor.X / dpiX;
-        var cursorDipY = physicalCursor.Y / dpiY;
-
-        var centerX = Left + Width * 0.5;
-        var centerY = Top + Height * 0.56;
-
-        lookX = Math.Clamp((cursorDipX - centerX) / 420.0, -1.0, 1.0);
-        lookY = Math.Clamp((cursorDipY - centerY) / 360.0, -1.0, 1.0);
+        var cursor = VisitorViewport.PointFromScreen(physicalCursor);
+        lookX = Math.Clamp((cursor.X - VisitorViewport.ActualWidth * 0.5) / 420.0, -1.0, 1.0);
+        lookY = Math.Clamp((cursor.Y - VisitorViewport.ActualHeight * 0.5) / 360.0, -1.0, 1.0);
     }
 
     private void VisitorViewport_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)

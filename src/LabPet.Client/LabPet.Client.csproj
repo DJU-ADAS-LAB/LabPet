@@ -13,6 +13,7 @@
     <Authors>LabPet</Authors>
     <Product>LabPet</Product>
     <ApplicationIcon>Assets\app.ico</ApplicationIcon>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
     <StartupObject>LabPet.Client.Program</StartupObject>
   </PropertyGroup>
 

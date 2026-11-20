@@ -20,21 +20,21 @@ public sealed class ProceduralPetMeshFactory : IPetMeshFactory
         var lights = new Model3DGroup();
 
         // 1. 포근한 주변광 (클레이 음영을 부드럽고 화사하게)
-        lights.Children.Add(new AmbientLight(Color.FromRgb(142, 138, 148)));
+        lights.Children.Add(new AmbientLight(Color.FromRgb(109, 107, 116)));
 
         // 2. 따뜻한 메인 키 라이트 (우상단 전방)
         lights.Children.Add(new DirectionalLight(
-            Color.FromRgb(255, 249, 242),
+            Color.FromRgb(211, 201, 191),
             new Vector3D(-0.48, -0.70, -0.90)));
 
         // 3. 부드러운 좌측 필 라이트 (전면 볼륨감 완화)
         lights.Children.Add(new DirectionalLight(
-            Color.FromRgb(238, 242, 255),
+            Color.FromRgb(129, 141, 161),
             new Vector3D(0.76, -0.22, -0.58)));
 
         // 4. 은은한 후방 림 라이트 (실루엣 입체감 및 분리감)
         lights.Children.Add(new DirectionalLight(
-            Color.FromRgb(196, 218, 252),
+            Color.FromRgb(141, 166, 199),
             new Vector3D(0.40, 0.58, 0.80)));
 
         return lights;
@@ -105,7 +105,6 @@ public sealed class ProceduralPetMeshFactory : IPetMeshFactory
         float faceCenterY;
         float faceZ;
         float headRadiusX;
-        var isCatFace = false;
 
         var headGroup = new Model3DGroup();
 
@@ -118,7 +117,6 @@ public sealed class ProceduralPetMeshFactory : IPetMeshFactory
                 faceCenterY = 0.42f;
                 faceZ = 0.74f;
                 headRadiusX = 0.82f;
-                isCatFace = true;
 
                 // 통통하고 부드러운 몸통
                 var torsoMb = new MeshBuilder(true, false);
@@ -243,14 +241,14 @@ public sealed class ProceduralPetMeshFactory : IPetMeshFactory
             case PetSpeciesIds.FluffyPuppy:
             {
                 headPivotY = 0.0f;
-                headSocketY = 0.94f;
-                faceCenterY = 0.34f;
-                faceZ = 0.72f;
-                headRadiusX = 0.68f;
-                isCatFace = true; // 코 아래 작은 'w' 입
+                headSocketY = 1.00f;
+                faceCenterY = 0.36f;
+                faceZ = 0.77f;
+                headRadiusX = 0.72f;
 
-                var earMaterial = CreateClayMaterial(Darken(bodyColor, 0.20), bodyEmissiveBrush, specularPower: 14, specularAlpha: 52);
-                var noseMaterial = CreateClayMaterial(Color.FromRgb(92, 58, 46), null, specularPower: 54, specularAlpha: 150);
+                var earMaterial = CreateClayMaterial(Darken(bodyColor, 0.23), bodyEmissiveBrush, specularPower: 14, specularAlpha: 52);
+                var innerEarMaterial = CreateClayMaterial(Darken(bodyColor, 0.32), null, specularPower: 12, specularAlpha: 42);
+                var noseMaterial = CreateClayMaterial(Color.FromRgb(80, 50, 45), null, specularPower: 46, specularAlpha: 132);
 
                 // 3/4 각도로 비스듬히 선 긴 몸통 그룹 (얼굴은 정면 유지, 엉덩이·꼬리는 오른쪽 뒤로)
                 var torsoTransform = new Transform3DGroup();
@@ -260,7 +258,7 @@ public sealed class ProceduralPetMeshFactory : IPetMeshFactory
 
                 // 길쭉하고 통통한 몸통 (로컬 +Z가 앞쪽)
                 var torsoMb = new MeshBuilder(true, false);
-                torsoMb.AddEllipsoid(new Vector3(0, -0.40f, -0.30f), 0.40f, 0.34f, 0.72f, 24, 16);
+                torsoMb.AddEllipsoid(new Vector3(0, -0.40f, -0.32f), 0.42f, 0.34f, 0.69f, 24, 16);
                 triangleCount += AddGeometry(torsoGroup, torsoMb, bodyMaterial);
 
                 // 복슬한 크림색 가슴 털
@@ -330,44 +328,42 @@ public sealed class ProceduralPetMeshFactory : IPetMeshFactory
 
                 // 크고 동그란 머리 + 통통한 볼살
                 var headMb = new MeshBuilder(true, false);
-                headMb.AddEllipsoid(new Vector3(0, 0.36f, 0.12f), 0.68f, 0.60f, 0.60f, 30, 20);
-                headMb.AddEllipsoid(new Vector3(0, 0.18f, 0.18f), 0.62f, 0.36f, 0.52f, 22, 14);
+                headMb.AddEllipsoid(new Vector3(0, 0.38f, 0.12f), headRadiusX, 0.62f, 0.61f, 32, 20);
+                headMb.AddEllipsoid(new Vector3(0, 0.18f, 0.20f), 0.64f, 0.37f, 0.51f, 22, 14);
                 triangleCount += AddGeometry(headGroup, headMb, bodyMaterial);
 
-                // 크림색 둥근 주둥이
+                // 양쪽으로 도톰한 크림색 주둥이
                 var muzzleMb = new MeshBuilder(true, false);
-                muzzleMb.AddEllipsoid(new Vector3(0, faceCenterY - 0.13f, faceZ - 0.10f), 0.21f, 0.17f, 0.15f, 20, 14);
+                muzzleMb.AddEllipsoid(new Vector3(-0.10f, faceCenterY - 0.145f, faceZ - 0.065f), 0.155f, 0.135f, 0.17f, 18, 12);
+                muzzleMb.AddEllipsoid(new Vector3(0.10f, faceCenterY - 0.145f, faceZ - 0.065f), 0.155f, 0.135f, 0.17f, 18, 12);
                 triangleCount += AddGeometry(headGroup, muzzleMb, softLightBodyMaterial);
 
-                // 동그란 갈색 코
+                // 둥근 초콜릿색 코와 작은 광택
                 var noseMb = new MeshBuilder(true, false);
-                noseMb.AddEllipsoid(new Vector3(0, faceCenterY - 0.05f, faceZ + 0.06f), 0.075f, 0.055f, 0.05f, 14, 10);
+                noseMb.AddEllipsoid(new Vector3(0, faceCenterY - 0.06f, faceZ + 0.10f), 0.091f, 0.060f, 0.060f, 18, 12);
                 triangleCount += AddGeometry(headGroup, noseMb, noseMaterial);
+                var noseHighlight = new MeshBuilder(true, false);
+                noseHighlight.AddEllipsoid(new Vector3(-0.027f, faceCenterY - 0.039f, faceZ + 0.150f), 0.024f, 0.012f, 0.008f, 10, 6);
+                triangleCount += AddGeometry(headGroup, noseHighlight, whiteHighlightMaterial);
 
-                // 축 처진 복슬 스파니엘/닥스 귀 (윗부분 고정점 기준 Z축 펄럭임)
+                // 길게 처진 귀와 안쪽 털이 윗부분을 중심으로 함께 움직인다.
                 leftEarRot = new AxisAngleRotation3D(new Vector3D(0, 0, 1), -4);
-                var leftEarGroup = new Model3DGroup
-                {
-                    Transform = new RotateTransform3D(leftEarRot, new Point3D(-0.56, 0.70, 0.08))
-                };
-                var leftEarMb = new MeshBuilder(true, false);
-                leftEarMb.AddEllipsoid(new Vector3(-0.62f, 0.34f, 0.08f), 0.18f, 0.42f, 0.24f, 16, 12);
-                leftEarMb.AddEllipsoid(new Vector3(-0.68f, 0.10f, 0.10f), 0.22f, 0.30f, 0.22f, 16, 12);
-                leftEarMb.AddEllipsoid(new Vector3(-0.64f, -0.06f, 0.10f), 0.16f, 0.18f, 0.19f, 14, 10);
-                triangleCount += AddGeometry(leftEarGroup, leftEarMb, earMaterial);
-                headGroup.Children.Add(leftEarGroup);
-
                 rightEarRot = new AxisAngleRotation3D(new Vector3D(0, 0, 1), 4);
-                var rightEarGroup = new Model3DGroup
+                for (var side = -1; side <= 1; side += 2)
                 {
-                    Transform = new RotateTransform3D(rightEarRot, new Point3D(0.56, 0.70, 0.08))
-                };
-                var rightEarMb = new MeshBuilder(true, false);
-                rightEarMb.AddEllipsoid(new Vector3(0.62f, 0.34f, 0.08f), 0.18f, 0.42f, 0.24f, 16, 12);
-                rightEarMb.AddEllipsoid(new Vector3(0.68f, 0.10f, 0.10f), 0.22f, 0.30f, 0.22f, 16, 12);
-                rightEarMb.AddEllipsoid(new Vector3(0.64f, -0.06f, 0.10f), 0.16f, 0.18f, 0.19f, 14, 10);
-                triangleCount += AddGeometry(rightEarGroup, rightEarMb, earMaterial);
-                headGroup.Children.Add(rightEarGroup);
+                    var earGroup = new Model3DGroup
+                    {
+                        Transform = new RotateTransform3D(side < 0 ? leftEarRot : rightEarRot, new Point3D(side * 0.58, 0.72, 0.16))
+                    };
+                    var earMb = new MeshBuilder(true, false);
+                    earMb.AddEllipsoid(new Vector3(side * 0.67f, 0.32f, 0.16f), 0.20f, 0.43f, 0.24f, 18, 12);
+                    earMb.AddEllipsoid(new Vector3(side * 0.73f, 0.08f, 0.18f), 0.23f, 0.30f, 0.23f, 18, 12);
+                    triangleCount += AddGeometry(earGroup, earMb, earMaterial);
+                    var innerEarMb = new MeshBuilder(true, false);
+                    innerEarMb.AddEllipsoid(new Vector3(side * 0.77f, 0.13f, 0.37f), 0.121f, 0.235f, 0.066f, 14, 10);
+                    triangleCount += AddGeometry(earGroup, innerEarMb, innerEarMaterial);
+                    headGroup.Children.Add(earGroup);
+                }
 
                 break;
             }
@@ -479,7 +475,7 @@ public sealed class ProceduralPetMeshFactory : IPetMeshFactory
             appearance.ExpressionId,
             faceCenterY,
             faceZ,
-            isCatFace,
+            appearance.SpeciesId,
             darkEyeMaterial,
             whiteHighlightMaterial,
             accentMaterial);
@@ -582,6 +578,7 @@ public sealed class ProceduralPetMeshFactory : IPetMeshFactory
             SpeciesId = appearance.SpeciesId,
             RootModel = rootGroup,
             TotalTriangleCount = triangleCount,
+            NameplateAnchor = new Point3D(0, bodyGroup.Bounds.Y, 0.35),
             BodyScale = bodyScale,
             BodyTranslate = bodyTranslate,
             BodyYaw = bodyYaw,
@@ -615,12 +612,13 @@ public sealed class ProceduralPetMeshFactory : IPetMeshFactory
         string expressionId,
         float faceCenterY,
         float faceZ,
-        bool isCatFace,
+        string speciesId,
         Material eyeMaterial,
         Material highlightMaterial,
         Material cheekMaterial)
     {
         var tris = 0;
+        var isPuppy = speciesId == PetSpeciesIds.FluffyPuppy;
 
         // 부드러운 3D 볼터치
         var cheekMb = new MeshBuilder(true, false);
@@ -667,8 +665,9 @@ public sealed class ProceduralPetMeshFactory : IPetMeshFactory
 
             default:
             {
-                eyeMb.AddEllipsoid(new Vector3(-0.28f, eyeY, faceZ), 0.108f, 0.122f, 0.078f, 18, 12);
-                eyeMb.AddEllipsoid(new Vector3(0.28f, eyeY, faceZ), 0.108f, 0.122f, 0.078f, 18, 12);
+                var eyeRadiusY = isPuppy ? 0.144f : 0.122f;
+                eyeMb.AddEllipsoid(new Vector3(-0.28f, eyeY, faceZ), 0.108f, eyeRadiusY, 0.078f, 18, 12);
+                eyeMb.AddEllipsoid(new Vector3(0.28f, eyeY, faceZ), 0.108f, eyeRadiusY, 0.078f, 18, 12);
 
                 highlightMb.AddSphere(new Vector3(-0.245f, eyeY + 0.042f, faceZ + 0.058f), 0.038f, 12, 8);
                 highlightMb.AddSphere(new Vector3(0.315f, eyeY + 0.042f, faceZ + 0.058f), 0.038f, 12, 8);
@@ -686,21 +685,31 @@ public sealed class ProceduralPetMeshFactory : IPetMeshFactory
 
         parent.Children.Add(eyeGroup);
 
-        // 입 파츠 (치비 고양이는 귀여운 'w' 입, 나머지는 부드러운 미소)
+        // 종과 표정에 맞춘 입 파츠
         var mouthMb = new MeshBuilder(true, false);
-        if (isCatFace)
+        if (isPuppy && expressionId != "sleepy")
         {
+            mouthMb.AddEllipsoid(new Vector3(0, faceCenterY - 0.216f, faceZ + 0.097f), 0.101f, 0.070f, 0.037f, 16, 10);
+            var tongueMb = new MeshBuilder(true, false);
+            tongueMb.AddEllipsoid(new Vector3(0, faceCenterY - 0.253f, faceZ + 0.125f), 0.059f, 0.048f, 0.019f, 14, 10);
+            var tongueMaterial = CreateClayMaterial(Color.FromRgb(230, 129, 147), null, 18, 64);
+            tris += AddGeometry(parent, tongueMb, tongueMaterial);
+        }
+        else if (speciesId == PetSpeciesIds.ChibiCat || isPuppy)
+        {
+            var mouthZ = isPuppy ? faceZ + 0.058f : faceZ;
+            var mouthY = isPuppy ? faceCenterY - 0.030f : faceCenterY;
             var leftW = new List<Vector3>
             {
-                new(-0.11f, faceCenterY - 0.12f, faceZ + 0.045f),
-                new(-0.055f, faceCenterY - 0.165f, faceZ + 0.065f),
-                new(0.0f, faceCenterY - 0.115f, faceZ + 0.072f)
+                new(-0.11f, mouthY - 0.12f, mouthZ + 0.045f),
+                new(-0.055f, mouthY - 0.165f, mouthZ + 0.065f),
+                new(0.0f, mouthY - 0.115f, mouthZ + 0.072f)
             };
             var rightW = new List<Vector3>
             {
-                new(0.0f, faceCenterY - 0.115f, faceZ + 0.072f),
-                new(0.055f, faceCenterY - 0.165f, faceZ + 0.065f),
-                new(0.11f, faceCenterY - 0.12f, faceZ + 0.045f)
+                new(0.0f, mouthY - 0.115f, mouthZ + 0.072f),
+                new(0.055f, mouthY - 0.165f, mouthZ + 0.065f),
+                new(0.11f, mouthY - 0.12f, mouthZ + 0.045f)
             };
             mouthMb.AddTube(leftW, diameter: 0.034f, thetaDiv: 10, isTubeClosed: false);
             mouthMb.AddTube(rightW, diameter: 0.034f, thetaDiv: 10, isTubeClosed: false);

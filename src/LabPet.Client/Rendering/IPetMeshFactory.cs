@@ -22,6 +22,7 @@ public sealed class PetRigHandle
     public required string SpeciesId { get; init; }
     public required Model3DGroup RootModel { get; init; }
     public required int TotalTriangleCount { get; init; }
+    internal Point3D NameplateAnchor { get; init; }
 
     // 루트 바디 변환 (Squash & Stretch, 부유, 시선 추적, 흔들기)
     public required ScaleTransform3D BodyScale { get; init; }

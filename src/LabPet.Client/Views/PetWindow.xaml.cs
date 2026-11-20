@@ -20,8 +20,9 @@ public partial class PetWindow : Window
 {
     private const double DragThresholdPixels = 5.0;
     private const double BaseWindowWidth = 214.0;
-    private const double BaseWindowHeight = 274.0;
+    private const double DefaultWindowHeight = 274.0;
     private const double BaseCameraDistanceZ = 5.95;
+    private const double NameplateGap = 3.0;
 
     /// <summary>
     /// 친구 메시지·소셜 알림 말풍선 줄의 표시 시간(ms). 새 메시지가 와도 기존 줄은 이 시간 동안 유지된다.
@@ -47,6 +48,10 @@ public partial class PetWindow : Window
     private bool _lastReportedMusicActive;
     private bool _isMouseOverPet;
     private bool _isMouseOverOverlay;
+    private Point3D _nameplateAnchor;
+
+    private double BaseLayoutHeight => PetMessageRow.MinHeight + PetViewport.Height + PetNameplateRow.Height.Value;
+    private double MessageOverflow => Math.Max(0, PetMessageRow.ActualHeight - PetMessageRow.MinHeight);
 
     // 마우스 클릭(<=5px) vs 창 드래그(>5px) vs 빠른 좌우 흔들기 판정 상태
     private bool _isPointerPressed;
@@ -82,6 +87,15 @@ public partial class PetWindow : Window
 
         TrayIcon.Icon = CreateTrayIcon();
         LightsVisual.Content = _meshFactory.CreateStudioLights();
+
+        SizeChanged += (_, e) =>
+        {
+            if (IsLoaded && e.HeightChanged && e.PreviousSize.Height > 0)
+            {
+                Top += e.PreviousSize.Height - e.NewSize.Height;
+            }
+        };
+        PetViewport.SizeChanged += (_, _) => UpdateNameplatePosition();
 
         _viewModel.ProfileUpdated += OnProfileUpdated;
         _viewModel.PetScaleChanged += OnPetScaleChanged;
@@ -180,6 +194,8 @@ public partial class PetWindow : Window
     {
         var rig = _meshFactory.BuildPetRig(profile.Appearance);
         PetVisual.Content = rig.RootModel;
+        _nameplateAnchor = rig.NameplateAnchor;
+        UpdateNameplatePosition();
         _animator.AttachRig(rig, profile.Appearance.AccentColorHex);
         _ = _social.UpdateLocalPresenceAsync(profile, _lastReportedMusicActive);
     }
@@ -188,17 +204,26 @@ public partial class PetWindow : Window
     {
         var clamped = Math.Clamp(scale, 0.65, 1.45);
         var prevRight = Left + Width;
-        var prevBottom = Top + Height;
 
         Width = Math.Max(180.0, Math.Round(BaseWindowWidth * clamped));
-        Height = Math.Max(220.0, Math.Round(BaseWindowHeight * clamped));
+        PetViewport.Height = Math.Max(220.0, Math.Round(DefaultWindowHeight * clamped))
+            - PetMessageRow.MinHeight - PetNameplateRow.Height.Value;
         PetCamera.Position = new Point3D(0, 0.34, BaseCameraDistanceZ / Math.Sqrt(clamped));
+        UpdateNameplatePosition();
 
         // 크기 변경 시 우하단 기준점이 자연스럽게 유지되도록 보정
         if (IsLoaded)
         {
             Left = prevRight - Width;
-            Top = prevBottom - Height;
+        }
+    }
+
+    private void UpdateNameplatePosition()
+    {
+        if (PetViewport.ActualHeight > 0 && PetVisual.Content is not null
+            && PetVisual.TransformToAncestor(PetViewport).TryTransform(_nameplateAnchor, out var anchor))
+        {
+            PetNameplateOffset.Y = Math.Min(0, anchor.Y + NameplateGap - PetViewport.ActualHeight);
         }
     }
 
@@ -296,7 +321,7 @@ public partial class PetWindow : Window
     private void OnResetPositionRequested(object? sender, EventArgs e)
     {
         PlaceAtDefaultBottomRight();
-        _ = _viewModel.SaveWindowPositionAsync(Left, Top);
+        SaveRestingPosition();
     }
 
     private void OnExitRequested(object? sender, EventArgs e)
@@ -437,25 +462,17 @@ public partial class PetWindow : Window
 
     private void ComputeNormalizedLookDirection(out double lookX, out double lookY)
     {
-        if (!Win32WindowHelper.TryGetGlobalCursorPosition(out var physicalCursor))
+        if (PresentationSource.FromVisual(PetViewport) is null
+            || !Win32WindowHelper.TryGetGlobalCursorPosition(out var physicalCursor))
         {
             lookX = 0;
             lookY = 0;
             return;
         }
 
-        var source = PresentationSource.FromVisual(this);
-        var dpiX = source?.CompositionTarget?.TransformToDevice.M11 ?? 1.0;
-        var dpiY = source?.CompositionTarget?.TransformToDevice.M22 ?? 1.0;
-
-        var cursorDipX = physicalCursor.X / dpiX;
-        var cursorDipY = physicalCursor.Y / dpiY;
-
-        var petCenterX = Left + Width * 0.5;
-        var petCenterY = Top + Height * 0.58;
-
-        lookX = Math.Clamp((cursorDipX - petCenterX) / 420.0, -1.0, 1.0);
-        lookY = Math.Clamp((cursorDipY - petCenterY) / 360.0, -1.0, 1.0);
+        var cursor = PetViewport.PointFromScreen(physicalCursor);
+        lookX = Math.Clamp((cursor.X - PetViewport.ActualWidth * 0.5) / 420.0, -1.0, 1.0);
+        lookY = Math.Clamp((cursor.Y - PetViewport.ActualHeight * 0.5) / 360.0, -1.0, 1.0);
     }
 
     private void PetViewport_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
@@ -529,7 +546,7 @@ public partial class PetWindow : Window
         if (_isDraggingWindow)
         {
             _isDraggingWindow = false;
-            _ = _viewModel.SaveWindowPositionAsync(Left, Top);
+            SaveRestingPosition();
         }
         else
         {
@@ -597,9 +614,9 @@ public partial class PetWindow : Window
         if (profile.LastWindowLeft is double savedLeft && profile.LastWindowTop is double savedTop)
         {
             var clampedLeft = Math.Clamp(savedLeft, workArea.Left - 40, workArea.Right - Width + 40);
-            var clampedTop = Math.Clamp(savedTop, workArea.Top - 40, workArea.Bottom - Height + 40);
+            var clampedTop = Math.Clamp(savedTop, workArea.Top - 40, workArea.Bottom - BaseLayoutHeight + 40);
             Left = clampedLeft;
-            Top = clampedTop;
+            Top = clampedTop - MessageOverflow;
             return;
         }
 
@@ -610,8 +627,11 @@ public partial class PetWindow : Window
     {
         var workArea = SystemParameters.WorkArea;
         Left = workArea.Right - Width - 28;
-        Top = workArea.Bottom - Height - 18;
+        Top = workArea.Bottom - BaseLayoutHeight - MessageOverflow - 18;
     }
+
+    private void SaveRestingPosition()
+        => _ = _viewModel.SaveWindowPositionAsync(Left, Top + MessageOverflow);
 
     private static System.Drawing.Icon CreateTrayIcon()
     {

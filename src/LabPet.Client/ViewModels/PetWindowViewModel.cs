@@ -74,7 +74,7 @@ public sealed partial class PetWindowViewModel : ObservableObject
     [ObservableProperty] private bool _isBubbleVisible;
 
     /// <summary>
-    /// 말풍선에 동시에 쌓아 보여 줄 최대 줄 수. 초과 시 가장 오래된 줄부터 밀려난다.
+    /// 말풍선에 동시에 쌓아 보여 줄 최대 메시지 수. 초과 시 가장 오래된 메시지부터 밀려난다.
     /// </summary>
     public const int MaxBubbleLines = 3;
 
@@ -279,7 +279,7 @@ public sealed partial class PetWindowViewModel : ObservableObject
 
     /// <summary>
     /// 펫 말풍선에 메시지 한 줄을 추가한다. 새 메시지가 와도 기존 줄을 즉시 지우지 않고
-    /// 최대 <see cref="MaxBubbleLines"/>줄까지 쌓으며, 각 줄은 자신의 표시 시간이 지나면 사라진다.
+    /// 최대 <see cref="MaxBubbleLines"/>개까지 쌓으며, 각 메시지는 자신의 표시 시간이 지나면 사라진다.
     /// UI 스레드에서 호출해야 한다.
     /// </summary>
     public async void ShowBubble(string message, int durationMs = 2600)

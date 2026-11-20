@@ -11,6 +11,7 @@ public sealed class MeshFactoryTests
     [InlineData(PetSpeciesIds.ChibiCat, "happy", "headset", "halo_ring")]
     [InlineData(PetSpeciesIds.FluffyCloud, "sparkle", "santa_hat", "music_notes")]
     [InlineData(PetSpeciesIds.FluffyPuppy, "default", "crown", "snowflakes")]
+    [InlineData(PetSpeciesIds.FluffyPuppy, "sleepy", "headset", "halo_ring")]
     public void BuildPetRig_ProducesValidLowToMidPolyMeshOnStaThread(
         string speciesId,
         string expressionId,
