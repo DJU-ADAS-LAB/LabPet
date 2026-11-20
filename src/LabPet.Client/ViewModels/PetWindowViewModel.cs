@@ -81,7 +81,7 @@ public sealed partial class PetWindowViewModel : ObservableObject
     /// <summary>
     /// 말풍선에 동시에 쌓아 보여 줄 최대 메시지 수. 초과 시 가장 오래된 메시지부터 밀려난다.
     /// </summary>
-    public const int MaxBubbleLines = 3;
+    public const int MaxBubbleLines = 5;
 
     /// <summary>
     /// 말풍선에 쌓여 표시 중인 메시지 줄 목록(오래된 순 → 최신 순).
@@ -421,7 +421,7 @@ public sealed partial class PetWindowViewModel : ObservableObject
     [RelayCommand]
     private async Task SendQuickMessageAsync()
     {
-        if (QuickMessageTarget is not { Friend: { } friend } target)
+        if (QuickMessageTarget is not { Friend: { } friend })
         {
             return;
         }
@@ -432,7 +432,6 @@ public sealed partial class PetWindowViewModel : ObservableObject
             return;
         }
 
-        var targetName = target.DisplayTitle;
         var revision = _quickMessageDraftRevision;
         var ok = await _social.SendBubbleMessageAsync(friend, trimmed);
         if (ok)
@@ -441,8 +440,6 @@ public sealed partial class PetWindowViewModel : ObservableObject
             {
                 QuickMessageText = string.Empty;
             }
-
-            ShowBubble($"{targetName}에게 메시지를 전송했습니다.", 2000);
         }
         else
         {

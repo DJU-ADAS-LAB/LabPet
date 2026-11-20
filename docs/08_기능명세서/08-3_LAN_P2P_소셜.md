@@ -27,7 +27,7 @@ related:
 
 ## FT-10: TCP 친구 신청/인증, 말풍선 메시지, 30Hz 노래 따라하기
 - **동시 갱신** 시에도 화면에서는 친구 정보의 복사본을 읽는다. 코디네이터는 친구 등록과 상호작용 보상 저장을 순서대로 처리하고, 파일 쓰기에 실패하면 펫 말풍선으로 알린다. [소셜 코디네이터 회귀 테스트](../../tests/LabPet.Tests/SocialCoordinatorTests.cs)
-- **빠른 메시지 입력창**은 선택한 온라인 친구의 행 아래에 표시된다. 전송 후에도 그 친구에게 이어서 입력할 수 있고, 전송 중 새로 입력한 문장은 보존한다. [펫 창 ViewModel](../../src/LabPet.Client/ViewModels/PetWindowViewModel.cs)
+- **빠른 메시지 입력창**은 선택한 온라인 친구의 행 아래에 표시된다. 포인터가 입력 영역에 있는 동안 이어서 전송할 수 있고, 전송 중 새로 입력한 문장은 보존한다. 발신 화면은 전송 실패를 알린다. [펫 창 ViewModel](../../src/LabPet.Client/ViewModels/PetWindowViewModel.cs), [친구 창 ViewModel](../../src/LabPet.Client/ViewModels/SocialViewModel.cs)
 - **구현 파일**: [LanP2pTransport.cs](../../src/LabPet.Client/Network/LanP2pTransport.cs), [SocialCoordinatorService.cs](../../src/LabPet.Client/Social/SocialCoordinatorService.cs), [SocialWindow.xaml.cs](../../src/LabPet.Client/Views/SocialWindow.xaml.cs), [PetWindow.xaml.cs](../../src/LabPet.Client/Views/PetWindow.xaml.cs)
 - **동작 규칙**:
   - TCP `45680`으로 친구 신청(`FriendRequest`) → 상대 펫 위 `[수락 / 거절]` 말풍선 표시 → 수락 시 32바이트 `pairSecret` 생성·회신 및 `friends.json` 저장

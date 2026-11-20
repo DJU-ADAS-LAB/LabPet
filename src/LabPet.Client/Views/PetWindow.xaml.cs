@@ -49,6 +49,7 @@ public partial class PetWindow : Window
     private double _lastMusicPublishSeconds;
     private bool _lastReportedMusicActive;
     private Point3D _nameplateAnchor;
+    private FrameworkElement? _messageEditorToClose;
 
     private double BaseLayoutHeight => PetMessageRow.MinHeight + PetViewport.Height + PetNameplateRow.Height.Value;
     private double MessageOverflow => Math.Max(0, PetMessageRow.ActualHeight - PetMessageRow.MinHeight);
@@ -99,7 +100,6 @@ public partial class PetWindow : Window
 
         _viewModel.ProfileUpdated += OnProfileUpdated;
         _viewModel.PetScaleChanged += OnPetScaleChanged;
-        _viewModel.PropertyChanged += OnViewModelPropertyChanged;
         _viewModel.ClickThroughChanged += OnClickThroughChanged;
         _viewModel.ResetPositionRequested += OnResetPositionRequested;
         _viewModel.ExitRequested += OnExitRequested;
@@ -116,15 +116,7 @@ public partial class PetWindow : Window
         {
             Interval = TimeSpan.FromMilliseconds(360)
         };
-        _overlayCloseTimer.Tick += (_, _) =>
-        {
-            _overlayCloseTimer.Stop();
-            if (!PetViewport.IsMouseOver && !FriendOverlayCard.IsMouseOver && !PetControls.IsMouseOver
-                && !PetControls.IsMouseCaptureWithin && _viewModel.QuickMessageTarget is null)
-            {
-                ClosePetOverlays();
-            }
-        };
+        _overlayCloseTimer.Tick += OnOverlayCloseTick;
 
         SourceInitialized += (_, _) =>
         {
@@ -167,7 +159,6 @@ public partial class PetWindow : Window
             TrayIcon.Dispose();
             _viewModel.ProfileUpdated -= OnProfileUpdated;
             _viewModel.PetScaleChanged -= OnPetScaleChanged;
-            _viewModel.PropertyChanged -= OnViewModelPropertyChanged;
             _viewModel.ClickThroughChanged -= OnClickThroughChanged;
             _viewModel.ResetPositionRequested -= OnResetPositionRequested;
             _viewModel.ExitRequested -= OnExitRequested;
@@ -240,13 +231,13 @@ public partial class PetWindow : Window
             return;
         }
 
-        _overlayCloseTimer.Stop();
+        CancelOverlayCloseUnlessEditorLeft();
         _viewModel.RefreshQuickOverlayEntries();
         FriendOverlayPopup.IsOpen = true;
         SetPetControlsVisible(true);
     }
 
-    private void OverlaySurface_MouseEnter(object sender, MouseEventArgs e) => _overlayCloseTimer.Stop();
+    private void OverlaySurface_MouseEnter(object sender, MouseEventArgs e) => CancelOverlayCloseUnlessEditorLeft();
 
     private void OverlaySurface_MouseLeave(object sender, MouseEventArgs e) => ScheduleOverlayClose();
 
@@ -254,6 +245,33 @@ public partial class PetWindow : Window
     {
         _overlayCloseTimer.Stop();
         _overlayCloseTimer.Start();
+    }
+
+    private void CancelOverlayCloseUnlessEditorLeft()
+    {
+        if (_messageEditorToClose is null)
+        {
+            _overlayCloseTimer.Stop();
+        }
+    }
+
+    private void OnOverlayCloseTick(object? sender, EventArgs e)
+    {
+        _overlayCloseTimer.Stop();
+        if (!PetViewport.IsMouseOver && !FriendOverlayCard.IsMouseOver && !PetControls.IsMouseOver
+            && !FriendOverlayCard.IsMouseCaptureWithin && !PetControls.IsMouseCaptureWithin)
+        {
+            ClosePetOverlays();
+            return;
+        }
+
+        var editor = _messageEditorToClose;
+        _messageEditorToClose = null;
+        if (editor is { IsMouseOver: false, IsMouseCaptureWithin: false, DataContext: QuickOverlayEntry target }
+            && ReferenceEquals(_viewModel.QuickMessageTarget, target))
+        {
+            _viewModel.QuickMessageTarget = null;
+        }
     }
 
     private void SetPetControlsVisible(bool visible)
@@ -268,17 +286,25 @@ public partial class PetWindow : Window
 
     private void ClosePetOverlays()
     {
-        _overlayCloseTimer.Stop();
-        FriendOverlayPopup.IsOpen = false;
         _viewModel.QuickMessageTarget = null;
+        _messageEditorToClose = null;
+        FriendOverlayPopup.IsOpen = false;
         SetPetControlsVisible(false);
+        _overlayCloseTimer.Stop();
     }
 
-    private void OnViewModelPropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
+    private void QuickMessageEditor_MouseEnter(object sender, MouseEventArgs e)
     {
-        if (e.PropertyName == nameof(PetWindowViewModel.QuickMessageTarget)
-            && _viewModel.QuickMessageTarget is null && FriendOverlayPopup.IsOpen)
+        _messageEditorToClose = null;
+        _overlayCloseTimer.Stop();
+    }
+
+    private void QuickMessageEditor_MouseLeave(object sender, MouseEventArgs e)
+    {
+        if (sender is FrameworkElement { IsMouseOver: false, DataContext: QuickOverlayEntry target } editor
+            && ReferenceEquals(_viewModel.QuickMessageTarget, target))
         {
+            _messageEditorToClose = editor;
             ScheduleOverlayClose();
         }
     }

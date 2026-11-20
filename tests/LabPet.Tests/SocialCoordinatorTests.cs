@@ -1,5 +1,6 @@
 using System.IO;
 using System.Net;
+using System.Windows.Threading;
 using LabPet.Client.Network;
 using LabPet.Client.Social;
 using LabPet.Client.Solo;
@@ -184,12 +185,85 @@ public sealed class SocialCoordinatorTests : IAsyncLifetime
         Assert.Same(row, viewModel.QuickMessageTarget);
         Assert.True(row.IsComposingMessage);
         Assert.Empty(viewModel.QuickMessageText);
-        Assert.Contains(viewModel.BubbleLines, bubble => bubble.Text.Contains("전송했습니다", StringComparison.Ordinal));
+        Assert.Empty(viewModel.BubbleLines);
 
         viewModel.QuickMessageText = "두 번째 메시지";
         await viewModel.SendQuickMessageCommand.ExecuteAsync(null);
         Assert.Same(row, viewModel.QuickMessageTarget);
+        Assert.Empty(viewModel.BubbleLines);
         Assert.Equal(3, Assert.Single((await _store.LoadFriendsAsync()).Friends).Intimacy);
+    }
+
+    [Fact]
+    public async Task SocialMessage_SuccessClearsTheFailureStatusWithoutASentNotice()
+    {
+        var viewModel = new SocialViewModel(_host);
+        try
+        {
+            var friend = Assert.Single(_host.Friends);
+            var defaultStatus = viewModel.StatusBanner;
+            viewModel.SelectedFriend = new FriendListItemViewModel(friend,
+                new PeerSnapshot { PetId = friend.PetId }, isFollowingMusic: false, isVisitingDesktop: false);
+            viewModel.StatusBanner = "메시지 전송에 실패했습니다.";
+            viewModel.MessageText = "다시 전송한 메시지";
+            await viewModel.SendBubbleMessageCommand.ExecuteAsync(null);
+
+            Assert.Empty(viewModel.MessageText);
+            Assert.Equal(defaultStatus, viewModel.StatusBanner);
+            Assert.Equal(2, Assert.Single((await _store.LoadFriendsAsync()).Friends).Intimacy);
+        }
+        finally
+        {
+            viewModel.Detach();
+        }
+    }
+
+    [Fact]
+    public async Task BubbleLines_DisplayTheLatestFiveMessagesInOrder()
+    {
+        var completed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var uiThread = new Thread(() =>
+        {
+            var dispatcher = Dispatcher.CurrentDispatcher;
+            try
+            {
+                dispatcher.Invoke(() =>
+                {
+                    var viewModel = new PetWindowViewModel(_store, _host);
+                    for (var index = 1; index <= 6; index++)
+                    {
+                        viewModel.ShowBubble($"받은 메시지 {index}", durationMs: 100);
+                    }
+
+                    Assert.True(viewModel.IsBubbleVisible);
+                    Assert.Equal(Enumerable.Range(2, 5).Select(index => $"받은 메시지 {index}"),
+                        viewModel.BubbleLines.Select(line => line.Text));
+
+                    var expiryFrame = new DispatcherFrame();
+                    viewModel.PropertyChanged += (_, args) =>
+                    {
+                        if (args.PropertyName == nameof(PetWindowViewModel.IsBubbleVisible) && !viewModel.IsBubbleVisible)
+                        {
+                            expiryFrame.Continue = false;
+                        }
+                    };
+                    Dispatcher.PushFrame(expiryFrame);
+                    Assert.Empty(viewModel.BubbleLines);
+                });
+                completed.SetResult();
+            }
+            catch (Exception exception)
+            {
+                completed.SetException(exception);
+            }
+            finally
+            {
+                dispatcher.InvokeShutdown();
+            }
+        }) { IsBackground = true };
+        uiThread.SetApartmentState(ApartmentState.STA);
+        uiThread.Start();
+        await completed.Task.WaitAsync(TimeSpan.FromSeconds(5));
     }
 
     [Fact]

@@ -568,7 +568,7 @@ public sealed class ProceduralPetMeshFactory : IPetMeshFactory
         var keys = new MeshBuilder(true, false);
         for (var row = 0; row < 3; row++)
         {
-            var z = centerZ - 0.11f + row * 0.11f;
+            var z = centerZ - 0.06f + row * 0.11f;
             for (var col = 0; col < 7; col++)
             {
                 var x = -0.45f + col * 0.15f;
@@ -579,7 +579,8 @@ public sealed class ProceduralPetMeshFactory : IPetMeshFactory
         triangles += AddGeometry(keyboard, keys, CreateClayMaterial(Colors.White, null, 18, 70));
 
         var spacebar = new MeshBuilder(true, false);
-        spacebar.AddBox(new Vector3(0, centerY + 0.055f, centerZ + 0.16f), 0.44f, 0.04f, 0.07f);
+        // 펫과 가까운 키보드 가장자리에 스페이스바를 둔다.
+        spacebar.AddBox(new Vector3(0, centerY + 0.055f, centerZ - 0.16f), 0.44f, 0.04f, 0.07f);
         triangles += AddGeometry(keyboard, spacebar, CreateClayMaterial(accentColor, null, 20, 75));
         rootGroup.Children.Add(keyboard);
         return (triangles, scale);

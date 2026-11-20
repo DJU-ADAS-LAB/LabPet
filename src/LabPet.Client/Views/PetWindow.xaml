@@ -220,7 +220,7 @@
                          Margin="0,-1,0,0" />
             </StackPanel>
 
-            <!-- 일반 꼬리 말풍선 (최근 메시지 최대 3개, 메시지별 줄바꿈과 만료) -->
+            <!-- 일반 꼬리 말풍선 (최근 메시지 최대 5개, 메시지별 줄바꿈과 만료) -->
             <StackPanel Visibility="{Binding IsBubbleVisible, Converter={StaticResource BoolToVis}}"
                         IsHitTestVisible="False">
                 <Border Padding="11,6"
@@ -420,6 +420,10 @@
                                                     Visibility="{Binding CanSendFriendRequest, Converter={StaticResource BoolToVis}}" />
                                         </DockPanel>
                                         <DockPanel Margin="0,6,0,1"
+                                                   Background="Transparent"
+                                                   MouseEnter="QuickMessageEditor_MouseEnter"
+                                                   MouseLeave="QuickMessageEditor_MouseLeave"
+                                                   LostMouseCapture="QuickMessageEditor_MouseLeave"
                                                    Visibility="{Binding IsComposingMessage, Converter={StaticResource BoolToVis}}">
                                             <Button DockPanel.Dock="Right"
                                                     Content="전송"

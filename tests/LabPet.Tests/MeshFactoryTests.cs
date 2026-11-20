@@ -61,6 +61,26 @@ public sealed class MeshFactoryTests
     }
 
     [Fact]
+    public void BuildTypingKeyboard_PlacesTheSpacebarBetweenThePetAndTheOtherKeys()
+    {
+        RunOnSta(() =>
+        {
+            var rig = new ProceduralPetMeshFactory().BuildPetRig(new PetAppearance(), PetRigEffects.TypingKeyboard);
+            var keyboard = Assert.Single(rig.RootModel.Children.OfType<Model3DGroup>(),
+                group => ReferenceEquals(group.Transform, rig.TypingKeyboardScale));
+            var parts = GeometryModels(keyboard).Select(part => part.Bounds).ToArray();
+            Assert.Equal(3, parts.Length);
+            var deck = parts[0];
+            var keys = parts[1];
+            var spacebar = parts[2];
+
+            Assert.True(spacebar.Z > deck.Z);
+            Assert.True(spacebar.Z + spacebar.SizeZ < keys.Z);
+            Assert.True(keys.Z + keys.SizeZ < deck.Z + deck.SizeZ);
+        });
+    }
+
+    [Fact]
     public void BuildPetRig_SharesFrozenGeometryAcrossColorsAndKeepsAnimationIndependent()
     {
         RunOnSta(() =>

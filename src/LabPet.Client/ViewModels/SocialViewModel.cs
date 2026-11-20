@@ -93,6 +93,9 @@ public sealed class FriendListItemViewModel
 /// </summary>
 public sealed partial class SocialViewModel : ObservableObject
 {
+    private const string DefaultStatusBanner = "같은 로컬 네트워크(LAN)의 LabPet을 자동 탐색 중입니다.";
+    private const string MessageSendFailureStatus = "메시지 전송에 실패했습니다.";
+
     private readonly SocialCoordinatorService _social;
     private Func<string, bool>? _isVisitorActivePredicate;
 
@@ -103,7 +106,7 @@ public sealed partial class SocialViewModel : ObservableObject
 
     [ObservableProperty] private FriendListItemViewModel? _selectedFriend;
     [ObservableProperty] private string _messageText = string.Empty;
-    [ObservableProperty] private string _statusBanner = "같은 로컬 네트워크(LAN)의 LabPet을 자동 탐색 중입니다.";
+    [ObservableProperty] private string _statusBanner = DefaultStatusBanner;
     [ObservableProperty] private bool _preferLocalMusicWhenActive = true;
 
     public bool HasSelectedFriend => SelectedFriend is not null;
@@ -209,11 +212,14 @@ public sealed partial class SocialViewModel : ObservableObject
         if (ok)
         {
             MessageText = string.Empty;
-            StatusBanner = $"{SelectedFriend.DisplayTitle}에게 메시지를 전송했습니다.";
+            if (StatusBanner == MessageSendFailureStatus)
+            {
+                StatusBanner = DefaultStatusBanner;
+            }
         }
         else
         {
-            StatusBanner = "메시지 전송에 실패했습니다.";
+            StatusBanner = MessageSendFailureStatus;
         }
     }
 
