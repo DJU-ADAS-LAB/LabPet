@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Animation;
@@ -25,6 +26,8 @@ public partial class PetWindow : Window
     private const double DefaultWindowHeight = 274.0;
     private const double NameplateGap = 3.0;
     private const double BaseNameplateHeight = 24.0;
+    private const double FriendOverlayGap = 4.0;
+    private const double FriendOverlayTopInset = 12.0;
 
     /// <summary>
     /// 친구 메시지·소셜 알림 말풍선 줄의 표시 시간(ms). 새 메시지가 와도 기존 줄은 이 시간 동안 유지된다.
@@ -90,6 +93,9 @@ public partial class PetWindow : Window
 
         TrayIcon.Icon = CreateTrayIcon();
         LightsVisual.Content = _meshFactory.CreateStudioLights();
+        FriendOverlayPopup.CustomPopupPlacementCallback = (popupSize, targetSize, _) =>
+            GetFriendOverlayPlacements(popupSize, targetSize, VisualTreeHelper.GetDpi(PetLayout),
+                FriendOverlayCard.Margin, PetMessageRow.ActualHeight);
 
         SizeChanged += (_, e) =>
         {
@@ -97,6 +103,8 @@ public partial class PetWindow : Window
             {
                 Top += e.PreviousSize.Height - e.NewSize.Height;
             }
+
+            FriendOverlayPopup.PlacementRectangle = new Rect(e.NewSize);
         };
         PetViewport.SizeChanged += (_, _) => UpdateNameplatePosition();
 
@@ -241,6 +249,27 @@ public partial class PetWindow : Window
         SetPetControlsVisible(true);
     }
 
+    internal static CustomPopupPlacement[] GetFriendOverlayPlacements(
+        Size popupSize, Size targetSize, DpiScale dpi, Thickness cardMargin, double messageRowHeight)
+    {
+        // WPF는 카드의 여백을 뺀 크기를 전달한다. 그림자 여백까지 포함해 창 바깥에 배치한다.
+        var popupWidth = popupSize.Width + (cardMargin.Left + cardMargin.Right) * dpi.DpiScaleX;
+        var popupHeight = popupSize.Height + (cardMargin.Top + cardMargin.Bottom) * dpi.DpiScaleY;
+        var gapX = FriendOverlayGap * dpi.DpiScaleX;
+        var gapY = FriendOverlayGap * dpi.DpiScaleY;
+        var preferredTop = (messageRowHeight + FriendOverlayTopInset) * dpi.DpiScaleY;
+        var sideTop = Math.Min(preferredTop, Math.Max(0, targetSize.Height - popupHeight));
+        var centerX = (targetSize.Width - popupWidth) / 2;
+
+        return
+        [
+            new(new Point(-popupWidth - gapX, sideTop), PopupPrimaryAxis.Vertical),
+            new(new Point(targetSize.Width + gapX, sideTop), PopupPrimaryAxis.Vertical),
+            new(new Point(centerX, -popupHeight - gapY), PopupPrimaryAxis.Horizontal),
+            new(new Point(centerX, targetSize.Height + gapY), PopupPrimaryAxis.Horizontal)
+        ];
+    }
+
     private void OverlaySurface_MouseEnter(object sender, MouseEventArgs e) => CancelOverlayCloseUnlessEditorLeft();
 
     private void OverlaySurface_MouseLeave(object sender, MouseEventArgs e) => ScheduleOverlayClose();
@@ -284,7 +313,7 @@ public partial class PetWindow : Window
         {
             PetControls.IsHitTestVisible = visible;
             PetControls.BeginAnimation(OpacityProperty,
-                new DoubleAnimation(visible ? 0.95 : 0.0, TimeSpan.FromMilliseconds(visible ? 180 : 250)));
+                new DoubleAnimation(visible ? 1.0 : 0.0, TimeSpan.FromMilliseconds(visible ? 180 : 250)));
         }
     }
 

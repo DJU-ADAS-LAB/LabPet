@@ -26,6 +26,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\LabPet.Shared\LabPet.Shared.csproj" />
+    <InternalsVisibleTo Include="LabPet.Tests" />
   </ItemGroup>
 
   <ItemGroup>

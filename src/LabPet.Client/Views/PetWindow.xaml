@@ -86,7 +86,7 @@
         </Style>
     </Window.Resources>
 
-    <Grid Background="Transparent" UseLayoutRounding="True" TextOptions.TextFormattingMode="Display">
+    <Grid x:Name="PetLayout" Background="Transparent" UseLayoutRounding="True" TextOptions.TextFormattingMode="Display">
         <Grid.RowDefinitions>
             <RowDefinition x:Name="PetMessageRow" Height="Auto" MinHeight="78" />
             <RowDefinition Height="Auto" />
@@ -356,10 +356,8 @@
 
         <!-- 마우스 오버레이 미니멀 주변 친구 퀵 팝업 -->
         <Popup x:Name="FriendOverlayPopup"
-               PlacementTarget="{Binding ElementName=PetViewport}"
-               Placement="Left"
-               HorizontalOffset="-4"
-               VerticalOffset="12"
+               PlacementTarget="{Binding ElementName=PetLayout}"
+               Placement="Custom"
                AllowsTransparency="True"
                StaysOpen="True"
                PopupAnimation="Fade">
@@ -495,76 +493,76 @@
         </Popup>
 
         <!-- 이름·레벨 바와 외형 조절바가 함께 펫 하단에 표시된다. -->
-        <StackPanel x:Name="PetControls"
-                    Grid.Row="2"
-                    HorizontalAlignment="Center"
-                    VerticalAlignment="Top"
-                    Width="166"
-                    Background="Transparent"
-                    Opacity="0"
-                    IsHitTestVisible="False"
-                    MouseEnter="OverlaySurface_MouseEnter"
-                    MouseLeave="OverlaySurface_MouseLeave"
-                    LostMouseCapture="OverlaySurface_MouseLeave">
-            <StackPanel.RenderTransform>
-                <TranslateTransform x:Name="PetNameplateOffset" />
-            </StackPanel.RenderTransform>
-            <Border HorizontalAlignment="Center"
-                    Padding="10,2"
-                    CornerRadius="10"
-                    Background="#DCFFFFFF"
-                    BorderBrush="#FFE8ECF4"
-                    BorderThickness="1">
-                <TextBlock Text="{Binding TrayTooltip}"
-                           FontSize="10.5"
-                           FontWeight="Bold"
-                           TextTrimming="CharacterEllipsis"
-                           Foreground="#FF4B5563" />
-            </Border>
-            <Border Margin="0,3,0,0"
-                    Padding="7,2"
-                    CornerRadius="9"
-                    Background="#F5FFFFFF"
-                    BorderBrush="#FFE6EAF2"
-                    BorderThickness="1">
-                <Grid>
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="26" />
-                        <ColumnDefinition Width="*" />
-                        <ColumnDefinition Width="32" />
-                    </Grid.ColumnDefinitions>
-                    <Grid.RowDefinitions>
-                        <RowDefinition Height="16" />
-                        <RowDefinition Height="16" />
-                    </Grid.RowDefinitions>
+        <Border Grid.Row="2" HorizontalAlignment="Center" VerticalAlignment="Top"
+                Opacity="{Binding PetOpacity}">
+            <StackPanel x:Name="PetControls"
+                        Width="166"
+                        Background="Transparent"
+                        Opacity="0"
+                        IsHitTestVisible="False"
+                        MouseEnter="OverlaySurface_MouseEnter"
+                        MouseLeave="OverlaySurface_MouseLeave"
+                        LostMouseCapture="OverlaySurface_MouseLeave">
+                <StackPanel.RenderTransform>
+                    <TranslateTransform x:Name="PetNameplateOffset" />
+                </StackPanel.RenderTransform>
+                <Border HorizontalAlignment="Center"
+                        Padding="10,2"
+                        CornerRadius="10"
+                        Background="#DCFFFFFF"
+                        BorderBrush="#FFE8ECF4"
+                        BorderThickness="1">
+                    <TextBlock Text="{Binding TrayTooltip}"
+                               FontSize="10.5"
+                               FontWeight="Bold"
+                               TextTrimming="CharacterEllipsis"
+                               Foreground="#FF4B5563" />
+                </Border>
+                <Border Margin="0,3,0,0"
+                        Padding="7,2"
+                        CornerRadius="9"
+                        Background="#F5FFFFFF"
+                        BorderBrush="#FFE6EAF2"
+                        BorderThickness="1">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="26" />
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="32" />
+                        </Grid.ColumnDefinitions>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="16" />
+                            <RowDefinition Height="16" />
+                        </Grid.RowDefinitions>
 
-                    <TextBlock Grid.Row="0" Grid.Column="0" Text="크기" FontSize="10.5" Foreground="#FF6B7280" VerticalAlignment="Center" />
-                    <Slider Grid.Row="0" Grid.Column="1"
-                            Style="{StaticResource CompactAppearanceSlider}"
-                            AutomationProperties.Name="펫 크기"
-                            Minimum="{x:Static models:PetProfile.MinimumPetScale}"
-                            Maximum="{x:Static models:PetProfile.MaximumPetScale}"
-                            Value="{Binding PetScale, Mode=TwoWay}"
-                            TickFrequency="0.05"
-                            IsSnapToTickEnabled="True"
-                            VerticalAlignment="Center"
-                            Margin="4,0" />
-                    <TextBlock Grid.Row="0" Grid.Column="2" Text="{Binding PetScalePercentText}" FontSize="10" FontWeight="SemiBold" Foreground="#FF4B5563" HorizontalAlignment="Right" VerticalAlignment="Center" />
+                        <TextBlock Grid.Row="0" Grid.Column="0" Text="크기" FontSize="10.5" Foreground="#FF6B7280" VerticalAlignment="Center" />
+                        <Slider Grid.Row="0" Grid.Column="1"
+                                Style="{StaticResource CompactAppearanceSlider}"
+                                AutomationProperties.Name="펫 크기"
+                                Minimum="{x:Static models:PetProfile.MinimumPetScale}"
+                                Maximum="{x:Static models:PetProfile.MaximumPetScale}"
+                                Value="{Binding PetScale, Mode=TwoWay}"
+                                TickFrequency="0.05"
+                                IsSnapToTickEnabled="True"
+                                VerticalAlignment="Center"
+                                Margin="4,0" />
+                        <TextBlock Grid.Row="0" Grid.Column="2" Text="{Binding PetScalePercentText}" FontSize="10" FontWeight="SemiBold" Foreground="#FF4B5563" HorizontalAlignment="Right" VerticalAlignment="Center" />
 
-                    <TextBlock Grid.Row="1" Grid.Column="0" Text="투명" FontSize="10.5" Foreground="#FF6B7280" VerticalAlignment="Center" />
-                    <Slider Grid.Row="1" Grid.Column="1"
-                            Style="{StaticResource CompactAppearanceSlider}"
-                            AutomationProperties.Name="펫 투명도"
-                            Minimum="0.25"
-                            Maximum="1.0"
-                            Value="{Binding PetOpacity, Mode=TwoWay}"
-                            TickFrequency="0.05"
-                            IsSnapToTickEnabled="True"
-                            VerticalAlignment="Center"
-                            Margin="4,0" />
-                    <TextBlock Grid.Row="1" Grid.Column="2" Text="{Binding PetOpacityPercentText}" FontSize="10" FontWeight="SemiBold" Foreground="#FF4B5563" HorizontalAlignment="Right" VerticalAlignment="Center" />
-                </Grid>
-            </Border>
-        </StackPanel>
+                        <TextBlock Grid.Row="1" Grid.Column="0" Text="투명" FontSize="10.5" Foreground="#FF6B7280" VerticalAlignment="Center" />
+                        <Slider Grid.Row="1" Grid.Column="1"
+                                Style="{StaticResource CompactAppearanceSlider}"
+                                AutomationProperties.Name="펫 투명도"
+                                Minimum="0.25"
+                                Maximum="1.0"
+                                Value="{Binding PetOpacity, Mode=TwoWay}"
+                                TickFrequency="0.05"
+                                IsSnapToTickEnabled="True"
+                                VerticalAlignment="Center"
+                                Margin="4,0" />
+                        <TextBlock Grid.Row="1" Grid.Column="2" Text="{Binding PetOpacityPercentText}" FontSize="10" FontWeight="SemiBold" Foreground="#FF4B5563" HorizontalAlignment="Right" VerticalAlignment="Center" />
+                    </Grid>
+                </Border>
+            </StackPanel>
+        </Border>
     </Grid>
 </Window>
