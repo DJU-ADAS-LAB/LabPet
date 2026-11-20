@@ -114,6 +114,53 @@ public sealed class SocialCoordinatorTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task FriendRegistration_AcceptAloneSavesTheSameKeyOnBothPeers()
+    {
+        var requesterTransport = new LanP2pTransport(udpDiscoveryPort: 0, udpMusicPort: 0, tcpControlPort: 0);
+        var requesterStore = new JsonAppDataStore(new StateMigrator(), Path.Combine(_dataDirectory, "requester"));
+        await using var requester = new SocialCoordinatorService(requesterTransport, requesterStore, new SoloProgressionService());
+        var requesterProfile = new PetProfile { PetName = "신청자" };
+        await requester.StartAsync(requesterProfile);
+
+        var arrived = new TaskCompletionSource<PendingFriendRequest>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var requesterAccepted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var hostAccepted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        _host.FriendRequestArrived += (_, request) => arrived.TrySetResult(request);
+        _host.SocialNotification += (_, message) =>
+        {
+            if (message.Contains("친구 신청을 수락했어요", StringComparison.Ordinal))
+            {
+                hostAccepted.TrySetResult();
+            }
+        };
+        requester.SocialNotification += (_, message) =>
+        {
+            if (message.Contains("친구 신청을 수락했어요", StringComparison.Ordinal))
+            {
+                requesterAccepted.TrySetResult();
+            }
+        };
+        Assert.True(await requester.SendFriendRequestAsync(new PeerSnapshot
+        {
+            PetId = _hostProfile.PetId, IpAddress = IPAddress.Loopback.ToString(), TcpPort = _hostTransport.BoundTcpPort
+        }));
+        var pending = await arrived.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Empty(requester.Friends);
+        Assert.DoesNotContain(_host.Friends, friend => friend.PetId == requesterProfile.PetId);
+
+        Assert.True(await _host.RespondFriendRequestAsync(pending, accept: true));
+        await Task.WhenAll(requesterAccepted.Task, hostAccepted.Task).WaitAsync(TimeSpan.FromSeconds(5));
+
+        var hostEntry = Assert.Single((await requesterStore.LoadFriendsAsync()).Friends);
+        var requesterEntry = Assert.Single((await _store.LoadFriendsAsync()).Friends,
+            friend => friend.PetId == requesterProfile.PetId);
+        Assert.Equal(_hostProfile.PetId, hostEntry.PetId);
+        Assert.Equal(ProtocolConstants.PairSecretByteLength, Convert.FromBase64String(hostEntry.PairSecretBase64).Length);
+        Assert.Equal(hostEntry.PairSecretBase64, requesterEntry.PairSecretBase64);
+        Assert.True(await requester.SendBubbleMessageAsync(hostEntry, "등록 직후 메시지"));
+    }
+
+    [Fact]
     public async Task RegistrationAndConcurrentMessages_PersistAllChangesAndKeepEarlierFriendSnapshotStable()
     {
         const int messagesPerDirection = 8;
@@ -128,8 +175,6 @@ public sealed class SocialCoordinatorTests : IAsyncLifetime
         var registration = new TaskCompletionSource<LabPet.Shared.Transport.FriendRequestReceivedEventArgs>(
             TaskCreationOptions.RunContinuationsAsynchronously);
         newPeer.FriendRequestReceived += (_, e) => registration.TrySetResult(e);
-        var code = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
-        _host.PairingCodeReady += (_, value) => code.TrySetResult(value);
         var newPeerKey = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
         newPeer.FriendAccepted += (_, e) => newPeerKey.TrySetResult(e.PairSecretBase64);
         Assert.True(await _host.SendFriendRequestAsync(new PeerSnapshot
@@ -176,8 +221,7 @@ public sealed class SocialCoordinatorTests : IAsyncLifetime
         {
             await saveStarted.Task.WaitAsync(TimeSpan.FromSeconds(15));
             var request = await registration.Task.WaitAsync(TimeSpan.FromSeconds(5));
-            Assert.True(await newPeer.RespondFriendRequestAsync(
-                request.RequestId, accept: true, await code.Task.WaitAsync(TimeSpan.FromSeconds(5))));
+            Assert.True(await newPeer.RespondFriendRequestAsync(request.RequestId, accept: true));
 
             // 앞선 저장이 대기 중이어도 새 친구의 첫 메시지는 바로 인증된다.
             var hostAsNewFriend = _hostAsFriend.Clone();

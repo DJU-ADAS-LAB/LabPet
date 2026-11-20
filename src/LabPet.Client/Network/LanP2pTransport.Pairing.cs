@@ -15,10 +15,9 @@ public sealed partial class LanP2pTransport
     private readonly Dictionary<string, OutgoingPairing> _outgoingPairings = new(StringComparer.Ordinal);
     private readonly Dictionary<string, IncomingPairing> _incomingPairings = new(StringComparer.Ordinal);
 
-    private sealed class OutgoingPairing(string peerId, string code) : IDisposable
+    private sealed class OutgoingPairing(string peerId) : IDisposable
     {
         public string PeerId { get; } = peerId;
-        public string Code { get; private set; } = code;
         public ECDiffieHellman Key { get; } = ECDiffieHellman.Create(ECCurve.NamedCurves.nistP256);
         public string PublicKey => Convert.ToBase64String(Key.ExportSubjectPublicKeyInfo());
         public string RequestFingerprint { get; set; } = string.Empty;
@@ -30,7 +29,6 @@ public sealed partial class LanP2pTransport
         {
             ConfirmedPublicKey = publicKey;
             ConfirmationKey = confirmationKey;
-            Code = string.Empty;
             Key.Dispose();
         }
 
@@ -50,11 +48,10 @@ public sealed partial class LanP2pTransport
     }
 
     public async Task<bool> SendFriendRequestAsync(
-        PeerSnapshot target, string verificationCode, CancellationToken cancellationToken = default)
+        PeerSnapshot target, CancellationToken cancellationToken = default)
     {
         if (target.RequiresUpdate || string.IsNullOrWhiteSpace(target.IpAddress)
-            || string.IsNullOrWhiteSpace(target.PetId) || !IsValidPort(target.TcpPort)
-            || !PacketCrypto.IsPairingCode(verificationCode))
+            || string.IsNullOrWhiteSpace(target.PetId) || !IsValidPort(target.TcpPort))
         {
             return false;
         }
@@ -71,7 +68,7 @@ public sealed partial class LanP2pTransport
                 return false;
             }
 
-            var pending = new OutgoingPairing(target.PetId, verificationCode);
+            var pending = new OutgoingPairing(target.PetId);
             payload = new FriendRequestPayload
             {
                 RequestId = requestId,
@@ -103,13 +100,8 @@ public sealed partial class LanP2pTransport
     }
 
     public async Task<bool> RespondFriendRequestAsync(
-        string requestId, bool accept, string? verificationCode, CancellationToken cancellationToken = default)
+        string requestId, bool accept, CancellationToken cancellationToken = default)
     {
-        if (accept && !PacketCrypto.IsPairingCode(verificationCode))
-        {
-            return false;
-        }
-
         IncomingPairing pending;
         string? publicKey = null;
         (string ConfirmationKey, string FriendKey)? keys = null;
@@ -126,8 +118,8 @@ public sealed partial class LanP2pTransport
             {
                 pending.ReplyKey ??= ECDiffieHellman.Create(ECCurve.NamedCurves.nistP256);
                 publicKey = Convert.ToBase64String(pending.ReplyKey.ExportSubjectPublicKeyInfo());
-                keys = PacketCrypto.DerivePairingKeys(pending.ReplyKey, pending.PublicKey, verificationCode!,
-                    requestId, pending.Request.RequesterPetId, _localPetId, pending.PublicKey, publicKey,
+                keys = PacketCrypto.DerivePairingKeys(pending.ReplyKey, pending.PublicKey, requestId,
+                    pending.Request.RequesterPetId, _localPetId, pending.PublicKey, publicKey,
                     pending.RequestFingerprint);
                 if (keys is null)
                 {
@@ -237,8 +229,8 @@ public sealed partial class LanP2pTransport
                 return false;
             }
 
-            var keys = PacketCrypto.DerivePairingKeys(pending.Key, payload.PublicKey, pending.Code,
-                payload.RequestId, _localPetId, header.SenderPetId, pending.PublicKey, payload.PublicKey,
+            var keys = PacketCrypto.DerivePairingKeys(pending.Key, payload.PublicKey, payload.RequestId,
+                _localPetId, header.SenderPetId, pending.PublicKey, payload.PublicKey,
                 pending.RequestFingerprint);
             if (keys is not { } derived || !VerifyPlaintextSignature(envelope, derived.ConfirmationKey))
             {

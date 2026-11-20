@@ -5,7 +5,7 @@ namespace LabPet.Shared.Protocol;
 /// </summary>
 public static class ProtocolConstants
 {
-    /// <summary>친구 확인 코드·ECDH, 서명된 응답과 탐색 검증을 사용하는 제어 프로토콜 버전.</summary>
+    /// <summary>친구 등록 ECDH 키 합의, 서명된 응답과 탐색 검증을 사용하는 제어 프로토콜 버전.</summary>
     public const int CurrentProtocolVersion = 3;
 
     /// <summary>이 클라이언트가 하위 호환으로 수용할 수 있는 최소 프로토콜 버전.</summary>

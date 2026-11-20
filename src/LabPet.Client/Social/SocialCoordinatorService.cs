@@ -57,7 +57,6 @@ public sealed class SocialCoordinatorService : IAsyncDisposable
 
     public event EventHandler? StateChanged;
     public event EventHandler<PendingFriendRequest>? FriendRequestArrived;
-    public event EventHandler<string>? PairingCodeReady;
     public event EventHandler<ReceivedFriendMessage>? FriendMessageReceived;
     public event EventHandler<string>? SocialNotification;
     public event EventHandler? PetReactionTriggered;
@@ -199,28 +198,20 @@ public sealed class SocialCoordinatorService : IAsyncDisposable
         return false;
     }
 
-    public async Task<bool> SendFriendRequestAsync(PeerSnapshot peer)
-    {
-        var code = PacketCrypto.GeneratePairingCode();
-        if (!await _transport.SendFriendRequestAsync(peer, code).ConfigureAwait(false))
-        {
-            return false;
-        }
-        PairingCodeReady?.Invoke(this, code);
-        return true;
-    }
+    public Task<bool> SendFriendRequestAsync(PeerSnapshot peer)
+        => _transport.SendFriendRequestAsync(peer);
 
     public Task<bool> SendGameEventAsync(FriendEntry friend, GameEventPayload payload)
         => _transport.SendGameEventAsync(FindFriend(friend.PetId) ?? friend, payload);
 
     public string GetFriendDisplayName(string petId) => FindFriendName(petId);
 
-    public async Task<bool> RespondFriendRequestAsync(PendingFriendRequest request, bool accept, string? verificationCode)
+    public async Task<bool> RespondFriendRequestAsync(PendingFriendRequest request, bool accept)
     {
-        var sent = await _transport.RespondFriendRequestAsync(request.RequestId, accept, verificationCode).ConfigureAwait(false);
+        var sent = await _transport.RespondFriendRequestAsync(request.RequestId, accept).ConfigureAwait(false);
         if (accept && !sent)
         {
-            SocialNotification?.Invoke(this, "친구 확인에 실패했습니다. 상대가 공유한 코드와 신청 유효 시간을 확인해 주세요.");
+            SocialNotification?.Invoke(this, "친구 등록에 실패했습니다. 연결 상태와 신청 유효 시간을 확인해 주세요.");
         }
         return sent;
     }

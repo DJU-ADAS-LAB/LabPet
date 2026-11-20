@@ -40,12 +40,11 @@ public interface ISocialTransport : IAsyncDisposable
     /// <summary>현재 관측된 온라인 피어 목록 스냅샷을 반환한다.</summary>
     IReadOnlyList<PeerSnapshot> GetDiscoveredPeers();
 
-    Task<bool> SendFriendRequestAsync(PeerSnapshot target, string verificationCode, CancellationToken cancellationToken = default);
+    Task<bool> SendFriendRequestAsync(PeerSnapshot target, CancellationToken cancellationToken = default);
 
     Task<bool> RespondFriendRequestAsync(
         string requestId,
         bool accept,
-        string? verificationCode,
         CancellationToken cancellationToken = default);
 
     Task<bool> SendBubbleMessageAsync(FriendEntry friend, string message, CancellationToken cancellationToken = default);

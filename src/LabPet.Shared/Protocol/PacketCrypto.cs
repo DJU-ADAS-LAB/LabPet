@@ -13,14 +13,6 @@ public static class PacketCrypto
     private static readonly byte[] AesKeyDerivationInfo = Encoding.UTF8.GetBytes("LabPet-v3-AES256GCM-ControlPayload");
     private const int P256PublicKeyBase64Length = 124;
 
-    public const int PairingCodeLength = 32;
-
-    public static string GeneratePairingCode()
-        => Convert.ToHexString(RandomNumberGenerator.GetBytes(PairingCodeLength / 2));
-
-    public static bool IsPairingCode(string? code)
-        => code is { Length: PairingCodeLength } && code.All(Uri.IsHexDigit);
-
     public static bool IsPairingPublicKey(string? encodedKey)
     {
         using var key = ECDiffieHellman.Create();
@@ -28,15 +20,10 @@ public static class PacketCrypto
     }
 
     public static (string ConfirmationKey, string FriendKey)? DerivePairingKeys(
-        ECDiffieHellman localKey, string remotePublicKey, string code, string requestId,
+        ECDiffieHellman localKey, string remotePublicKey, string requestId,
         string requesterId, string accepterId, string requesterPublicKey, string accepterPublicKey,
         string requestFingerprint)
     {
-        if (!IsPairingCode(code))
-        {
-            return null;
-        }
-
         using var remote = ECDiffieHellman.Create();
         if (!TryImportPairingPublicKey(remote, remotePublicKey))
         {
@@ -45,7 +32,6 @@ public static class PacketCrypto
 
         using var publicKey = remote.PublicKey;
         var agreement = localKey.DeriveRawSecretAgreement(publicKey);
-        var salt = Convert.FromHexString(code);
         Span<byte> keys = stackalloc byte[2 * ProtocolConstants.PairSecretByteLength];
         try
         {
@@ -55,14 +41,13 @@ public static class PacketCrypto
                 "LabPet-v3-FriendPairing", requestId, requesterId, accepterId, requesterPublicKey, accepterPublicKey,
                 requestFingerprint
             });
-            HKDF.DeriveKey(HashAlgorithmName.SHA256, agreement, keys, salt, context);
+            HKDF.DeriveKey(HashAlgorithmName.SHA256, agreement, keys, salt: ReadOnlySpan<byte>.Empty, info: context);
             return (Convert.ToBase64String(keys[..ProtocolConstants.PairSecretByteLength]),
                 Convert.ToBase64String(keys[ProtocolConstants.PairSecretByteLength..]));
         }
         finally
         {
             CryptographicOperations.ZeroMemory(agreement);
-            CryptographicOperations.ZeroMemory(salt);
             CryptographicOperations.ZeroMemory(keys);
         }
     }

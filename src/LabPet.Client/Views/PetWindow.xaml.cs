@@ -135,7 +135,6 @@ public partial class PetWindow : Window
         _pomodoro.BreakCompleted += OnPomodoroBreakCompleted;
         _social.StateChanged += OnSocialStateChanged;
         _social.FriendRequestArrived += OnSocialFriendRequestArrived;
-        _social.PairingCodeReady += OnPairingCodeReady;
         _social.FriendMessageReceived += OnFriendMessageReceived;
         _social.SocialNotification += OnSocialNotification;
         _social.PetReactionTriggered += OnSocialPetReactionTriggered;
@@ -197,7 +196,6 @@ public partial class PetWindow : Window
             _pomodoro.BreakCompleted -= OnPomodoroBreakCompleted;
             _social.StateChanged -= OnSocialStateChanged;
             _social.FriendRequestArrived -= OnSocialFriendRequestArrived;
-            _social.PairingCodeReady -= OnPairingCodeReady;
             _social.FriendMessageReceived -= OnFriendMessageReceived;
             _social.SocialNotification -= OnSocialNotification;
             _social.PetReactionTriggered -= OnSocialPetReactionTriggered;
@@ -550,17 +548,6 @@ public partial class PetWindow : Window
         Dispatcher.BeginInvoke(() => _viewModel.PendingFriendRequest = request);
     }
 
-    private void OnPairingCodeReady(object? sender, string code)
-    {
-        Dispatcher.BeginInvoke(() =>
-        {
-            if (IsLoaded)
-            {
-                new PairingCodeWindow(code) { Owner = this }.ShowDialog();
-            }
-        });
-    }
-
     private void OnFriendMessageReceived(object? sender, ReceivedFriendMessage message)
     {
         Dispatcher.BeginInvoke(() =>
@@ -583,18 +570,7 @@ public partial class PetWindow : Window
 
     private async void OnFriendRequestResponded(object? sender, (PendingFriendRequest Request, bool Accept) args)
     {
-        string? code = null;
-        if (args.Accept)
-        {
-            var dialog = new PairingCodeWindow { Owner = this };
-            if (dialog.ShowDialog() != true)
-            {
-                _viewModel.PendingFriendRequest ??= args.Request;
-                return;
-            }
-            code = dialog.VerificationCode;
-        }
-        var ok = await _social.RespondFriendRequestAsync(args.Request, args.Accept, code);
+        var ok = await _social.RespondFriendRequestAsync(args.Request, args.Accept);
         if (args.Accept && !ok)
         {
             _viewModel.PendingFriendRequest ??= args.Request;

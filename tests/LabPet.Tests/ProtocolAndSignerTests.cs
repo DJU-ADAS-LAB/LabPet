@@ -9,24 +9,24 @@ namespace LabPet.Tests;
 public sealed class ProtocolAndSignerTests
 {
     [Fact]
-    public void PairingKeyAgreement_RequiresTheSameCodePeerRolesAndTranscript()
+    public void PairingKeyAgreement_BindsTheRequestPeerRolesAndTranscript()
     {
         using var requester = ECDiffieHellman.Create(ECCurve.NamedCurves.nistP256);
         using var acceptor = ECDiffieHellman.Create(ECCurve.NamedCurves.nistP256);
         var first = Convert.ToBase64String(requester.ExportSubjectPublicKeyInfo());
         var second = Convert.ToBase64String(acceptor.ExportSubjectPublicKeyInfo());
-        var code = PacketCrypto.GeneratePairingCode();
         var requestId = Guid.NewGuid().ToString("N");
-        var firstKeys = PacketCrypto.DerivePairingKeys(requester, second, code, requestId, "a", "b", first, second, "request");
-        var secondKeys = PacketCrypto.DerivePairingKeys(acceptor, first, code, requestId, "a", "b", first, second, "request");
+        var firstKeys = PacketCrypto.DerivePairingKeys(requester, second, requestId, "a", "b", first, second, "request");
+        var secondKeys = PacketCrypto.DerivePairingKeys(acceptor, first, requestId, "a", "b", first, second, "request");
         Assert.NotNull(firstKeys);
         Assert.Equal(firstKeys, secondKeys);
         Assert.NotEqual(firstKeys.Value.ConfirmationKey, firstKeys.Value.FriendKey);
-        Assert.NotEqual(firstKeys, PacketCrypto.DerivePairingKeys(acceptor, first, code, requestId, "a", "b", first, second, "different"));
-        Assert.NotEqual(firstKeys, PacketCrypto.DerivePairingKeys(acceptor, first, code, requestId, "a", "c", first, second, "request"));
-        Assert.Null(PacketCrypto.DerivePairingKeys(requester, "not-a-key", code, requestId, "a", "b", first, second, "request"));
+        Assert.NotEqual(firstKeys, PacketCrypto.DerivePairingKeys(acceptor, first, requestId, "a", "b", first, second, "different"));
+        Assert.NotEqual(firstKeys, PacketCrypto.DerivePairingKeys(acceptor, first, requestId, "a", "c", first, second, "request"));
+        Assert.NotEqual(firstKeys, PacketCrypto.DerivePairingKeys(acceptor, first, Guid.NewGuid().ToString("N"), "a", "b", first, second, "request"));
+        Assert.Null(PacketCrypto.DerivePairingKeys(requester, "not-a-key", requestId, "a", "b", first, second, "request"));
         var serialized = JsonSerializer.Serialize(new FriendAcceptPayload { RequestId = requestId, PublicKey = second }, ProtocolJson.PacketOptions);
-        Assert.DoesNotContain(code, serialized);
+        Assert.DoesNotContain(firstKeys.Value.ConfirmationKey, serialized);
         Assert.DoesNotContain(firstKeys.Value.FriendKey, serialized);
     }
 

@@ -103,8 +103,7 @@ public sealed class LanP2pTransportTests
             ProtocolVersion = ProtocolConstants.CurrentProtocolVersion
         };
 
-        var code = PacketCrypto.GeneratePairingCode();
-        var reqSent = await guest.SendFriendRequestAsync(hostPeerSnapshot, code);
+        var reqSent = await guest.SendFriendRequestAsync(hostPeerSnapshot);
         Assert.True(reqSent);
         var request = await requestTcs.Task.WaitAsync(TimeSpan.FromSeconds(3));
         Assert.Equal("민수", request.RequesterOwnerName);
@@ -116,15 +115,14 @@ public sealed class LanP2pTransportTests
         guest.FriendAccepted += (_, e) => acceptTcs.TrySetResult(e.PairSecretBase64);
         host.FriendAccepted += (_, e) => hostAcceptTcs.TrySetResult(e.PairSecretBase64);
 
-        Assert.False(await host.RespondFriendRequestAsync(Guid.NewGuid().ToString("N"), true, code));
-        Assert.False(await host.RespondFriendRequestAsync(request.RequestId, true, PacketCrypto.GeneratePairingCode()));
+        Assert.False(await host.RespondFriendRequestAsync(Guid.NewGuid().ToString("N"), true));
         Assert.False(acceptTcs.Task.IsCompleted);
         Assert.False(hostAcceptTcs.Task.IsCompleted);
-        var acceptSent = await host.RespondFriendRequestAsync(request.RequestId, accept: true, code);
+        var acceptSent = await host.RespondFriendRequestAsync(request.RequestId, accept: true);
         Assert.True(acceptSent);
         var pairSecret = await acceptTcs.Task.WaitAsync(TimeSpan.FromSeconds(3));
         Assert.Equal(pairSecret, await hostAcceptTcs.Task.WaitAsync(TimeSpan.FromSeconds(3)));
-        Assert.False(await host.RespondFriendRequestAsync(request.RequestId, true, code));
+        Assert.False(await host.RespondFriendRequestAsync(request.RequestId, true));
 
         // 양쪽 친구 테이블 등록
         var guestAsFriend = new FriendEntry

@@ -31,7 +31,7 @@ related:
 - **받은 친구 메시지**에는 본문, 발신자 이름, 펫 외형이 전달된다. 탐색 정보에 외형이 있으면 이를 사용하고, 그렇지 않으면 친구 목록에 저장된 외형을 사용한다. [소셜 코디네이터](../../src/LabPet.Client/Social/SocialCoordinatorService.cs), [펫 창 XAML](../../src/LabPet.Client/Views/PetWindow.xaml)
 - **구현 파일**: [LanP2pTransport.cs](../../src/LabPet.Client/Network/LanP2pTransport.cs), [SocialCoordinatorService.cs](../../src/LabPet.Client/Social/SocialCoordinatorService.cs), [SocialWindow.xaml.cs](../../src/LabPet.Client/Views/SocialWindow.xaml.cs), [VisitorPetWindow.xaml.cs](../../src/LabPet.Client/Views/VisitorPetWindow.xaml.cs), [PetWindow.xaml.cs](../../src/LabPet.Client/Views/PetWindow.xaml.cs), [CoinGamesViewModel.cs](../../src/LabPet.Client/ViewModels/CoinGamesViewModel.cs)
 - **동작 규칙**:
-  - TCP `45680`에서 별도로 전달한 확인 코드와 P-256 ECDH로 신규 친구를 인증한다. 수락 서명과 ACK가 검증되면 키를 DPAPI로 보호해 저장한다. [친구 등록](../../src/LabPet.Client/Network/LanP2pTransport.Pairing.cs)
+  - 친구 신청의 수락 버튼을 누르면 TCP `45680`에서 P-256 ECDH 키 합의를 자동으로 수행한다. 수락의 키 확인 서명과 ACK가 검증되면 키를 DPAPI로 보호해 저장한다. [친구 등록](../../src/LabPet.Client/Network/LanP2pTransport.Pairing.cs)
   - 친구 전용 제어 패킷(`BubbleMessage`, `QuickReaction`, `PetInteraction`, `MusicFollowOn/Off`, `GameEvent`)은 프로토콜 v3에서 `AES-256-GCM`(HKDF-SHA256 파생 키 + 헤더 AAD) 암호화 전송과 `HMACSHA256` 서명 검증을 모두 필수로 적용하며(미암호화 친구 패킷은 `ENCRYPTION_REQUIRED`로 차단), UDP `45679` 오디오 프레임도 `HMACSHA256` 서명 검증으로 비친구/위변조를 차단
   - 다중 네트워크 어댑터 환경에서 TCP 수신 시 검증된 친구의 실제 발신 IP(`remoteIp`)로 탐색 캐시를 즉시 동기화하고, 제어 패킷 송신 실패 시 `LastKnownIp` 보조 주소로 1회 폴백 재시도
   - 노래 따라하기 구독 시 호스트가 구독 중인 친구 IP 목록에만 30Hz 유니캐스트 송신, 곡 간 전환·잠시 일시정지 중에는 팔로우를 유지하며 15초 패킷 미수신 또는 3분 완전 무음 시에만 팔로워 자동 로컬 모드 복귀(미재생·재생 중·따라하기 중 3단계 버튼 시각 구분 및 호스트 무음 중 로컬 음악 우선 옵션 지원)
