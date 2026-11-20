@@ -256,21 +256,35 @@
                                             BorderBrush="{StaticResource BorderSubtleBrush}"
                                             BorderThickness="1"
                                             CornerRadius="16"
-                                            Padding="16">
+                                            Padding="14,10">
                                         <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center">
-                                            <Border Width="116" Height="132"
+                                            <Border Background="#FFF1F5F9"
+                                                    CornerRadius="8"
+                                                    Padding="10,3"
+                                                    HorizontalAlignment="Center"
+                                                    Margin="0,0,0,8">
+                                                <TextBlock Text="카드 숫자 범위: 1 (A) ~ 13 (K) · 같은 숫자는 무승부"
+                                                           FontSize="11"
+                                                           FontWeight="SemiBold"
+                                                           Foreground="#FF475569" />
+                                            </Border>
+                                            <Border MinWidth="156"
+                                                    Height="96"
+                                                    Padding="16,6"
                                                     CornerRadius="16"
                                                     Background="White"
                                                     BorderBrush="{StaticResource BrandPinkBorderBrush}"
                                                     BorderThickness="2"
                                                     Effect="{StaticResource SoftCardShadow}"
                                                     HorizontalAlignment="Center">
-                                                <TextBlock Text="{Binding Games.HiLowCardDisplay}"
-                                                           FontSize="34"
-                                                           FontWeight="Bold"
-                                                           Foreground="{StaticResource TextPrimaryBrush}"
-                                                           HorizontalAlignment="Center"
-                                                           VerticalAlignment="Center" />
+                                                <Viewbox StretchDirection="DownOnly" HorizontalAlignment="Center" VerticalAlignment="Center">
+                                                    <TextBlock Text="{Binding Games.HiLowCardDisplay}"
+                                                               FontSize="30"
+                                                               FontWeight="Bold"
+                                                               Foreground="{StaticResource TextPrimaryBrush}"
+                                                               HorizontalAlignment="Center"
+                                                               VerticalAlignment="Center" />
+                                                </Viewbox>
                                             </Border>
                                             <TextBlock Text="{Binding Games.HiLowStatusMessage}"
                                                        FontSize="12"
@@ -278,7 +292,7 @@
                                                        Foreground="{StaticResource TextSecondaryBrush}"
                                                        TextAlignment="Center"
                                                        TextWrapping="Wrap"
-                                                       Margin="0,12,0,0" />
+                                                       Margin="0,10,0,0" />
                                         </StackPanel>
                                     </Border>
 
@@ -334,7 +348,7 @@
                                                       Height="30" />
                                         </StackPanel>
                                         <Button DockPanel.Dock="Right"
-                                                Content="도전 보내기"
+                                                Content="{Binding Games.RpsInviteButtonText}"
                                                 Style="{StaticResource PrimaryButtonStyle}"
                                                 Command="{Binding Games.SendRpsInviteCommand}"
                                                 IsEnabled="{Binding Games.HasOnlineFriends}"
@@ -435,7 +449,7 @@
                                                     Padding="11,5"
                                                     Height="32"
                                                     Margin="0,0,6,0" />
-                                            <Button Content="대결 신청"
+                                            <Button Content="{Binding Games.TypingInviteButtonText}"
                                                     Style="{StaticResource PrimaryButtonStyle}"
                                                     Command="{Binding Games.SendTypingInviteCommand}"
                                                     IsEnabled="{Binding Games.HasOnlineFriends}"
@@ -504,11 +518,12 @@
                                 <Grid Margin="4,6,4,0">
                                     <Grid.RowDefinitions>
                                         <RowDefinition Height="Auto" />
+                                        <RowDefinition Height="Auto" />
                                         <RowDefinition Height="*" />
                                         <RowDefinition Height="Auto" />
                                     </Grid.RowDefinitions>
 
-                                    <Grid Grid.Row="0" Margin="0,0,0,8">
+                                    <Grid Grid.Row="0" Margin="0,0,0,6">
                                         <Grid.ColumnDefinitions>
                                             <ColumnDefinition Width="*" />
                                             <ColumnDefinition Width="10" />
@@ -516,10 +531,10 @@
                                         </Grid.ColumnDefinitions>
                                         <StackPanel Grid.Column="0">
                                             <DockPanel Margin="0,0,0,3" LastChildFill="False">
-                                                <TextBlock DockPanel.Dock="Left" Text="참여자 (쉼표 구분, 2~8명)" FontSize="11" FontWeight="SemiBold" Foreground="{StaticResource TextSecondaryBrush}" VerticalAlignment="Center" />
+                                                <TextBlock DockPanel.Dock="Left" Text="참여자 (혼자 돌릴 때, 2~8명)" FontSize="11" FontWeight="SemiBold" Foreground="{StaticResource TextSecondaryBrush}" VerticalAlignment="Center" />
                                                 <Button DockPanel.Dock="Right" Content="친구 불러오기" Command="{Binding Games.LoadOnlineFriendsToLadderCommand}" Padding="7,2" FontSize="10.5" Height="22" />
                                             </DockPanel>
-                                            <TextBox Text="{Binding Games.LadderParticipantsText, UpdateSourceTrigger=PropertyChanged}" Height="30" FontSize="12" />
+                                            <TextBox Text="{Binding Games.LadderParticipantsText, UpdateSourceTrigger=PropertyChanged}" Height="28" FontSize="11.5" />
                                         </StackPanel>
                                         <StackPanel Grid.Column="2">
                                             <DockPanel Margin="0,0,0,3" LastChildFill="False">
@@ -529,11 +544,70 @@
                                                     <Button Content="💰 잭팟" Command="{Binding Games.ApplyCoinJackpotPresetCommand}" Padding="6,2" FontSize="10.5" Height="22" />
                                                 </StackPanel>
                                             </DockPanel>
-                                            <TextBox Text="{Binding Games.LadderPrizesText, UpdateSourceTrigger=PropertyChanged}" Height="30" FontSize="12" />
+                                            <TextBox Text="{Binding Games.LadderPrizesText, UpdateSourceTrigger=PropertyChanged}" Height="28" FontSize="11.5" />
                                         </StackPanel>
                                     </Grid>
 
-                                    <Grid Grid.Row="1">
+                                    <!-- LAN 공동 사다리방 대기실: 전원 입장 후 원하는 시작 번호를 고르면 동시 시작 -->
+                                    <Border Grid.Row="1"
+                                            Visibility="{Binding Games.IsLadderRoomOpen, Converter={StaticResource BoolToVis}}"
+                                            Background="#FFFFF5F8"
+                                            BorderBrush="#FFFFB3C9"
+                                            BorderThickness="1.2"
+                                            CornerRadius="12"
+                                            Padding="10,7"
+                                            Margin="0,0,0,6">
+                                        <StackPanel>
+                                            <DockPanel LastChildFill="False" Margin="0,0,0,6">
+                                                <TextBlock DockPanel.Dock="Left"
+                                                           Text="{Binding Games.LadderLobbySummaryText}"
+                                                           FontSize="11.5"
+                                                           FontWeight="Bold"
+                                                           Foreground="#FFE11D48"
+                                                           VerticalAlignment="Center" />
+                                                <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
+                                                    <Button Content="▶ 지금 인원으로 시작"
+                                                            Style="{StaticResource PrimaryButtonStyle}"
+                                                            Command="{Binding Games.ForceStartLadderRoomCommand}"
+                                                            IsEnabled="{Binding Games.CanForceStartLadderRoom}"
+                                                            Visibility="{Binding Games.IsLadderHost, Converter={StaticResource BoolToVis}}"
+                                                            Padding="9,3"
+                                                            FontSize="10.5"
+                                                            Height="24"
+                                                            Margin="0,0,5,0" />
+                                                    <Button Content="취소"
+                                                            Command="{Binding Games.CancelLadderRoomCommand}"
+                                                            Padding="8,3"
+                                                            FontSize="10.5"
+                                                            Height="24" />
+                                                </StackPanel>
+                                            </DockPanel>
+                                            <ItemsControl ItemsSource="{Binding Games.LadderSlots}">
+                                                <ItemsControl.ItemsPanel>
+                                                    <ItemsPanelTemplate>
+                                                        <UniformGrid Rows="1" />
+                                                    </ItemsPanelTemplate>
+                                                </ItemsControl.ItemsPanel>
+                                                <ItemsControl.ItemTemplate>
+                                                    <DataTemplate>
+                                                        <Button Command="{Binding DataContext.Games.PickLadderSlotCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                                CommandParameter="{Binding ColumnIndex}"
+                                                                IsEnabled="{Binding CanPick}"
+                                                                Margin="2,0"
+                                                                Padding="4,4"
+                                                                Height="40">
+                                                            <StackPanel HorizontalAlignment="Center">
+                                                                <TextBlock Text="{Binding HeaderText}" FontSize="11" FontWeight="Bold" HorizontalAlignment="Center" />
+                                                                <TextBlock Text="{Binding OccupantText}" FontSize="9.5" Foreground="#FF6B7280" HorizontalAlignment="Center" TextTrimming="CharacterEllipsis" />
+                                                            </StackPanel>
+                                                        </Button>
+                                                    </DataTemplate>
+                                                </ItemsControl.ItemTemplate>
+                                            </ItemsControl>
+                                        </StackPanel>
+                                    </Border>
+
+                                    <Grid Grid.Row="2">
                                         <Grid.ColumnDefinitions>
                                             <ColumnDefinition Width="1.45*" />
                                             <ColumnDefinition Width="10" />
@@ -560,15 +634,22 @@
                                         </Border>
                                     </Grid>
 
-                                    <DockPanel Grid.Row="2" Margin="0,8,0,0" LastChildFill="False">
+                                    <DockPanel Grid.Row="3" Margin="0,8,0,0" LastChildFill="False">
                                         <StackPanel DockPanel.Dock="Left" Orientation="Horizontal" VerticalAlignment="Center">
-                                            <TextBlock Text="참가 코인" FontSize="11.5" Foreground="{StaticResource TextSecondaryBrush}" VerticalAlignment="Center" Margin="0,0,6,0" />
-                                            <ComboBox ItemsSource="{Binding Games.LadderFeeOptions}" SelectedItem="{Binding Games.LadderEntryFee}" Width="66" Height="28" Margin="0,0,10,0" />
-                                            <TextBlock Text="{Binding Games.LadderStatusText}" FontSize="11.5" FontWeight="SemiBold" Foreground="{StaticResource BrandPinkBrush}" VerticalAlignment="Center" MaxWidth="270" TextTrimming="CharacterEllipsis" />
+                                            <TextBlock Text="참가 코인" FontSize="11" Foreground="{StaticResource TextSecondaryBrush}" VerticalAlignment="Center" Margin="0,0,5,0" />
+                                            <ComboBox ItemsSource="{Binding Games.LadderFeeOptions}" SelectedItem="{Binding Games.LadderEntryFee}" Width="60" Height="28" Margin="0,0,8,0" />
+                                            <TextBlock Text="{Binding Games.LadderStatusText}" FontSize="11" FontWeight="SemiBold" Foreground="{StaticResource BrandPinkBrush}" VerticalAlignment="Center" MaxWidth="220" TextTrimming="CharacterEllipsis" />
                                         </StackPanel>
                                         <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
-                                            <Button Content="📢 친구 공유" Command="{Binding Games.ShareLadderResultToFriendsCommand}" Padding="10,4" Height="32" Margin="0,0,6,0" />
-                                            <Button Content="🪜 사다리 시작!" Style="{StaticResource PrimaryButtonStyle}" Command="{Binding Games.RunLadderCommand}" Padding="14,4" Height="32" />
+                                            <Button Content="📢 공유" Command="{Binding Games.ShareLadderResultToFriendsCommand}" Padding="8,4" FontSize="11" Height="30" Margin="0,0,5,0" />
+                                            <Button Content="혼자 돌리기" Command="{Binding Games.RunLadderCommand}" Padding="9,4" FontSize="11" Height="30" Margin="0,0,5,0" />
+                                            <Button Content="🪜 친구 초대 방 열기"
+                                                    Style="{StaticResource PrimaryButtonStyle}"
+                                                    Command="{Binding Games.OpenLadderRoomCommand}"
+                                                    IsEnabled="{Binding Games.HasOnlineFriends}"
+                                                    Padding="12,4"
+                                                    FontSize="11.5"
+                                                    Height="30" />
                                         </StackPanel>
                                     </DockPanel>
                                 </Grid>

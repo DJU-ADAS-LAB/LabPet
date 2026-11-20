@@ -84,4 +84,41 @@ public sealed class CoinGamesTests
         Assert.Equal(participants.Length, traces.Count);
         Assert.Equal(participants.Length, traces.Select(t => t.EndColumn).Distinct().Count());
     }
+
+    [Fact]
+    public void LabLadderEngine_MultiplayerLobby_PreventsDuplicateSlotAndAutoStartsWhenAllReady()
+    {
+        var room = new LadderRoomStateDto
+        {
+            SessionId = "room-1",
+            HostPetId = "host",
+            SlotCount = 3,
+            PendingInviteCount = 1,
+            Members =
+            [
+                new LadderMemberStateDto { PetId = "host", DisplayName = "승민" },
+                new LadderMemberStateDto { PetId = "p2", DisplayName = "대현" }
+            ]
+        };
+
+        // 방장이 1번(인덱스 0) 선점
+        Assert.True(LabLadderEngine.TryPickSlot(room, "host", 0));
+        // 다른 참가자가 이미 선점된 1번을 고르면 차단
+        Assert.False(LabLadderEngine.TryPickSlot(room, "p2", 0));
+        // 2번(인덱스 1)은 성공
+        Assert.True(LabLadderEngine.TryPickSlot(room, "p2", 1));
+
+        // 입장한 2명은 모두 골랐지만 응답 대기 1명이 남았으므로 자동 시작은 아직 false
+        Assert.True(LabLadderEngine.AreJoinedMembersReady(room));
+        Assert.False(LabLadderEngine.IsReadyToAutoStart(room));
+
+        // 대기 중이던 3번째 참가자가 입장
+        room.PendingInviteCount = 0;
+        room.Members.Add(new LadderMemberStateDto { PetId = "p3", DisplayName = "민수" });
+        Assert.False(LabLadderEngine.IsReadyToAutoStart(room));
+
+        // 3번째 참가자가 빈 3번(인덱스 2)을 고르는 순간 전원 선택 완료 -> 자동 시작 true
+        Assert.True(LabLadderEngine.TryPickSlot(room, "p3", 2));
+        Assert.True(LabLadderEngine.IsReadyToAutoStart(room));
+    }
 }

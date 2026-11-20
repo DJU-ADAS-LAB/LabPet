@@ -187,7 +187,7 @@ public sealed class SocialCoordinatorService : IAsyncDisposable
         => _transport.SendFriendRequestAsync(peer);
 
     public Task<bool> SendGameEventAsync(FriendEntry friend, GameEventPayload payload)
-        => _transport.SendGameEventAsync(friend, payload);
+        => _transport.SendGameEventAsync(FindFriend(friend.PetId) ?? friend, payload);
 
     public string GetFriendDisplayName(string petId) => FindFriendName(petId);
 

@@ -28,14 +28,19 @@
 - **클라이언트 실행**: `dotnet run --project src/LabPet.Client/LabPet.Client.csproj`
 
 ## 4. 아키텍처 및 핵심 디렉터리·모듈 맵
-- [src/LabPet.Shared](src/LabPet.Shared): 프로필/친구/피어 DTO, `ProtocolConstants`, `ProtocolJson`, `Packets`, `PacketSigner`, `ISocialTransport`
+- [src/LabPet.Shared](src/LabPet.Shared): 프로필/친구/피어 DTO, `ProtocolConstants`, `ProtocolJson`, `Packets`(`PacketType.GameEvent` 포함), `PacketSigner`, `ISocialTransport`
 - [src/LabPet.Client](src/LabPet.Client):
   - `Storage/`: `%AppData%\LabPet\` 원자적 JSON 저장소(`JsonAppDataStore`) 및 `schemaVersion` 마이그레이터(`StateMigrator`)
-  - `Rendering/`: `IPetMeshFactory`, `ProceduralPetMeshFactory`, `PetRigHandle`, `PetAnimationController`, `PetCustomizationCatalog`
-  - `Interop/`: `Win32WindowHelper` (`WS_EX_TRANSPARENT` 클릭 투과, 전역 커서 위치)
-  - `ViewModels/`: `PetWindowViewModel`, `OnboardingViewModel`
-  - `Views/`: `PetWindow.xaml(.cs)`, `OnboardingWindow.xaml(.cs)`
-- [tests/LabPet.Tests](tests/LabPet.Tests): 프로토콜 호환성, HMAC 서명, JSON 폴백, 저장소 원자성/복구, 3D 메시 생성 단위 테스트
+  - `Rendering/`: `IPetMeshFactory`, `ProceduralPetMeshFactory`, `PetRigHandle`, `PetAnimationController`, `PetCustomizationCatalog`, `PetPortraitRenderer`
+  - `Audio/`: `IAudioAnalyzer`, `AudioSpectrumProcessor`, `LoopbackAudioAnalyzer` (WASAPI 루프백 1,024-point FFT, 15초 음악 활성 홀드, 장치 핫스왑 복구)
+  - `Solo/`: `SoloProgressionService`, `GlobalActivityHookService`, `PomodoroTimerService`
+  - `Games/`: `CoinHiLowGame`, `RpsGameEngine`, `TypingSprintEngine`, `LabLadderEngine` (4종 코인 미니게임 도메인 엔진)
+  - `Network/` & `Social/`: `LanNetworkHelper`, `LanP2pTransport`, `SocialCoordinatorService`
+  - `Updates/` & `SystemIntegration/`: `UpdateSourceOptions`, `UpdateService`, `StartupRegistrationService`, `FirewallRegistrationService`
+  - `Interop/`: `Win32WindowHelper` (`WS_EX_TRANSPARENT` 클릭 투과, 전역 커서 위치, Popup 키보드 포커스 활성화)
+  - `ViewModels/`: `PetWindowViewModel`, `OnboardingViewModel`, `SoloHubViewModel`, `CoinGamesViewModel`, `SocialViewModel`
+  - `Views/`: `PetWindow.xaml(.cs)`, `OnboardingWindow.xaml(.cs)`, `SoloHubWindow.xaml(.cs)`, `SocialWindow.xaml(.cs)`, `VisitorPetWindow.xaml(.cs)`, `EnvironmentGuideWindow.xaml(.cs)`
+- [tests/LabPet.Tests](tests/LabPet.Tests): 프로토콜 호환성, HMAC 서명, 저장소 원자성/복구, 4종 3D 메시 생성, 오디오·성장, 4종 코인 게임, LAN P2P 전송·코디네이터, 오버레이 배치, 업데이트 단위 테스트
 
 ## 5. 핵심 동작·성능·보안·호환성 유의사항 (회귀 방지 체크리스트)
 - **데이터 경로 분리**: 모든 사용자 데이터는 `%AppData%\LabPet\`에만 저장하며 `AppContext.BaseDirectory`에 절대 기록하지 않는다.

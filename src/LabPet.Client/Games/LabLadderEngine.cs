@@ -20,9 +20,11 @@ public sealed record LadderBoard(
 /// <summary>
 /// 연구실 공동 사다리타기 엔진.
 /// 인접한 가로줄 충돌 없이 사다리 판을 생성하고, 각 참여자의 이동 경로와 최종 결과를 계산한다.
+/// 또한 LAN 멀티플레이어 대기실에서 참가자별 시작 위치 선점 및 전원 선택 완료 판정을 담당한다.
 /// </summary>
 public static class LabLadderEngine
 {
+    public const string GameTypeId = "ladder";
     public const int MinParticipants = 2;
     public const int MaxParticipants = 8;
     public const int DefaultLevels = 9;
@@ -138,4 +140,89 @@ public static class LabLadderEngine
 
         return list;
     }
+
+    /// <summary>
+    /// LAN 사다리 대기실에서 참가자가 원하는 시작 열(slotIndex)을 선점하거나 이동한다.
+    /// 이미 다른 참가자가 차지한 자리는 선택할 수 없다.
+    /// </summary>
+    public static bool TryPickSlot(LadderRoomStateDto room, string petId, int slotIndex)
+    {
+        if (slotIndex < 0 || slotIndex >= room.SlotCount)
+        {
+            return false;
+        }
+
+        var member = room.Members.FirstOrDefault(m => string.Equals(m.PetId, petId, StringComparison.OrdinalIgnoreCase));
+        if (member is null)
+        {
+            return false;
+        }
+
+        var occupiedByOther = room.Members.Any(m =>
+            !string.Equals(m.PetId, petId, StringComparison.OrdinalIgnoreCase) &&
+            m.SelectedSlot == slotIndex);
+        if (occupiedByOther)
+        {
+            return false;
+        }
+
+        member.SelectedSlot = slotIndex;
+        return true;
+    }
+
+    /// <summary>
+    /// 방에 들어온 모든 참가자(최소 2명)가 서로 다른 시작 위치를 선택했고,
+    /// 대기 중인 초대자가 없는지(자동 시작 가능 여부) 판정한다.
+    /// </summary>
+    public static bool IsReadyToAutoStart(LadderRoomStateDto room)
+    {
+        if (room.PendingInviteCount > 0 || room.Members.Count < MinParticipants)
+        {
+            return false;
+        }
+
+        return AreJoinedMembersReady(room);
+    }
+
+    /// <summary>
+    /// 현재 입장한 모든 참가자(최소 2명)가 시작 위치를 선택했는지 판정한다.
+    /// </summary>
+    public static bool AreJoinedMembersReady(LadderRoomStateDto room)
+    {
+        if (room.Members.Count < MinParticipants)
+        {
+            return false;
+        }
+
+        return room.Members.All(m => m.SelectedSlot is int s && s >= 0 && s < room.SlotCount);
+    }
+}
+
+public sealed class LadderMemberStateDto
+{
+    public string PetId { get; set; } = string.Empty;
+    public string DisplayName { get; set; } = string.Empty;
+    public int? SelectedSlot { get; set; }
+}
+
+public sealed class LadderRoomStateDto
+{
+    public string SessionId { get; set; } = string.Empty;
+    public string HostPetId { get; set; } = string.Empty;
+    public int WagerCoins { get; set; }
+    public int SlotCount { get; set; }
+    public int PendingInviteCount { get; set; }
+    public List<string> Prizes { get; set; } = [];
+    public List<LadderMemberStateDto> Members { get; set; } = [];
+}
+
+public sealed class LadderStartDto
+{
+    public string SessionId { get; set; } = string.Empty;
+    public int WagerCoins { get; set; }
+    public int Levels { get; set; } = LabLadderEngine.DefaultLevels;
+    public List<string> ParticipantPetIds { get; set; } = [];
+    public List<string> Participants { get; set; } = [];
+    public List<string> Prizes { get; set; } = [];
+    public List<LadderRung> Rungs { get; set; } = [];
 }

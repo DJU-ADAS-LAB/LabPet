@@ -272,92 +272,99 @@ public sealed class LanP2pTransport : ISocialTransport
             trimmed = trimmed[..ProtocolConstants.MaxBubbleMessageLength];
         }
 
-        if (!TryResolveFriendEndpoint(friend, out var ip, out var port))
-        {
-            return false;
-        }
-
-        var ack = await SendControlPacketAsync(
-            ip,
-            port,
+        return await SendFriendControlPacketAsync(
+            friend,
             PacketType.BubbleMessage,
             new BubbleMessagePayload { Text = trimmed },
-            friend.PairSecretBase64,
             cancellationToken).ConfigureAwait(false);
-
-        return ack is { Accepted: true };
     }
 
-    public async Task<bool> SendQuickReactionAsync(FriendEntry friend, string reactionId, CancellationToken cancellationToken = default)
-    {
-        if (!TryResolveFriendEndpoint(friend, out var ip, out var port))
-        {
-            return false;
-        }
-
-        var ack = await SendControlPacketAsync(
-            ip,
-            port,
+    public Task<bool> SendQuickReactionAsync(FriendEntry friend, string reactionId, CancellationToken cancellationToken = default)
+        => SendFriendControlPacketAsync(
+            friend,
             PacketType.QuickReaction,
             new QuickReactionPayload { ReactionId = reactionId },
-            friend.PairSecretBase64,
-            cancellationToken).ConfigureAwait(false);
+            cancellationToken);
 
-        return ack is { Accepted: true };
-    }
-
-    public async Task<bool> SendPetInteractionAsync(FriendEntry friend, string interactionType, CancellationToken cancellationToken = default)
-    {
-        if (!TryResolveFriendEndpoint(friend, out var ip, out var port))
-        {
-            return false;
-        }
-
-        var ack = await SendControlPacketAsync(
-            ip,
-            port,
+    public Task<bool> SendPetInteractionAsync(FriendEntry friend, string interactionType, CancellationToken cancellationToken = default)
+        => SendFriendControlPacketAsync(
+            friend,
             PacketType.PetInteraction,
             new PetInteractionPayload { InteractionType = interactionType },
-            friend.PairSecretBase64,
-            cancellationToken).ConfigureAwait(false);
+            cancellationToken);
 
-        return ack is { Accepted: true };
-    }
-
-    public async Task<bool> SetMusicFollowAsync(FriendEntry hostFriend, bool enable, CancellationToken cancellationToken = default)
-    {
-        if (!TryResolveFriendEndpoint(hostFriend, out var ip, out var port))
-        {
-            return false;
-        }
-
-        var ack = await SendControlPacketAsync(
-            ip,
-            port,
+    public Task<bool> SetMusicFollowAsync(FriendEntry hostFriend, bool enable, CancellationToken cancellationToken = default)
+        => SendFriendControlPacketAsync(
+            hostFriend,
             enable ? PacketType.MusicFollowOn : PacketType.MusicFollowOff,
             new MusicFollowPayload { ListenerUdpPort = _udpMusicPort },
-            hostFriend.PairSecretBase64,
-            cancellationToken).ConfigureAwait(false);
+            cancellationToken);
 
-        return ack is { Accepted: true };
-    }
+    public Task<bool> SendGameEventAsync(FriendEntry friend, GameEventPayload payload, CancellationToken cancellationToken = default)
+        => SendFriendControlPacketAsync(
+            friend,
+            PacketType.GameEvent,
+            payload,
+            cancellationToken);
 
-    public async Task<bool> SendGameEventAsync(FriendEntry friend, GameEventPayload payload, CancellationToken cancellationToken = default)
+    private async Task<bool> SendFriendControlPacketAsync<TPayload>(
+        FriendEntry friend,
+        PacketType packetType,
+        TPayload payload,
+        CancellationToken cancellationToken)
     {
-        if (!TryResolveFriendEndpoint(friend, out var ip, out var port))
+        if (!TryResolveFriendEndpoint(friend, out var primaryIp, out var primaryPort))
         {
             return false;
         }
 
         var ack = await SendControlPacketAsync(
-            ip,
-            port,
-            PacketType.GameEvent,
+            primaryIp,
+            primaryPort,
+            packetType,
             payload,
             friend.PairSecretBase64,
             cancellationToken).ConfigureAwait(false);
 
-        return ack is { Accepted: true };
+        if (ack is { Accepted: true })
+        {
+            return true;
+        }
+
+        // 다중 어댑터 환경에서 브로드캐스트 IP와 최근 TCP 연결 IP가 다를 때 보조 IP로 1회 폴백 재시도
+        string? fallbackIp = null;
+        var fallbackPort = primaryPort;
+        if (_friendsByPetId.TryGetValue(friend.PetId, out var known))
+        {
+            lock (known)
+            {
+                fallbackIp = known.LastKnownIp;
+                if (known.LastKnownTcpPort > 0)
+                {
+                    fallbackPort = known.LastKnownTcpPort;
+                }
+            }
+        }
+
+        if (string.IsNullOrWhiteSpace(fallbackIp))
+        {
+            fallbackIp = friend.LastKnownIp;
+        }
+
+        if (!string.IsNullOrWhiteSpace(fallbackIp) &&
+            !string.Equals(fallbackIp, primaryIp, StringComparison.OrdinalIgnoreCase))
+        {
+            var retryAck = await SendControlPacketAsync(
+                fallbackIp,
+                fallbackPort,
+                packetType,
+                payload,
+                friend.PairSecretBase64,
+                cancellationToken).ConfigureAwait(false);
+            return retryAck is { Accepted: true };
+        }
+
+        return false;
     }
 
     public async ValueTask PublishMusicFrameAsync(MusicFrameData frame, CancellationToken cancellationToken = default)
@@ -729,12 +736,22 @@ public sealed class LanP2pTransport : ISocialTransport
                     return new AckPayload { AckMessageId = header.MessageId, Accepted = false, ErrorCode = "INVALID_SIGNATURE" };
                 }
 
-                friend.LastKnownIp = remoteIp;
+                if (!string.IsNullOrWhiteSpace(remoteIp))
+                {
+                    friend.LastKnownIp = remoteIp;
+                }
+
                 friend.LastSeenAtUtc = DateTimeOffset.UtcNow;
+            }
+
+            if (!string.IsNullOrWhiteSpace(remoteIp) && _peers.TryGetValue(header.SenderPetId, out var livePeer))
+            {
+                livePeer.IpAddress = remoteIp;
+                livePeer.LastSeenUtc = DateTimeOffset.UtcNow;
             }
         }
 
-        // 3. 패킷 유형별 이벤트 디스패치
+        // 3. 패킷 유형별 이벤트 디스패치 (수락 패킷 Ack 응답 전에 인증 테이블이 먼저 갱신되도록 동기 구간 실행)
         switch (header.PacketType)
         {
             case PacketType.FriendRequest:

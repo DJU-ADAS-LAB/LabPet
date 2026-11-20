@@ -131,7 +131,7 @@ public partial class App : Application
         var gamesVm = _serviceProvider.GetRequiredService<CoinGamesViewModel>();
         gamesVm.BindProfile(profile);
         var animator = _serviceProvider.GetRequiredService<PetAnimationController>();
-        gamesVm.IncomingInviteArrived += (_, invite) => Dispatcher.BeginInvoke(() => petVm.PendingGameInvite = invite);
+        gamesVm.IncomingInviteChanged += (_, invite) => Dispatcher.BeginInvoke(() => petVm.PendingGameInvite = invite);
         gamesVm.GameNotification += (_, msg) => Dispatcher.BeginInvoke(() => petVm.ShowBubble(msg, 3400));
         gamesVm.PetEmotionTriggered += (_, isHappy) => Dispatcher.BeginInvoke(() =>
         {
