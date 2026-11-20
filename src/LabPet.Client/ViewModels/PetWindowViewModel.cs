@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using System.Windows.Media;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using LabPet.Client.Social;
@@ -34,11 +35,17 @@ public sealed partial class QuickOverlayEntry : ObservableObject
 }
 
 /// <summary>
-/// 펫 말풍선에 쌓여 표시되는 메시지 한 줄. 같은 문구가 연속으로 와도 개별 줄로 구분되도록 참조 타입으로 둔다.
+/// 개별 표시 시간을 가진 말풍선. 같은 문구가 반복되어도 별개 항목으로 유지한다.
 /// </summary>
-public sealed class BubbleLine(string text)
+public class BubbleLine(string text)
 {
     public string Text { get; } = text;
+}
+
+public sealed class FriendMessageBubble(string text, string senderName, ImageSource portrait) : BubbleLine(text)
+{
+    public string SenderName { get; } = senderName;
+    public ImageSource Portrait { get; } = portrait;
 }
 
 /// <summary>
@@ -309,9 +316,11 @@ public sealed partial class PetWindowViewModel : ObservableObject
     /// 최대 <see cref="MaxBubbleLines"/>개까지 쌓으며, 각 메시지는 자신의 표시 시간이 지나면 사라진다.
     /// UI 스레드에서 호출해야 한다.
     /// </summary>
-    public async void ShowBubble(string message, int durationMs = 2600)
+    public void ShowBubble(string message, int durationMs = 2600)
+        => ShowBubble(new BubbleLine(message), durationMs);
+
+    public async void ShowBubble(BubbleLine line, int durationMs)
     {
-        var line = new BubbleLine(message);
         BubbleLines.Add(line);
         while (BubbleLines.Count > MaxBubbleLines)
         {

@@ -33,6 +33,7 @@ public partial class PetWindow : Window
 
     private readonly PetWindowViewModel _viewModel;
     private readonly IPetMeshFactory _meshFactory;
+    private readonly PetPortraitRenderer _portraitRenderer;
     private readonly PetAnimationController _animator;
     private readonly IAudioAnalyzer _audioAnalyzer;
     private readonly GlobalActivityHookService _activityHook;
@@ -78,6 +79,7 @@ public partial class PetWindow : Window
 
         _viewModel = viewModel;
         _meshFactory = meshFactory;
+        _portraitRenderer = new PetPortraitRenderer(meshFactory);
         _animator = animator;
         _audioAnalyzer = audioAnalyzer;
         _activityHook = activityHook;
@@ -109,6 +111,7 @@ public partial class PetWindow : Window
         _pomodoro.BreakCompleted += OnPomodoroBreakCompleted;
         _social.StateChanged += OnSocialStateChanged;
         _social.FriendRequestArrived += OnSocialFriendRequestArrived;
+        _social.FriendMessageReceived += OnFriendMessageReceived;
         _social.SocialNotification += OnSocialNotification;
         _social.PetReactionTriggered += OnSocialPetReactionTriggered;
 
@@ -168,6 +171,7 @@ public partial class PetWindow : Window
             _pomodoro.BreakCompleted -= OnPomodoroBreakCompleted;
             _social.StateChanged -= OnSocialStateChanged;
             _social.FriendRequestArrived -= OnSocialFriendRequestArrived;
+            _social.FriendMessageReceived -= OnFriendMessageReceived;
             _social.SocialNotification -= OnSocialNotification;
             _social.PetReactionTriggered -= OnSocialPetReactionTriggered;
         };
@@ -439,6 +443,16 @@ public partial class PetWindow : Window
     private void OnSocialFriendRequestArrived(object? sender, PendingFriendRequest request)
     {
         Dispatcher.BeginInvoke(() => _viewModel.PendingFriendRequest = request);
+    }
+
+    private void OnFriendMessageReceived(object? sender, ReceivedFriendMessage message)
+    {
+        Dispatcher.BeginInvoke(() =>
+        {
+            var portrait = _portraitRenderer.GetPortrait(message.Appearance);
+            _viewModel.ShowBubble(new FriendMessageBubble(message.Text, message.SenderName, portrait),
+                SocialNotificationBubbleDurationMs);
+        });
     }
 
     private void OnSocialNotification(object? sender, string message)

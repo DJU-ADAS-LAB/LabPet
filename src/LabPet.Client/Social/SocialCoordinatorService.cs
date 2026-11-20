@@ -20,6 +20,8 @@ public sealed record PendingFriendRequest(
     public string DisplayName => SocialCoordinatorService.FormatDisplayName(RequesterOwnerName, RequesterName);
 }
 
+public sealed record ReceivedFriendMessage(string SenderName, string Text, PetAppearance Appearance);
+
 /// <summary>
 /// ISocialTransport, friends.json 저장소, 보너스 코인, 노래 따라하기(팔로워 타임아웃·우선순위)를 조정하는 소셜 코디네이터.
 /// ViewModel과 View는 구체 전송 구현체가 아닌 ISocialTransport/SocialCoordinatorService만 의존한다.
@@ -54,6 +56,7 @@ public sealed class SocialCoordinatorService : IAsyncDisposable
 
     public event EventHandler? StateChanged;
     public event EventHandler<PendingFriendRequest>? FriendRequestArrived;
+    public event EventHandler<ReceivedFriendMessage>? FriendMessageReceived;
     public event EventHandler<string>? SocialNotification;
     public event EventHandler? PetReactionTriggered;
     public event EventHandler<string>? NewerAppVersionDetected;
@@ -360,8 +363,11 @@ public sealed class SocialCoordinatorService : IAsyncDisposable
     private async void OnBubbleMessageReceived(object? sender, BubbleMessageReceivedEventArgs e)
     {
         var name = await RewardSocialBonusAsync(e.SenderPetId, coins: 2).ConfigureAwait(false);
+        var peer = DiscoveredPeers.FirstOrDefault(peer =>
+            string.Equals(peer.PetId, e.SenderPetId, StringComparison.OrdinalIgnoreCase));
+        var appearance = peer?.Appearance?.Clone() ?? FindFriend(e.SenderPetId)?.CachedAppearance ?? new PetAppearance();
 
-        SocialNotification?.Invoke(this, $"{name}: {e.Text}");
+        FriendMessageReceived?.Invoke(this, new ReceivedFriendMessage(name, e.Text, appearance));
         PetReactionTriggered?.Invoke(this, EventArgs.Empty);
     }
 

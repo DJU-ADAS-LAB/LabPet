@@ -1,5 +1,6 @@
 using System.IO;
 using System.Net;
+using System.Windows.Media;
 using System.Windows.Threading;
 using LabPet.Client.Network;
 using LabPet.Client.Social;
@@ -32,7 +33,12 @@ public sealed class SocialCoordinatorTests : IAsyncLifetime
 
     public async Task InitializeAsync()
     {
-        var guestProfile = new PetProfile { PetName = "게스트" };
+        var guestProfile = new PetProfile
+        {
+            OwnerName = "친구",
+            PetName = "게스트",
+            Appearance = new PetAppearance { SpeciesId = PetSpeciesIds.FluffyPuppy, BodyColorHex = "#C4905E" }
+        };
         var sharedSecret = PacketSigner.GeneratePairSecretBase64();
         await _guestTransport.StartAsync(guestProfile, []);
         await _store.SaveFriendsAsync(new FriendsStore
@@ -42,7 +48,9 @@ public sealed class SocialCoordinatorTests : IAsyncLifetime
                 new FriendEntry
                 {
                     PetId = guestProfile.PetId,
+                    OwnerName = guestProfile.OwnerName,
                     PetName = guestProfile.PetName,
+                    CachedAppearance = guestProfile.Appearance.Clone(),
                     LastKnownIp = IPAddress.Loopback.ToString(),
                     LastKnownTcpPort = _guestTransport.BoundTcpPort,
                     PairSecretBase64 = sharedSecret,
@@ -83,14 +91,17 @@ public sealed class SocialCoordinatorTests : IAsyncLifetime
         var allReceived = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var friendAccepted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var receivedCount = 0;
-        _host.SocialNotification += (_, message) =>
+        _host.FriendMessageReceived += (_, message) =>
         {
-            if (message.Contains("수신 메시지", StringComparison.Ordinal)
+            if (message.Text.Contains("수신 메시지", StringComparison.Ordinal)
                 && Interlocked.Increment(ref receivedCount) == messagesPerDirection + 1)
             {
                 allReceived.TrySetResult();
             }
+        };
 
+        _host.SocialNotification += (_, message) =>
+        {
             if (message.Contains("친구 신청을 수락했어요", StringComparison.Ordinal))
             {
                 friendAccepted.TrySetResult();
@@ -219,6 +230,27 @@ public sealed class SocialCoordinatorTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task ReceivedFriendMessage_CarriesOriginalTextAndIndependentFriendAppearance()
+    {
+        var received = new TaskCompletionSource<ReceivedFriendMessage>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var notificationCount = 0;
+        _host.SocialNotification += (_, _) => Interlocked.Increment(ref notificationCount);
+        _host.FriendMessageReceived += (_, message) => received.TrySetResult(message);
+
+        const string text = "안녕: 캐릭터 메시지";
+        Assert.True(await _guestTransport.SendBubbleMessageAsync(_hostAsFriend, text));
+        var message = await received.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.Equal(text, message.Text);
+        Assert.Equal("친구 (게스트)", message.SenderName);
+        Assert.Equal(PetSpeciesIds.FluffyPuppy, message.Appearance.SpeciesId);
+        Assert.Equal("#C4905E", message.Appearance.BodyColorHex);
+        message.Appearance.SpeciesId = PetSpeciesIds.ChibiCat;
+        Assert.Equal(PetSpeciesIds.FluffyPuppy, Assert.Single(_host.Friends).CachedAppearance.SpeciesId);
+        Assert.Equal(0, Volatile.Read(ref notificationCount));
+    }
+
+    [Fact]
     public async Task BubbleLines_DisplayTheLatestFiveMessagesInOrder()
     {
         var completed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -230,14 +262,16 @@ public sealed class SocialCoordinatorTests : IAsyncLifetime
                 dispatcher.Invoke(() =>
                 {
                     var viewModel = new PetWindowViewModel(_store, _host);
+                    var portrait = new DrawingImage();
                     for (var index = 1; index <= 6; index++)
                     {
-                        viewModel.ShowBubble($"받은 메시지 {index}", durationMs: 100);
+                        viewModel.ShowBubble(new FriendMessageBubble($"받은 메시지 {index}", "친구", portrait), durationMs: 100);
                     }
 
                     Assert.True(viewModel.IsBubbleVisible);
                     Assert.Equal(Enumerable.Range(2, 5).Select(index => $"받은 메시지 {index}"),
                         viewModel.BubbleLines.Select(line => line.Text));
+                    Assert.All(viewModel.BubbleLines, line => Assert.Same(portrait, Assert.IsType<FriendMessageBubble>(line).Portrait));
 
                     var expiryFrame = new DispatcherFrame();
                     viewModel.PropertyChanged += (_, args) =>
