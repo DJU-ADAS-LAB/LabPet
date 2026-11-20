@@ -1,0 +1,409 @@
+using System.Diagnostics;
+using LabPet.Client.Solo;
+using LabPet.Client.Storage;
+using LabPet.Shared.Models;
+using LabPet.Shared.Protocol;
+using LabPet.Shared.Transport;
+
+namespace LabPet.Client.Social;
+
+public sealed record PendingFriendRequest(
+    string RequesterPetId,
+    string RequesterName,
+    PetAppearance Appearance,
+    int Level,
+    string RemoteIp,
+    int RemoteTcpPort);
+
+/// <summary>
+/// ISocialTransport, friends.json 저장소, 보너스 코인, 노래 따라하기(팔로워 타임아웃·우선순위)를 조정하는 소셜 코디네이터.
+/// ViewModel과 View는 구체 전송 구현체가 아닌 ISocialTransport/SocialCoordinatorService만 의존한다.
+/// </summary>
+public sealed class SocialCoordinatorService : IAsyncDisposable
+{
+    private readonly ISocialTransport _transport;
+    private readonly IAppDataStore _store;
+    private readonly SoloProgressionService _progression;
+
+    private readonly Stopwatch _clock = Stopwatch.StartNew();
+    private readonly object _musicLock = new();
+
+    private PetProfile _localProfile = new();
+    private FriendsStore _friendsStore = new();
+    private uint _musicFrameSequence;
+
+    // 노래 따라하기 팔로워 상태
+    private string? _followingHostPetId;
+    private MusicFrameData _lastFollowedFrame;
+    private long _lastFollowedPacketTicks;
+    private long _lastFollowedActiveSoundTicks;
+
+    /// <summary>내 음악이 동시에 재생 중일 때 팔로우 대신 로컬 음악을 우선할지 여부.</summary>
+    public bool PreferLocalMusicWhenActive { get; set; } = true;
+
+    public string? FollowingHostPetId => _followingHostPetId;
+    public IReadOnlyList<FriendEntry> Friends => _friendsStore.Friends;
+    public IReadOnlyList<PeerSnapshot> DiscoveredPeers => _transport.GetDiscoveredPeers();
+
+    public event EventHandler? StateChanged;
+    public event EventHandler<PendingFriendRequest>? FriendRequestArrived;
+    public event EventHandler<string>? SocialNotification;
+    public event EventHandler? PetReactionTriggered;
+
+    public SocialCoordinatorService(
+        ISocialTransport transport,
+        IAppDataStore store,
+        SoloProgressionService progression)
+    {
+        _transport = transport;
+        _store = store;
+        _progression = progression;
+
+        _transport.PeersChanged += OnPeersChanged;
+        _transport.FriendRequestReceived += OnFriendRequestReceived;
+        _transport.FriendAccepted += OnFriendAccepted;
+        _transport.FriendRejected += OnFriendRejected;
+        _transport.BubbleMessageReceived += OnBubbleMessageReceived;
+        _transport.QuickReactionReceived += OnQuickReactionReceived;
+        _transport.PetInteractionReceived += OnPetInteractionReceived;
+        _transport.MusicFrameReceived += OnMusicFrameReceived;
+    }
+
+    public async Task StartAsync(PetProfile localProfile, CancellationToken cancellationToken = default)
+    {
+        _localProfile = localProfile;
+        _friendsStore = await _store.LoadFriendsAsync(cancellationToken).ConfigureAwait(false);
+        await _transport.StartAsync(_localProfile, _friendsStore.Friends, cancellationToken).ConfigureAwait(false);
+        StateChanged?.Invoke(this, EventArgs.Empty);
+    }
+
+    public async Task UpdateLocalPresenceAsync(PetProfile profile, bool isMusicActive, CancellationToken cancellationToken = default)
+    {
+        _localProfile = profile;
+        var version = typeof(SocialCoordinatorService).Assembly.GetName().Version?.ToString(3) ?? "0.1.0";
+        await _transport.UpdateLocalPresenceAsync(
+            new LocalPresenceState(
+                profile.PetName,
+                profile.Appearance.Clone(),
+                profile.SoloProgress.Level,
+                isMusicActive,
+                version),
+            cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>호스트로서 구독 중인 친구들에게만 30Hz 경량 오디오 프레임을 전송한다.</summary>
+    public ValueTask PublishHostMusicFrameAsync(float bass, float mid, float treble, bool isBeat)
+    {
+        var seq = Interlocked.Increment(ref _musicFrameSequence);
+        return _transport.PublishMusicFrameAsync(new MusicFrameData(bass, mid, treble, isBeat, seq));
+    }
+
+    /// <summary>
+    /// 팔로워 모드일 때 수신된 호스트 오디오 프레임을 반환한다.
+    /// 1.5초 이상 미수신 또는 호스트 2초 이상 무음 시 자동으로 로컬 모드로 복귀한다.
+    /// </summary>
+    public bool TryGetFollowedMusicFrame(bool isLocalMusicActive, out MusicFrameData frame)
+    {
+        string? timedOutHost = null;
+        lock (_musicLock)
+        {
+            if (_followingHostPetId is null)
+            {
+                frame = default;
+                return false;
+            }
+
+            var nowTicks = _clock.ElapsedTicks;
+            var sincePacketMs = (nowTicks - _lastFollowedPacketTicks) * 1000.0 / Stopwatch.Frequency;
+            var sinceSoundMs = (nowTicks - _lastFollowedActiveSoundTicks) * 1000.0 / Stopwatch.Frequency;
+
+            if (sincePacketMs > ProtocolConstants.MusicFrameTimeoutMs || sinceSoundMs > ProtocolConstants.MusicHostSilenceTimeoutMs)
+            {
+                timedOutHost = _followingHostPetId;
+                _followingHostPetId = null;
+                frame = default;
+            }
+            else if (PreferLocalMusicWhenActive && isLocalMusicActive)
+            {
+                // 내 음악 우선 옵션이 켜져 있으면 로컬 오디오 사용
+                frame = default;
+                return false;
+            }
+            else
+            {
+                frame = _lastFollowedFrame;
+                return true;
+            }
+        }
+
+        if (timedOutHost is not null)
+        {
+            var hostName = FindFriendName(timedOutHost);
+            SocialNotification?.Invoke(this, $"{hostName}의 음악이 멈춰 로컬 모드로 복귀했어요.");
+            StateChanged?.Invoke(this, EventArgs.Empty);
+        }
+
+        return false;
+    }
+
+    public Task<bool> SendFriendRequestAsync(PeerSnapshot peer)
+        => _transport.SendFriendRequestAsync(peer);
+
+    public async Task<bool> RespondFriendRequestAsync(PendingFriendRequest request, bool accept)
+    {
+        string? secret = accept ? PacketSigner.GeneratePairSecretBase64() : null;
+        var sent = await _transport.RespondFriendRequestAsync(
+            request.RequesterPetId,
+            request.RemoteIp,
+            request.RemoteTcpPort,
+            accept,
+            secret).ConfigureAwait(false);
+
+        if (accept && sent && secret is not null)
+        {
+            await UpsertFriendAsync(new FriendEntry
+            {
+                PetId = request.RequesterPetId,
+                PetName = request.RequesterName,
+                LastKnownIp = request.RemoteIp,
+                LastKnownTcpPort = request.RemoteTcpPort,
+                PairSecretBase64 = secret,
+                CachedAppearance = request.Appearance.Clone(),
+                Intimacy = 1,
+                PairedAtUtc = DateTimeOffset.UtcNow,
+                LastSeenAtUtc = DateTimeOffset.UtcNow
+            }).ConfigureAwait(false);
+
+            SocialNotification?.Invoke(this, $"{request.RequesterName}(와)과 친구가 되었어요!");
+        }
+
+        return sent;
+    }
+
+    public async Task<bool> SendBubbleMessageAsync(FriendEntry friend, string text)
+    {
+        var ok = await _transport.SendBubbleMessageAsync(friend, text).ConfigureAwait(false);
+        if (ok)
+        {
+            await RewardSocialBonusAsync(friend, coins: 2).ConfigureAwait(false);
+        }
+
+        return ok;
+    }
+
+    public async Task<bool> SendQuickReactionAsync(FriendEntry friend, string reactionId)
+    {
+        var ok = await _transport.SendQuickReactionAsync(friend, reactionId).ConfigureAwait(false);
+        if (ok)
+        {
+            await RewardSocialBonusAsync(friend, coins: 1).ConfigureAwait(false);
+        }
+
+        return ok;
+    }
+
+    public async Task<bool> SendPetInteractionAsync(FriendEntry friend)
+    {
+        var ok = await _transport.SendPetInteractionAsync(friend, "pet").ConfigureAwait(false);
+        if (ok)
+        {
+            await RewardSocialBonusAsync(friend, coins: 2).ConfigureAwait(false);
+        }
+
+        return ok;
+    }
+
+    public async Task<bool> ToggleMusicFollowAsync(FriendEntry hostFriend)
+    {
+        var currentlyFollowingThis = string.Equals(_followingHostPetId, hostFriend.PetId, StringComparison.OrdinalIgnoreCase);
+        if (currentlyFollowingThis)
+        {
+            await _transport.SetMusicFollowAsync(hostFriend, enable: false).ConfigureAwait(false);
+            lock (_musicLock)
+            {
+                _followingHostPetId = null;
+            }
+
+            SocialNotification?.Invoke(this, $"{hostFriend.PetName} 노래 따라하기를 종료했어요.");
+            StateChanged?.Invoke(this, EventArgs.Empty);
+            return true;
+        }
+
+        // 기존 팔로우 호스트가 있으면 먼저 해제
+        if (_followingHostPetId is not null)
+        {
+            var prev = _friendsStore.Friends.FirstOrDefault(f => string.Equals(f.PetId, _followingHostPetId, StringComparison.OrdinalIgnoreCase));
+            if (prev is not null)
+            {
+                _ = await _transport.SetMusicFollowAsync(prev, enable: false).ConfigureAwait(false);
+            }
+        }
+
+        var ok = await _transport.SetMusicFollowAsync(hostFriend, enable: true).ConfigureAwait(false);
+        if (ok)
+        {
+            var nowTicks = _clock.ElapsedTicks;
+            lock (_musicLock)
+            {
+                _followingHostPetId = hostFriend.PetId;
+                _lastFollowedPacketTicks = nowTicks;
+                _lastFollowedActiveSoundTicks = nowTicks;
+            }
+
+            SocialNotification?.Invoke(this, $"{hostFriend.PetName}의 음악을 따라 추는 중!");
+            StateChanged?.Invoke(this, EventArgs.Empty);
+        }
+
+        return ok;
+    }
+
+    private void OnPeersChanged(object? sender, IReadOnlyList<PeerSnapshot> peers)
+    {
+        StateChanged?.Invoke(this, EventArgs.Empty);
+    }
+
+    private void OnFriendRequestReceived(object? sender, FriendRequestReceivedEventArgs e)
+    {
+        FriendRequestArrived?.Invoke(this, new PendingFriendRequest(
+            e.RequesterPetId,
+            e.RequesterName,
+            e.Appearance,
+            e.Level,
+            e.RemoteIp,
+            e.RemoteTcpPort));
+    }
+
+    private async void OnFriendAccepted(object? sender, FriendAcceptedEventArgs e)
+    {
+        await UpsertFriendAsync(new FriendEntry
+        {
+            PetId = e.AccepterPetId,
+            PetName = e.AccepterName,
+            LastKnownIp = e.RemoteIp,
+            LastKnownTcpPort = e.RemoteTcpPort,
+            PairSecretBase64 = e.PairSecretBase64,
+            CachedAppearance = e.Appearance.Clone(),
+            Intimacy = 1,
+            PairedAtUtc = DateTimeOffset.UtcNow,
+            LastSeenAtUtc = DateTimeOffset.UtcNow
+        }).ConfigureAwait(false);
+
+        SocialNotification?.Invoke(this, $"{e.AccepterName}(이)가 친구 신청을 수락했어요!");
+        PetReactionTriggered?.Invoke(this, EventArgs.Empty);
+    }
+
+    private void OnFriendRejected(object? sender, FriendRejectedEventArgs e)
+    {
+        SocialNotification?.Invoke(this, "친구 신청이 거절되었어요.");
+    }
+
+    private async void OnBubbleMessageReceived(object? sender, BubbleMessageReceivedEventArgs e)
+    {
+        var friend = FindFriend(e.SenderPetId);
+        var name = friend?.PetName ?? "친구";
+        if (friend is not null)
+        {
+            await RewardSocialBonusAsync(friend, coins: 2).ConfigureAwait(false);
+        }
+
+        SocialNotification?.Invoke(this, $"{name}: {e.Text}");
+        PetReactionTriggered?.Invoke(this, EventArgs.Empty);
+    }
+
+    private async void OnQuickReactionReceived(object? sender, QuickReactionReceivedEventArgs e)
+    {
+        var friend = FindFriend(e.SenderPetId);
+        var name = friend?.PetName ?? "친구";
+        if (friend is not null)
+        {
+            await RewardSocialBonusAsync(friend, coins: 1).ConfigureAwait(false);
+        }
+
+        SocialNotification?.Invoke(this, $"{name}의 반응: {e.ReactionId}");
+        PetReactionTriggered?.Invoke(this, EventArgs.Empty);
+    }
+
+    private async void OnPetInteractionReceived(object? sender, PetInteractionReceivedEventArgs e)
+    {
+        var friend = FindFriend(e.SenderPetId);
+        var name = friend?.PetName ?? "친구";
+        if (friend is not null)
+        {
+            await RewardSocialBonusAsync(friend, coins: 2).ConfigureAwait(false);
+        }
+
+        SocialNotification?.Invoke(this, $"{name}(이)가 쓰다듬어 줬어요! (+2 코인)");
+        PetReactionTriggered?.Invoke(this, EventArgs.Empty);
+    }
+
+    private void OnMusicFrameReceived(object? sender, MusicFrameReceivedEventArgs e)
+    {
+        lock (_musicLock)
+        {
+            if (!string.Equals(_followingHostPetId, e.HostPetId, StringComparison.OrdinalIgnoreCase))
+            {
+                return;
+            }
+
+            var nowTicks = _clock.ElapsedTicks;
+            _lastFollowedFrame = e.Frame;
+            _lastFollowedPacketTicks = nowTicks;
+
+            var avgEnergy = (e.Frame.Bass + e.Frame.Mid + e.Frame.Treble) / 3.0f;
+            if (avgEnergy >= 0.03f || e.Frame.IsBeat)
+            {
+                _lastFollowedActiveSoundTicks = nowTicks;
+            }
+        }
+    }
+
+    private async Task UpsertFriendAsync(FriendEntry entry)
+    {
+        var existing = _friendsStore.Friends.FirstOrDefault(f => string.Equals(f.PetId, entry.PetId, StringComparison.OrdinalIgnoreCase));
+        if (existing is not null)
+        {
+            existing.PetName = entry.PetName;
+            existing.LastKnownIp = entry.LastKnownIp;
+            existing.LastKnownTcpPort = entry.LastKnownTcpPort;
+            existing.PairSecretBase64 = entry.PairSecretBase64;
+            existing.CachedAppearance = entry.CachedAppearance;
+            existing.LastSeenAtUtc = entry.LastSeenAtUtc;
+        }
+        else
+        {
+            _friendsStore.Friends.Add(entry);
+        }
+
+        _transport.UpdateKnownFriends(_friendsStore.Friends);
+        await _store.SaveFriendsAsync(_friendsStore).ConfigureAwait(false);
+        StateChanged?.Invoke(this, EventArgs.Empty);
+    }
+
+    private async Task RewardSocialBonusAsync(FriendEntry friend, long coins)
+    {
+        friend.Intimacy++;
+        _progression.GrantRewards(_localProfile, xp: 3, coins: coins);
+        await _store.SaveFriendsAsync(_friendsStore).ConfigureAwait(false);
+        await _store.SaveProfileAsync(_localProfile).ConfigureAwait(false);
+        StateChanged?.Invoke(this, EventArgs.Empty);
+    }
+
+    private FriendEntry? FindFriend(string petId)
+        => _friendsStore.Friends.FirstOrDefault(f => string.Equals(f.PetId, petId, StringComparison.OrdinalIgnoreCase));
+
+    private string FindFriendName(string petId)
+        => FindFriend(petId)?.PetName ?? "친구";
+
+    public async ValueTask DisposeAsync()
+    {
+        _transport.PeersChanged -= OnPeersChanged;
+        _transport.FriendRequestReceived -= OnFriendRequestReceived;
+        _transport.FriendAccepted -= OnFriendAccepted;
+        _transport.FriendRejected -= OnFriendRejected;
+        _transport.BubbleMessageReceived -= OnBubbleMessageReceived;
+        _transport.QuickReactionReceived -= OnQuickReactionReceived;
+        _transport.PetInteractionReceived -= OnPetInteractionReceived;
+        _transport.MusicFrameReceived -= OnMusicFrameReceived;
+        await _transport.StopAsync().ConfigureAwait(false);
+    }
+}

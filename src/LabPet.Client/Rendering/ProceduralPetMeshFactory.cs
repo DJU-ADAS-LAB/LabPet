@@ -1,0 +1,853 @@
+using System.Numerics;
+using System.Windows.Media;
+using System.Windows.Media.Media3D;
+using HelixToolkit.Geometry;
+using LabPet.Shared.Models;
+using WpfMeshGeometry3D = System.Windows.Media.Media3D.MeshGeometry3D;
+
+namespace LabPet.Client.Rendering;
+
+/// <summary>
+/// HelixToolkit.Wpf 3.x (HelixToolkit.Geometry.MeshBuilder) 기반 상용 피규어 감성 절차적 3D 메시 팩토리.
+/// 부드러운 곡면, 눈 깜빡임 리그, 종별 디테일 파츠(모찌 미니 팔, 치비 고양이 주둥이·코·수염·뒷발·젤리, 솜구름 투톤 클러스터·미니 날개),
+/// 바닥 접지 그림자 및 4점 스튜디오 조명으로 말랑한 소프트 클레이 피규어 퀄리티를 구현한다.
+/// </summary>
+public sealed class ProceduralPetMeshFactory : IPetMeshFactory
+{
+    public Model3DGroup CreateStudioLights()
+    {
+        var lights = new Model3DGroup();
+
+        // 1. 포근한 주변광 (클레이 음영을 부드럽고 화사하게)
+        lights.Children.Add(new AmbientLight(Color.FromRgb(142, 138, 148)));
+
+        // 2. 따뜻한 메인 키 라이트 (우상단 전방)
+        lights.Children.Add(new DirectionalLight(
+            Color.FromRgb(255, 249, 242),
+            new Vector3D(-0.48, -0.70, -0.90)));
+
+        // 3. 부드러운 좌측 필 라이트 (전면 볼륨감 완화)
+        lights.Children.Add(new DirectionalLight(
+            Color.FromRgb(238, 242, 255),
+            new Vector3D(0.76, -0.22, -0.58)));
+
+        // 4. 은은한 후방 림 라이트 (실루엣 입체감 및 분리감)
+        lights.Children.Add(new DirectionalLight(
+            Color.FromRgb(196, 218, 252),
+            new Vector3D(0.40, 0.58, 0.80)));
+
+        return lights;
+    }
+
+    public PetRigHandle BuildPetRig(PetAppearance appearance)
+    {
+        var bodyColor = ParseHexColor(appearance.BodyColorHex, Color.FromRgb(255, 245, 247));
+        var accentColor = ParseHexColor(appearance.AccentColorHex, Color.FromRgb(255, 158, 181));
+
+        var bodyEmissiveBrush = new SolidColorBrush(Colors.Black);
+        var auraEmissiveBrush = new SolidColorBrush(Color.FromArgb(145, accentColor.R, accentColor.G, accentColor.B));
+
+        // 부드러운 무광 소프트 클레이 재질
+        var bodyMaterial = CreateClayMaterial(bodyColor, bodyEmissiveBrush, specularPower: 16, specularAlpha: 68);
+        var softLightBodyMaterial = CreateClayMaterial(Lighten(bodyColor, 0.42), bodyEmissiveBrush, specularPower: 14, specularAlpha: 56);
+        var softShadeBodyMaterial = CreateClayMaterial(Darken(bodyColor, 0.06), bodyEmissiveBrush, specularPower: 14, specularAlpha: 50);
+        var accentMaterial = CreateClayMaterial(accentColor, bodyEmissiveBrush, specularPower: 15, specularAlpha: 66);
+        var darkEyeMaterial = CreateClayMaterial(Color.FromRgb(42, 36, 48), null, specularPower: 58, specularAlpha: 155);
+        var whiteHighlightMaterial = CreateClayMaterial(Colors.White, new SolidColorBrush(Color.FromRgb(75, 75, 75)), specularPower: 64, specularAlpha: 170);
+
+        // 루트 변환 체인
+        var bodyScale = new ScaleTransform3D(1, 1, 1);
+        var bodyYaw = new AxisAngleRotation3D(new Vector3D(0, 1, 0), 0);
+        var bodyPitch = new AxisAngleRotation3D(new Vector3D(1, 0, 0), 0);
+        var bodyRoll = new AxisAngleRotation3D(new Vector3D(0, 0, 1), 0);
+        var bodyTranslate = new TranslateTransform3D(0, 0, 0);
+
+        var bodyTransformGroup = new Transform3DGroup();
+        bodyTransformGroup.Children.Add(bodyScale);
+        bodyTransformGroup.Children.Add(new RotateTransform3D(bodyYaw));
+        bodyTransformGroup.Children.Add(new RotateTransform3D(bodyPitch));
+        bodyTransformGroup.Children.Add(new RotateTransform3D(bodyRoll));
+        bodyTransformGroup.Children.Add(bodyTranslate);
+
+        // 머리/표정 그룹 변환 체인
+        var headYaw = new AxisAngleRotation3D(new Vector3D(0, 1, 0), 0);
+        var headPitch = new AxisAngleRotation3D(new Vector3D(1, 0, 0), 0);
+        var headRoll = new AxisAngleRotation3D(new Vector3D(0, 0, 1), 0);
+
+        var rootGroup = new Model3DGroup();
+        var triangleCount = 0;
+
+        // 바닥 소프트 접지 그림자 (피규어가 바닥에 자연스럽게 안착된 느낌)
+        var shadowScale = new ScaleTransform3D(1, 1, 1);
+        var shadowY = appearance.SpeciesId == PetSpeciesIds.ChibiCat ? -0.92f : -0.96f;
+        var shadowMb = new MeshBuilder(true, false);
+        shadowMb.AddEllipsoid(new Vector3(0, shadowY, 0), 0.78f, 0.015f, 0.68f, 24, 6);
+        var shadowMat = new DiffuseMaterial(new SolidColorBrush(Color.FromArgb(44, 42, 48, 66)));
+        triangleCount += AddGeometry(rootGroup, shadowMb, shadowMat, shadowScale);
+
+        var bodyGroup = new Model3DGroup { Transform = bodyTransformGroup };
+        rootGroup.Children.Add(bodyGroup);
+
+        AxisAngleRotation3D? leftEarRot = null;
+        AxisAngleRotation3D? rightEarRot = null;
+        AxisAngleRotation3D? tailRot = null;
+        TranslateTransform3D? leftPawTrans = null;
+        TranslateTransform3D? rightPawTrans = null;
+        AxisAngleRotation3D? leftArmRot = null;
+        AxisAngleRotation3D? rightArmRot = null;
+        var musicParticles = new List<MusicParticleHandle>();
+
+        float headPivotY;
+        float headSocketY;
+        float faceCenterY;
+        float faceZ;
+        float headRadiusX;
+        var isCatFace = false;
+
+        var headGroup = new Model3DGroup();
+
+        switch (appearance.SpeciesId)
+        {
+            case PetSpeciesIds.ChibiCat:
+            {
+                headPivotY = 0.24f;
+                headSocketY = 1.12f;
+                faceCenterY = 0.42f;
+                faceZ = 0.74f;
+                headRadiusX = 0.82f;
+                isCatFace = true;
+
+                // 통통하고 부드러운 몸통
+                var torsoMb = new MeshBuilder(true, false);
+                torsoMb.AddEllipsoid(new Vector3(0, -0.44f, 0), 0.52f, 0.47f, 0.46f, 30, 20);
+                triangleCount += AddGeometry(bodyGroup, torsoMb, bodyMaterial);
+
+                // 밝은 배 패치
+                var bellyMb = new MeshBuilder(true, false);
+                bellyMb.AddEllipsoid(new Vector3(0, -0.47f, 0.34f), 0.30f, 0.27f, 0.16f, 22, 14);
+                triangleCount += AddGeometry(bodyGroup, bellyMb, softLightBodyMaterial);
+
+                // 둥근 앞발 + 작은 핑크 젤리 포인트 (타이핑/리듬 반응용)
+                leftPawTrans = new TranslateTransform3D(0, 0, 0);
+                var leftPawGroup = new Model3DGroup { Transform = leftPawTrans };
+                var leftPawMb = new MeshBuilder(true, false);
+                leftPawMb.AddEllipsoid(new Vector3(-0.33f, -0.60f, 0.36f), 0.165f, 0.135f, 0.185f, 20, 14);
+                triangleCount += AddGeometry(leftPawGroup, leftPawMb, bodyMaterial);
+                var leftPadMb = new MeshBuilder(true, false);
+                leftPadMb.AddEllipsoid(new Vector3(-0.33f, -0.62f, 0.51f), 0.065f, 0.055f, 0.03f, 12, 8);
+                triangleCount += AddGeometry(leftPawGroup, leftPadMb, accentMaterial);
+                bodyGroup.Children.Add(leftPawGroup);
+
+                rightPawTrans = new TranslateTransform3D(0, 0, 0);
+                var rightPawGroup = new Model3DGroup { Transform = rightPawTrans };
+                var rightPawMb = new MeshBuilder(true, false);
+                rightPawMb.AddEllipsoid(new Vector3(0.33f, -0.60f, 0.36f), 0.165f, 0.135f, 0.185f, 20, 14);
+                triangleCount += AddGeometry(rightPawGroup, rightPawMb, bodyMaterial);
+                var rightPadMb = new MeshBuilder(true, false);
+                rightPadMb.AddEllipsoid(new Vector3(0.33f, -0.62f, 0.51f), 0.065f, 0.055f, 0.03f, 12, 8);
+                triangleCount += AddGeometry(rightPawGroup, rightPadMb, accentMaterial);
+                bodyGroup.Children.Add(rightPawGroup);
+
+                // 귀여운 앉은 뒷발 2개
+                var backFeetMb = new MeshBuilder(true, false);
+                backFeetMb.AddEllipsoid(new Vector3(-0.28f, -0.82f, 0.12f), 0.19f, 0.11f, 0.22f, 18, 12);
+                backFeetMb.AddEllipsoid(new Vector3(0.28f, -0.82f, 0.12f), 0.19f, 0.11f, 0.22f, 18, 12);
+                triangleCount += AddGeometry(bodyGroup, backFeetMb, bodyMaterial);
+
+                // 부드러운 S곡선 꼬리 (끝부분 포인트 컬러)
+                tailRot = new AxisAngleRotation3D(new Vector3D(0, 1, 0), 0);
+                var tailGroup = new Model3DGroup
+                {
+                    Transform = new RotateTransform3D(tailRot, new Point3D(0, -0.58, -0.36))
+                };
+                var tailMb = new MeshBuilder(true, false);
+                var tailPath = new List<Vector3>
+                {
+                    new(0, -0.58f, -0.36f),
+                    new(0.08f, -0.56f, -0.54f),
+                    new(0.18f, -0.46f, -0.70f),
+                    new(0.26f, -0.28f, -0.82f),
+                    new(0.27f, -0.08f, -0.82f),
+                    new(0.22f, 0.06f, -0.76f)
+                };
+                tailMb.AddTube(tailPath, diameter: 0.185f, thetaDiv: 18, isTubeClosed: false);
+                triangleCount += AddGeometry(tailGroup, tailMb, bodyMaterial);
+
+                var tailTipMb = new MeshBuilder(true, false);
+                tailTipMb.AddSphere(new Vector3(0.22f, 0.06f, -0.76f), 0.105f, 16, 12);
+                triangleCount += AddGeometry(tailGroup, tailTipMb, softLightBodyMaterial);
+                bodyGroup.Children.Add(tailGroup);
+
+                // 매끄럽고 큰 둥근 고양이 머리
+                var headMb = new MeshBuilder(true, false);
+                headMb.AddEllipsoid(new Vector3(0, 0.42f, 0), 0.82f, 0.71f, 0.75f, 36, 24);
+                triangleCount += AddGeometry(headGroup, headMb, bodyMaterial);
+
+                // 둥근 고양이 주둥이(머즐 패드 2개)
+                var muzzleMb = new MeshBuilder(true, false);
+                muzzleMb.AddEllipsoid(new Vector3(-0.105f, faceCenterY - 0.11f, faceZ - 0.01f), 0.135f, 0.10f, 0.09f, 16, 10);
+                muzzleMb.AddEllipsoid(new Vector3(0.105f, faceCenterY - 0.11f, faceZ - 0.01f), 0.135f, 0.10f, 0.09f, 16, 10);
+                triangleCount += AddGeometry(headGroup, muzzleMb, softLightBodyMaterial);
+
+                // 작은 핑크 코
+                var noseMb = new MeshBuilder(true, false);
+                noseMb.AddEllipsoid(new Vector3(0, faceCenterY - 0.045f, faceZ + 0.065f), 0.062f, 0.045f, 0.042f, 14, 10);
+                triangleCount += AddGeometry(headGroup, noseMb, accentMaterial);
+
+                // 귀여운 양볼 수염 2쌍
+                var whiskerMb = new MeshBuilder(true, false);
+                whiskerMb.AddCylinder(new Vector3(-0.56f, faceCenterY - 0.06f, faceZ - 0.16f), new Vector3(-0.84f, faceCenterY - 0.02f, faceZ - 0.22f), 0.014f, 6);
+                whiskerMb.AddCylinder(new Vector3(-0.56f, faceCenterY - 0.14f, faceZ - 0.16f), new Vector3(-0.84f, faceCenterY - 0.18f, faceZ - 0.22f), 0.014f, 6);
+                whiskerMb.AddCylinder(new Vector3(0.56f, faceCenterY - 0.06f, faceZ - 0.16f), new Vector3(0.84f, faceCenterY - 0.02f, faceZ - 0.22f), 0.014f, 6);
+                whiskerMb.AddCylinder(new Vector3(0.56f, faceCenterY - 0.14f, faceZ - 0.16f), new Vector3(0.84f, faceCenterY - 0.18f, faceZ - 0.22f), 0.014f, 6);
+                triangleCount += AddGeometry(headGroup, whiskerMb, darkEyeMaterial);
+
+                // 왼쪽 둥근 끝 삼각 귀
+                leftEarRot = new AxisAngleRotation3D(new Vector3D(0, 0, 1), 15);
+                var leftEarGroup = new Model3DGroup
+                {
+                    Transform = new RotateTransform3D(leftEarRot, new Point3D(-0.48, 0.94, 0.0))
+                };
+                var leftEarOuterMb = new MeshBuilder(true, false);
+                leftEarOuterMb.AddCone(new Vector3(-0.48f, 0.86f, 0.0f), new Vector3(-0.22f, 1.0f, 0.08f), 0.28f, 0.065f, 0.43f, true, true, 24);
+                leftEarOuterMb.AddSphere(new Vector3(-0.57f, 1.28f, 0.03f), 0.07f, 14, 10);
+                triangleCount += AddGeometry(leftEarGroup, leftEarOuterMb, bodyMaterial);
+
+                var leftEarInnerMb = new MeshBuilder(true, false);
+                leftEarInnerMb.AddCone(new Vector3(-0.46f, 0.90f, 0.085f), new Vector3(-0.20f, 1.0f, 0.10f), 0.16f, 0.035f, 0.28f, true, true, 18);
+                triangleCount += AddGeometry(leftEarGroup, leftEarInnerMb, accentMaterial);
+                headGroup.Children.Add(leftEarGroup);
+
+                // 오른쪽 둥근 끝 삼각 귀
+                rightEarRot = new AxisAngleRotation3D(new Vector3D(0, 0, 1), -15);
+                var rightEarGroup = new Model3DGroup
+                {
+                    Transform = new RotateTransform3D(rightEarRot, new Point3D(0.48, 0.94, 0.0))
+                };
+                var rightEarOuterMb = new MeshBuilder(true, false);
+                rightEarOuterMb.AddCone(new Vector3(0.48f, 0.86f, 0.0f), new Vector3(0.22f, 1.0f, 0.08f), 0.28f, 0.065f, 0.43f, true, true, 24);
+                rightEarOuterMb.AddSphere(new Vector3(0.57f, 1.28f, 0.03f), 0.07f, 14, 10);
+                triangleCount += AddGeometry(rightEarGroup, rightEarOuterMb, bodyMaterial);
+
+                var rightEarInnerMb = new MeshBuilder(true, false);
+                rightEarInnerMb.AddCone(new Vector3(0.46f, 0.90f, 0.085f), new Vector3(0.20f, 1.0f, 0.10f), 0.16f, 0.035f, 0.28f, true, true, 18);
+                triangleCount += AddGeometry(rightEarGroup, rightEarInnerMb, accentMaterial);
+                headGroup.Children.Add(rightEarGroup);
+
+                break;
+            }
+
+            case PetSpeciesIds.FluffyCloud:
+            {
+                headPivotY = 0.0f;
+                headSocketY = 0.94f;
+                faceCenterY = 0.04f;
+                faceZ = 0.84f;
+                headRadiusX = 0.96f;
+
+                // 투톤 몽실 구름 클러스터 (상단 밝은 구름 + 하단 소프트 그림자 구름)
+                var cloudTopMb = new MeshBuilder(true, false);
+                cloudTopMb.AddEllipsoid(new Vector3(0, 0.04f, 0.02f), 0.88f, 0.72f, 0.82f, 30, 20);
+                cloudTopMb.AddSphere(new Vector3(-0.60f, -0.02f, 0.06f), 0.51f, 22, 16);
+                cloudTopMb.AddSphere(new Vector3(0.60f, -0.02f, 0.06f), 0.51f, 22, 16);
+                cloudTopMb.AddSphere(new Vector3(-0.36f, 0.40f, -0.04f), 0.49f, 22, 16);
+                cloudTopMb.AddSphere(new Vector3(0.36f, 0.40f, -0.04f), 0.49f, 22, 16);
+                cloudTopMb.AddSphere(new Vector3(0.0f, 0.52f, -0.02f), 0.47f, 22, 16);
+                triangleCount += AddGeometry(headGroup, cloudTopMb, bodyMaterial);
+
+                var cloudBottomMb = new MeshBuilder(true, false);
+                cloudBottomMb.AddSphere(new Vector3(-0.38f, -0.34f, -0.06f), 0.44f, 18, 12);
+                cloudBottomMb.AddSphere(new Vector3(0.38f, -0.34f, -0.06f), 0.44f, 18, 12);
+                cloudBottomMb.AddSphere(new Vector3(0.0f, -0.26f, -0.38f), 0.50f, 18, 12);
+                // 아래쪽 작은 솜방울 디테일
+                cloudBottomMb.AddSphere(new Vector3(-0.56f, -0.58f, 0.08f), 0.14f, 14, 10);
+                cloudBottomMb.AddSphere(new Vector3(0.56f, -0.58f, 0.08f), 0.14f, 14, 10);
+                triangleCount += AddGeometry(headGroup, cloudBottomMb, softShadeBodyMaterial);
+
+                // 양옆에 살랑이는 미니 천사 구름 날개
+                leftArmRot = new AxisAngleRotation3D(new Vector3D(0, 0, 1), 0);
+                var leftWingMb = new MeshBuilder(true, false);
+                leftWingMb.AddEllipsoid(new Vector3(-1.12f, 0.08f, -0.04f), 0.26f, 0.14f, 0.12f, 16, 10);
+                triangleCount += AddGeometry(
+                    headGroup,
+                    leftWingMb,
+                    softLightBodyMaterial,
+                    new RotateTransform3D(leftArmRot, new Point3D(-0.92, 0.06, -0.04)));
+
+                rightArmRot = new AxisAngleRotation3D(new Vector3D(0, 0, 1), 0);
+                var rightWingMb = new MeshBuilder(true, false);
+                rightWingMb.AddEllipsoid(new Vector3(1.12f, 0.08f, -0.04f), 0.26f, 0.14f, 0.12f, 16, 10);
+                triangleCount += AddGeometry(
+                    headGroup,
+                    rightWingMb,
+                    softLightBodyMaterial,
+                    new RotateTransform3D(rightArmRot, new Point3D(0.92, 0.06, -0.04)));
+
+                break;
+            }
+
+            case PetSpeciesIds.MochiSpirit:
+            default:
+            {
+                headPivotY = -0.10f;
+                headSocketY = 0.84f;
+                faceCenterY = 0.02f;
+                faceZ = 0.94f;
+                headRadiusX = 1.04f;
+
+                // 매끄럽고 쫀득한 모찌 3D 타원체 바디
+                var mochiMb = new MeshBuilder(true, false);
+                mochiMb.AddEllipsoid(new Vector3(0, -0.02f, 0), 1.04f, 0.86f, 0.97f, 36, 24);
+                mochiMb.AddEllipsoid(new Vector3(0, -0.44f, 0), 1.02f, 0.45f, 0.95f, 30, 18);
+                // 뒤쪽 조그만 모찌 꽁지
+                mochiMb.AddSphere(new Vector3(0, -0.34f, -0.96f), 0.18f, 14, 10);
+                triangleCount += AddGeometry(headGroup, mochiMb, bodyMaterial);
+
+                // 양옆에 귀엽게 달린 말랑 미니 팔 (댄스·쓰다듬기 시 흔들림)
+                leftArmRot = new AxisAngleRotation3D(new Vector3D(0, 0, 1), 0);
+                var leftArmMb = new MeshBuilder(true, false);
+                leftArmMb.AddEllipsoid(new Vector3(-1.02f, -0.18f, 0.24f), 0.22f, 0.14f, 0.16f, 16, 10);
+                triangleCount += AddGeometry(
+                    headGroup,
+                    leftArmMb,
+                    bodyMaterial,
+                    new RotateTransform3D(leftArmRot, new Point3D(-0.88, -0.16, 0.22)));
+
+                rightArmRot = new AxisAngleRotation3D(new Vector3D(0, 0, 1), 0);
+                var rightArmMb = new MeshBuilder(true, false);
+                rightArmMb.AddEllipsoid(new Vector3(1.02f, -0.18f, 0.24f), 0.22f, 0.14f, 0.16f, 16, 10);
+                triangleCount += AddGeometry(
+                    headGroup,
+                    rightArmMb,
+                    bodyMaterial,
+                    new RotateTransform3D(rightArmRot, new Point3D(0.88, -0.16, 0.22)));
+
+                break;
+            }
+        }
+
+        // 머리/얼굴 회전 중심 적용
+        var headTransform = new Transform3DGroup();
+        var pivot = new Point3D(0, headPivotY, 0);
+        headTransform.Children.Add(new RotateTransform3D(headYaw, pivot));
+        headTransform.Children.Add(new RotateTransform3D(headPitch, pivot));
+        headTransform.Children.Add(new RotateTransform3D(headRoll, pivot));
+        headGroup.Transform = headTransform;
+
+        // 표정 파츠 (자동 눈 깜빡임용 EyeBlinkScale 반환)
+        var (exprTris, eyeBlinkScale) = BuildExpressionParts(
+            headGroup,
+            appearance.ExpressionId,
+            faceCenterY,
+            faceZ,
+            isCatFace,
+            darkEyeMaterial,
+            whiteHighlightMaterial,
+            accentMaterial);
+        triangleCount += exprTris;
+
+        // 머리 소켓 3D 악세서리
+        triangleCount += BuildHeadAccessory(
+            headGroup,
+            appearance.HeadAccessoryId,
+            headSocketY,
+            headRadiusX,
+            accentColor);
+
+        bodyGroup.Children.Add(headGroup);
+
+        // 3종 캐릭터 공통: 댄스/음악 반응 시 방출되는 풀링 3D 음표/별 파티클 6개 사전 생성
+        var particleMat = CreateClayMaterial(Lighten(accentColor, 0.25), auraEmissiveBrush, 32, 110);
+        for (var i = 0; i < 6; i++)
+        {
+            var pScale = new ScaleTransform3D(0, 0, 0);
+            var pRot = new AxisAngleRotation3D(new Vector3D(0, 1, 0), 0);
+            var pTrans = new TranslateTransform3D(0, 0, 0);
+            var pTransform = new Transform3DGroup();
+            pTransform.Children.Add(pScale);
+            pTransform.Children.Add(new RotateTransform3D(pRot));
+            pTransform.Children.Add(pTrans);
+
+            var pMb = new MeshBuilder(true, false);
+            if (i % 2 == 0)
+            {
+                pMb.AddEllipsoid(new Vector3(0, 0, 0), 0.10f, 0.08f, 0.06f, 12, 8);
+                pMb.AddCylinder(new Vector3(0.08f, 0, 0), new Vector3(0.08f, 0.26f, 0), 0.022f, 8);
+                pMb.AddBox(new Vector3(0.14f, 0.23f, 0), 0.12f, 0.05f, 0.03f);
+            }
+            else
+            {
+                pMb.AddOctahedron(Vector3.Zero, Vector3.UnitY, Vector3.UnitZ, 0.12f, 0.12f);
+            }
+
+            triangleCount += AddGeometry(rootGroup, pMb, particleMat, pTransform);
+            musicParticles.Add(new MusicParticleHandle
+            {
+                Scale = pScale,
+                Translate = pTrans,
+                Rotation = pRot
+            });
+        }
+
+        // 3D 오라/주변 이펙트
+        AxisAngleRotation3D? auraRot = null;
+        TranslateTransform3D? auraTrans = null;
+        if (!string.Equals(appearance.AuraEffectId, "none", StringComparison.OrdinalIgnoreCase))
+        {
+            auraRot = new AxisAngleRotation3D(new Vector3D(0, 1, 0), 0);
+            auraTrans = new TranslateTransform3D(0, 0, 0);
+
+            var auraTransform = new Transform3DGroup();
+            auraTransform.Children.Add(new RotateTransform3D(auraRot));
+            auraTransform.Children.Add(auraTrans);
+
+            var auraGroup = new Model3DGroup { Transform = auraTransform };
+            triangleCount += BuildAuraEffect(auraGroup, appearance.AuraEffectId, accentColor, auraEmissiveBrush);
+            rootGroup.Children.Add(auraGroup);
+        }
+
+        return new PetRigHandle
+        {
+            SpeciesId = appearance.SpeciesId,
+            RootModel = rootGroup,
+            TotalTriangleCount = triangleCount,
+            BodyScale = bodyScale,
+            BodyTranslate = bodyTranslate,
+            BodyYaw = bodyYaw,
+            BodyPitch = bodyPitch,
+            BodyRoll = bodyRoll,
+            HeadYaw = headYaw,
+            HeadPitch = headPitch,
+            HeadRoll = headRoll,
+            EyeBlinkScale = eyeBlinkScale,
+            ShadowScale = shadowScale,
+            LeftEarRotation = leftEarRot,
+            RightEarRotation = rightEarRot,
+            TailRotation = tailRot,
+            LeftPawTranslate = leftPawTrans,
+            RightPawTranslate = rightPawTrans,
+            LeftArmRotation = leftArmRot,
+            RightArmRotation = rightArmRot,
+            MusicParticles = musicParticles,
+            AuraRotation = auraRot,
+            AuraTranslate = auraTrans,
+            BodyEmissiveBrush = bodyEmissiveBrush,
+            AuraEmissiveBrush = auraEmissiveBrush
+        };
+    }
+
+    private static (int Triangles, ScaleTransform3D? EyeBlinkScale) BuildExpressionParts(
+        Model3DGroup parent,
+        string expressionId,
+        float faceCenterY,
+        float faceZ,
+        bool isCatFace,
+        Material eyeMaterial,
+        Material highlightMaterial,
+        Material cheekMaterial)
+    {
+        var tris = 0;
+
+        // 부드러운 3D 볼터치
+        var cheekMb = new MeshBuilder(true, false);
+        cheekMb.AddEllipsoid(new Vector3(-0.43f, faceCenterY - 0.14f, faceZ - 0.08f), 0.165f, 0.10f, 0.075f, 18, 12);
+        cheekMb.AddEllipsoid(new Vector3(0.43f, faceCenterY - 0.14f, faceZ - 0.08f), 0.165f, 0.10f, 0.075f, 18, 12);
+        tris += AddGeometry(parent, cheekMb, cheekMaterial);
+
+        // 눈 그룹 (깜빡임 스케일 적용)
+        var eyeY = faceCenterY + 0.06f;
+        var canBlink = expressionId is not ("happy" or "sleepy");
+        var eyeBlinkScale = canBlink ? new ScaleTransform3D(1, 1, 1, 0, eyeY, faceZ) : null;
+        var eyeGroup = new Model3DGroup { Transform = eyeBlinkScale };
+
+        var eyeMb = new MeshBuilder(true, false);
+        var highlightMb = new MeshBuilder(true, false);
+
+        switch (expressionId)
+        {
+            case "happy":
+            {
+                AddEyeArc(eyeMb, -0.28f, eyeY, faceZ, 0.13f, 0.055f);
+                AddEyeArc(eyeMb, 0.28f, eyeY, faceZ, 0.13f, 0.055f);
+                break;
+            }
+
+            case "sleepy":
+            {
+                eyeMb.AddEllipsoid(new Vector3(-0.28f, faceCenterY + 0.04f, faceZ), 0.13f, 0.036f, 0.05f, 16, 10);
+                eyeMb.AddEllipsoid(new Vector3(0.28f, faceCenterY + 0.04f, faceZ), 0.13f, 0.036f, 0.05f, 16, 10);
+                break;
+            }
+
+            case "sparkle":
+            {
+                eyeMb.AddEllipsoid(new Vector3(-0.28f, eyeY, faceZ), 0.125f, 0.148f, 0.08f, 20, 14);
+                eyeMb.AddEllipsoid(new Vector3(0.28f, eyeY, faceZ), 0.125f, 0.148f, 0.08f, 20, 14);
+
+                highlightMb.AddSphere(new Vector3(-0.24f, eyeY + 0.05f, faceZ + 0.065f), 0.048f, 12, 8);
+                highlightMb.AddSphere(new Vector3(0.32f, eyeY + 0.05f, faceZ + 0.065f), 0.048f, 12, 8);
+                highlightMb.AddSphere(new Vector3(-0.32f, eyeY - 0.04f, faceZ + 0.065f), 0.025f, 10, 8);
+                highlightMb.AddSphere(new Vector3(0.24f, eyeY - 0.04f, faceZ + 0.065f), 0.025f, 10, 8);
+                break;
+            }
+
+            default:
+            {
+                eyeMb.AddEllipsoid(new Vector3(-0.28f, eyeY, faceZ), 0.108f, 0.122f, 0.078f, 18, 12);
+                eyeMb.AddEllipsoid(new Vector3(0.28f, eyeY, faceZ), 0.108f, 0.122f, 0.078f, 18, 12);
+
+                highlightMb.AddSphere(new Vector3(-0.245f, eyeY + 0.042f, faceZ + 0.058f), 0.038f, 12, 8);
+                highlightMb.AddSphere(new Vector3(0.315f, eyeY + 0.042f, faceZ + 0.058f), 0.038f, 12, 8);
+                highlightMb.AddSphere(new Vector3(-0.305f, eyeY - 0.035f, faceZ + 0.056f), 0.018f, 8, 6);
+                highlightMb.AddSphere(new Vector3(0.255f, eyeY - 0.035f, faceZ + 0.056f), 0.018f, 8, 6);
+                break;
+            }
+        }
+
+        tris += AddGeometry(eyeGroup, eyeMb, eyeMaterial);
+        if (highlightMb.Positions.Count > 0)
+        {
+            tris += AddGeometry(eyeGroup, highlightMb, highlightMaterial);
+        }
+
+        parent.Children.Add(eyeGroup);
+
+        // 입 파츠 (치비 고양이는 귀여운 'w' 입, 나머지는 부드러운 미소)
+        var mouthMb = new MeshBuilder(true, false);
+        if (isCatFace)
+        {
+            var leftW = new List<Vector3>
+            {
+                new(-0.11f, faceCenterY - 0.12f, faceZ + 0.045f),
+                new(-0.055f, faceCenterY - 0.165f, faceZ + 0.065f),
+                new(0.0f, faceCenterY - 0.115f, faceZ + 0.072f)
+            };
+            var rightW = new List<Vector3>
+            {
+                new(0.0f, faceCenterY - 0.115f, faceZ + 0.072f),
+                new(0.055f, faceCenterY - 0.165f, faceZ + 0.065f),
+                new(0.11f, faceCenterY - 0.12f, faceZ + 0.045f)
+            };
+            mouthMb.AddTube(leftW, diameter: 0.034f, thetaDiv: 10, isTubeClosed: false);
+            mouthMb.AddTube(rightW, diameter: 0.034f, thetaDiv: 10, isTubeClosed: false);
+        }
+        else
+        {
+            var mouthPath = new List<Vector3>
+            {
+                new(-0.095f, faceCenterY - 0.10f, faceZ + 0.01f),
+                new(-0.045f, faceCenterY - 0.145f, faceZ + 0.022f),
+                new(0.0f, faceCenterY - 0.158f, faceZ + 0.026f),
+                new(0.045f, faceCenterY - 0.145f, faceZ + 0.022f),
+                new(0.095f, faceCenterY - 0.10f, faceZ + 0.01f)
+            };
+            mouthMb.AddTube(mouthPath, diameter: 0.040f, thetaDiv: 12, isTubeClosed: false);
+        }
+
+        tris += AddGeometry(parent, mouthMb, eyeMaterial);
+        return (tris, eyeBlinkScale);
+    }
+
+    private static int BuildHeadAccessory(
+        Model3DGroup parent,
+        string accessoryId,
+        float socketY,
+        float headRadiusX,
+        Color accentColor)
+    {
+        var tris = 0;
+
+        switch (accessoryId)
+        {
+            case "sprout":
+            {
+                var greenMat = CreateClayMaterial(Color.FromRgb(106, 204, 118), null, 18, 75);
+                var stemMb = new MeshBuilder(true, false);
+                stemMb.AddTube(
+                    new List<Vector3>
+                    {
+                        new(0, socketY - 0.06f, 0),
+                        new(0.015f, socketY + 0.10f, 0.015f),
+                        new(0.02f, socketY + 0.22f, 0.02f),
+                        new(0, socketY + 0.34f, 0)
+                    },
+                    diameter: 0.065f,
+                    thetaDiv: 12,
+                    isTubeClosed: false);
+                stemMb.AddEllipsoid(new Vector3(-0.18f, socketY + 0.38f, 0.02f), 0.20f, 0.075f, 0.11f, 18, 12);
+                stemMb.AddEllipsoid(new Vector3(0.18f, socketY + 0.36f, -0.02f), 0.18f, 0.070f, 0.10f, 18, 12);
+                tris += AddGeometry(parent, stemMb, greenMat);
+                break;
+            }
+
+            case "ribbon":
+            {
+                var ribbonMat = CreateClayMaterial(accentColor, null, 22, 85);
+                var ribMb = new MeshBuilder(true, false);
+                ribMb.AddSphere(new Vector3(0, socketY + 0.05f, 0.12f), 0.11f, 16, 12);
+                ribMb.AddEllipsoid(new Vector3(-0.24f, socketY + 0.09f, 0.10f), 0.22f, 0.14f, 0.09f, 18, 12);
+                ribMb.AddEllipsoid(new Vector3(0.24f, socketY + 0.09f, 0.10f), 0.22f, 0.14f, 0.09f, 18, 12);
+                tris += AddGeometry(parent, ribMb, ribbonMat);
+                break;
+            }
+
+            case "headset":
+            {
+                var bandMat = CreateClayMaterial(Color.FromRgb(56, 62, 78), null, 30, 100);
+                var cupMat = CreateClayMaterial(accentColor, null, 24, 90);
+
+                var bandPoints = new List<Vector3>();
+                const int segs = 22;
+                var rx = headRadiusX + 0.08f;
+                var ry = 0.56f;
+                var baseY = socketY - 0.42f;
+                for (var i = 0; i <= segs; i++)
+                {
+                    var angle = MathF.PI * i / segs;
+                    bandPoints.Add(new Vector3(MathF.Cos(angle) * rx, baseY + MathF.Sin(angle) * ry, 0.0f));
+                }
+
+                var bandMb = new MeshBuilder(true, false);
+                bandMb.AddTube(bandPoints, diameter: 0.12f, thetaDiv: 14, isTubeClosed: false);
+                tris += AddGeometry(parent, bandMb, bandMat);
+
+                var cupMb = new MeshBuilder(true, false);
+                cupMb.AddEllipsoid(new Vector3(-rx, baseY, 0.0f), 0.16f, 0.26f, 0.24f, 20, 14);
+                cupMb.AddEllipsoid(new Vector3(rx, baseY, 0.0f), 0.16f, 0.26f, 0.24f, 20, 14);
+                tris += AddGeometry(parent, cupMb, cupMat);
+                break;
+            }
+
+            case "santa_hat":
+            {
+                var redMat = CreateClayMaterial(Color.FromRgb(226, 66, 76), null, 16, 70);
+                var whiteMat = CreateClayMaterial(Color.FromRgb(250, 250, 252), null, 14, 55);
+
+                var brimMb = new MeshBuilder(true, false);
+                AddRingTube(brimMb, new Vector3(0, socketY - 0.04f, 0), radius: 0.48f, tubeDiameter: 0.18f, segments: 28);
+                brimMb.AddSphere(new Vector3(0.28f, socketY + 0.58f, -0.08f), 0.15f, 18, 12);
+                tris += AddGeometry(parent, brimMb, whiteMat);
+
+                var coneMb = new MeshBuilder(true, false);
+                coneMb.AddCone(new Vector3(0, socketY - 0.02f, 0), new Vector3(0.32f, 1.0f, -0.10f), 0.44f, 0.05f, 0.72f, true, true, 24);
+                tris += AddGeometry(parent, coneMb, redMat);
+                break;
+            }
+
+            case "crown":
+            {
+                var goldMat = CreateClayMaterial(Color.FromRgb(255, 212, 82), new SolidColorBrush(Color.FromRgb(42, 32, 6)), 38, 130);
+                var gemMat = CreateClayMaterial(accentColor, null, 44, 140);
+
+                var crownMb = new MeshBuilder(true, false);
+                AddRingTube(crownMb, new Vector3(0, socketY + 0.02f, 0), radius: 0.34f, tubeDiameter: 0.11f, segments: 24);
+                for (var i = 0; i < 5; i++)
+                {
+                    var angle = i * 2.0f * MathF.PI / 5.0f;
+                    var x = MathF.Cos(angle) * 0.33f;
+                    var z = MathF.Sin(angle) * 0.33f;
+                    crownMb.AddCone(new Vector3(x, socketY + 0.04f, z), Vector3.UnitY, 0.11f, 0.025f, 0.28f, true, true, 12);
+                }
+
+                tris += AddGeometry(parent, crownMb, goldMat);
+
+                var gemMb = new MeshBuilder(true, false);
+                gemMb.AddSphere(new Vector3(0, socketY + 0.08f, 0.36f), 0.07f, 14, 10);
+                tris += AddGeometry(parent, gemMb, gemMat);
+                break;
+            }
+        }
+
+        return tris;
+    }
+
+    private static int BuildAuraEffect(
+        Model3DGroup parent,
+        string auraId,
+        Color accentColor,
+        SolidColorBrush auraEmissiveBrush)
+    {
+        var tris = 0;
+        var auraMat = CreateClayMaterial(Lighten(accentColor, 0.25), auraEmissiveBrush, 32, 110);
+
+        switch (auraId)
+        {
+            case "halo_ring":
+            {
+                var ringMb = new MeshBuilder(true, false);
+                AddRingTube(ringMb, new Vector3(0, -0.05f, 0), radius: 1.42f, tubeDiameter: 0.065f, segments: 38);
+                tris += AddGeometry(parent, ringMb, auraMat);
+                break;
+            }
+
+            case "music_notes":
+            {
+                var noteMb = new MeshBuilder(true, false);
+                for (var i = 0; i < 4; i++)
+                {
+                    var angle = i * MathF.PI * 0.5f + 0.4f;
+                    var x = MathF.Cos(angle) * 1.38f;
+                    var z = MathF.Sin(angle) * 1.38f;
+                    var y = (i % 2 == 0) ? 0.35f : -0.15f;
+
+                    noteMb.AddEllipsoid(new Vector3(x, y, z), 0.12f, 0.09f, 0.07f, 14, 10);
+                    noteMb.AddCylinder(new Vector3(x + 0.09f, y, z), new Vector3(x + 0.09f, y + 0.34f, z), 0.028f, 10);
+                    noteMb.AddBox(new Vector3(x + 0.16f, y + 0.30f, z), 0.15f, 0.06f, 0.04f);
+                }
+
+                tris += AddGeometry(parent, noteMb, auraMat);
+                break;
+            }
+
+            case "snowflakes":
+            {
+                var snowMat = CreateClayMaterial(Color.FromRgb(220, 242, 255), auraEmissiveBrush, 38, 125);
+                var snowMb = new MeshBuilder(true, false);
+                for (var i = 0; i < 6; i++)
+                {
+                    var angle = i * MathF.PI / 3.0f;
+                    var x = MathF.Cos(angle) * 1.40f;
+                    var z = MathF.Sin(angle) * 1.40f;
+                    var y = MathF.Sin(i * 1.7f) * 0.45f;
+                    snowMb.AddOctahedron(new Vector3(x, y, z), Vector3.UnitY, Vector3.UnitZ, 0.11f, 0.11f);
+                }
+
+                tris += AddGeometry(parent, snowMb, snowMat);
+                break;
+            }
+        }
+
+        return tris;
+    }
+
+    private static void AddEyeArc(MeshBuilder mb, float cx, float cy, float cz, float halfWidth, float archHeight)
+    {
+        var pts = new List<Vector3>
+        {
+            new(cx - halfWidth, cy - archHeight * 0.35f, cz),
+            new(cx - halfWidth * 0.65f, cy + archHeight * 0.65f, cz + 0.015f),
+            new(cx, cy + archHeight, cz + 0.025f),
+            new(cx + halfWidth * 0.65f, cy + archHeight * 0.65f, cz + 0.015f),
+            new(cx + halfWidth, cy - archHeight * 0.35f, cz)
+        };
+        mb.AddTube(pts, diameter: 0.052f, thetaDiv: 12, isTubeClosed: false);
+    }
+
+    private static void AddRingTube(MeshBuilder mb, Vector3 center, float radius, float tubeDiameter, int segments)
+    {
+        var pts = new List<Vector3>(segments + 1);
+        for (var i = 0; i <= segments; i++)
+        {
+            var angle = 2.0f * MathF.PI * i / segments;
+            pts.Add(new Vector3(
+                center.X + MathF.Cos(angle) * radius,
+                center.Y,
+                center.Z + MathF.Sin(angle) * radius));
+        }
+
+        mb.AddTube(pts, diameter: tubeDiameter, thetaDiv: 14, isTubeClosed: true);
+    }
+
+    private static int AddGeometry(Model3DGroup group, MeshBuilder builder, Material material, Transform3D? transform = null)
+    {
+        var mesh = ToWpfMesh(builder);
+        var model = new GeometryModel3D(mesh, material)
+        {
+            BackMaterial = material
+        };
+
+        if (transform is not null)
+        {
+            model.Transform = transform;
+        }
+
+        group.Children.Add(model);
+        return mesh.TriangleIndices.Count / 3;
+    }
+
+    private static WpfMeshGeometry3D ToWpfMesh(MeshBuilder builder)
+    {
+        var helixMesh = builder.ToMesh();
+        var wpfMesh = new WpfMeshGeometry3D();
+
+        var positions = new Point3DCollection(helixMesh.Positions.Count);
+        foreach (var p in helixMesh.Positions)
+        {
+            positions.Add(new Point3D(p.X, p.Y, p.Z));
+        }
+
+        wpfMesh.Positions = positions;
+
+        if (helixMesh.Normals is { Count: > 0 })
+        {
+            var normals = new Vector3DCollection(helixMesh.Normals.Count);
+            foreach (var n in helixMesh.Normals)
+            {
+                normals.Add(new Vector3D(n.X, n.Y, n.Z));
+            }
+
+            wpfMesh.Normals = normals;
+        }
+
+        var indices = new Int32Collection(helixMesh.TriangleIndices.Count);
+        foreach (var idx in helixMesh.TriangleIndices)
+        {
+            indices.Add(idx);
+        }
+
+        wpfMesh.TriangleIndices = indices;
+        wpfMesh.Freeze();
+        return wpfMesh;
+    }
+
+    private static MaterialGroup CreateClayMaterial(Color baseColor, SolidColorBrush? emissiveBrush, double specularPower, byte specularAlpha = 90)
+    {
+        var group = new MaterialGroup();
+        group.Children.Add(new DiffuseMaterial(new SolidColorBrush(baseColor)));
+        group.Children.Add(new SpecularMaterial(new SolidColorBrush(Color.FromArgb(specularAlpha, 255, 255, 255)), specularPower));
+
+        if (emissiveBrush is not null)
+        {
+            group.Children.Add(new EmissiveMaterial(emissiveBrush));
+        }
+
+        return group;
+    }
+
+    private static Color ParseHexColor(string? hex, Color fallback)
+    {
+        if (string.IsNullOrWhiteSpace(hex))
+        {
+            return fallback;
+        }
+
+        try
+        {
+            if (ColorConverter.ConvertFromString(hex) is Color parsed)
+            {
+                return parsed;
+            }
+        }
+        catch (FormatException)
+        {
+        }
+
+        return fallback;
+    }
+
+    private static Color Lighten(Color c, double factor)
+    {
+        var r = (byte)Math.Clamp(c.R + (255 - c.R) * factor, 0, 255);
+        var g = (byte)Math.Clamp(c.G + (255 - c.G) * factor, 0, 255);
+        var b = (byte)Math.Clamp(c.B + (255 - c.B) * factor, 0, 255);
+        return Color.FromRgb(r, g, b);
+    }
+
+    private static Color Darken(Color c, double factor)
+    {
+        var r = (byte)Math.Clamp(c.R * (1.0 - factor), 0, 255);
+        var g = (byte)Math.Clamp(c.G * (1.0 - factor), 0, 255);
+        var b = (byte)Math.Clamp(c.B * (1.0 - factor), 0, 255);
+        return Color.FromRgb(r, g, b);
+    }
+}

@@ -1,0 +1,85 @@
+name: LabPet Windows Release (Velopack)
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    runs-on: windows-latest
+    env:
+      VELOPACK_VERSION: "1.2.161"
+      DOTNET_NOLOGO: "true"
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup .NET 10 SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+
+      - name: Extract semantic version from tag
+        id: version
+        shell: pwsh
+        run: |
+          $tag = "${{ github.ref_name }}"
+          $ver = $tag.TrimStart('v')
+          echo "version=$ver" >> $env:GITHUB_OUTPUT
+          echo "tag=$tag" >> $env:GITHUB_OUTPUT
+
+      - name: Restore and run unit tests
+        shell: pwsh
+        run: |
+          dotnet restore LabPet.slnx
+          dotnet test LabPet.slnx -c Release --no-restore
+
+      - name: Publish LabPet.Client (win-x64 self-contained)
+        shell: pwsh
+        run: |
+          dotnet publish src/LabPet.Client/LabPet.Client.csproj `
+            -c Release `
+            -r win-x64 `
+            --self-contained true `
+            -p:Version=${{ steps.version.outputs.version }} `
+            -o ./publish/win-x64
+
+      - name: Install Velopack CLI (vpk) matching NuGet version
+        shell: pwsh
+        run: |
+          dotnet tool install -g vpk --version ${{ env.VELOPACK_VERSION }}
+
+      - name: Download previous GitHub release for delta package generation
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          vpk download github `
+            --repoUrl "${{ github.server_url }}/${{ github.repository }}" `
+            --token "${{ secrets.GITHUB_TOKEN }}" `
+            --outputDir ./Releases
+
+      - name: Pack Velopack installer and delta packages
+        shell: pwsh
+        run: |
+          vpk pack `
+            -u LabPet `
+            -v "${{ steps.version.outputs.version }}" `
+            -p ./publish/win-x64 `
+            -e LabPet.Client.exe `
+            -o ./Releases
+
+      - name: Upload and publish GitHub Release
+        shell: pwsh
+        run: |
+          vpk upload github `
+            --repoUrl "${{ github.server_url }}/${{ github.repository }}" `
+            --token "${{ secrets.GITHUB_TOKEN }}" `
+            --outputDir ./Releases `
+            --publish `
+            --tag "${{ steps.version.outputs.tag }}" `
+            --releaseName "LabPet ${{ steps.version.outputs.tag }}"

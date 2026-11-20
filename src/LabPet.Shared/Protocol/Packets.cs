@@ -1,0 +1,124 @@
+using LabPet.Shared.Models;
+
+namespace LabPet.Shared.Protocol;
+
+/// <summary>
+/// LAN P2P 및 향후 원격 프로토콜의 공용 패킷 유형.
+/// </summary>
+public enum PacketType
+{
+    Hello = 0,
+    FriendRequest = 1,
+    FriendAccept = 2,
+    FriendReject = 3,
+    BubbleMessage = 4,
+    QuickReaction = 5,
+    PetInteraction = 6,
+    MusicFollowOn = 7,
+    MusicFollowOff = 8,
+    Ack = 9
+}
+
+/// <summary>
+/// 모든 TCP 제어 패킷에 포함되는 공통 헤더.
+/// </summary>
+public sealed class PacketHeader
+{
+    public int ProtocolVersion { get; set; } = ProtocolConstants.CurrentProtocolVersion;
+    public string AppVersion { get; set; } = "0.1.0";
+    public PacketType PacketType { get; set; }
+    public string SenderPetId { get; set; } = string.Empty;
+    public string MessageId { get; set; } = Guid.NewGuid().ToString("N");
+    public DateTimeOffset TimestampUtc { get; set; } = DateTimeOffset.UtcNow;
+
+    /// <summary>친구 전용 패킷의 HMAC-SHA256 서명(Base64). 비친구 패킷(FriendRequest 등)은 null.</summary>
+    public string? SignatureBase64 { get; set; }
+}
+
+/// <summary>
+/// UDP 45678 주기적 브로드캐스트 탐색 패킷.
+/// </summary>
+public sealed class DiscoveryHelloPacket
+{
+    public int ProtocolVersion { get; set; } = ProtocolConstants.CurrentProtocolVersion;
+    public string AppVersion { get; set; } = "0.1.0";
+    public string PetId { get; set; } = string.Empty;
+    public string PetName { get; set; } = string.Empty;
+    public PetAppearance Appearance { get; set; } = new();
+    public int Level { get; set; } = 1;
+    public bool IsMusicActive { get; set; }
+    public int TcpPort { get; set; } = ProtocolConstants.TcpControlPort;
+    public DateTimeOffset TimestampUtc { get; set; } = DateTimeOffset.UtcNow;
+}
+
+/// <summary>
+/// UDP 45679 구독자 대상 30Hz 경량 오디오 프레임 유니캐스트 패킷.
+/// </summary>
+public sealed class MusicFramePacket
+{
+    public int ProtocolVersion { get; set; } = ProtocolConstants.CurrentProtocolVersion;
+    public string SenderPetId { get; set; } = string.Empty;
+    public uint Sequence { get; set; }
+    public float Bass { get; set; }
+    public float Mid { get; set; }
+    public float Treble { get; set; }
+    public bool IsBeat { get; set; }
+    public string SignatureBase64 { get; set; } = string.Empty;
+}
+
+/// <summary>
+/// TCP 45680 제어 패킷 봉투.
+/// </summary>
+public sealed class ControlPacketEnvelope
+{
+    public PacketHeader Header { get; set; } = new();
+    public string PayloadJson { get; set; } = "{}";
+}
+
+public sealed class FriendRequestPayload
+{
+    public string RequesterName { get; set; } = string.Empty;
+    public PetAppearance Appearance { get; set; } = new();
+    public int Level { get; set; } = 1;
+    public int TcpPort { get; set; } = ProtocolConstants.TcpControlPort;
+}
+
+public sealed class FriendAcceptPayload
+{
+    public string AccepterName { get; set; } = string.Empty;
+    public PetAppearance Appearance { get; set; } = new();
+    public string PairSecretBase64 { get; set; } = string.Empty;
+    public int TcpPort { get; set; } = ProtocolConstants.TcpControlPort;
+}
+
+public sealed class FriendRejectPayload
+{
+    public string? Reason { get; set; }
+}
+
+public sealed class BubbleMessagePayload
+{
+    public string Text { get; set; } = string.Empty;
+}
+
+public sealed class QuickReactionPayload
+{
+    public string ReactionId { get; set; } = string.Empty;
+}
+
+public sealed class PetInteractionPayload
+{
+    public string InteractionType { get; set; } = "pet";
+}
+
+public sealed class MusicFollowPayload
+{
+    public int ListenerUdpPort { get; set; } = ProtocolConstants.UdpMusicFramePort;
+}
+
+public sealed class AckPayload
+{
+    public string AckMessageId { get; set; } = string.Empty;
+    public bool Accepted { get; set; } = true;
+    public string? ErrorCode { get; set; }
+}

@@ -1,0 +1,49 @@
+# LabPet
+
+Windows 바탕화면 위에서 투명 창으로 상주하는 **3D 커스텀 데스크톱 펫** 애플리케이션입니다.
+
+## 핵심 기능 및 추적성 (`FT-XX`)
+- **FT-01 공용 프로토콜·모델·전송 인터페이스 (`LabPet.Shared`)**: 프로토콜 버전 호환성 판정, HMAC-SHA256 서명, `ISocialTransport` 추상화
+- **FT-02 절차적 3D 캐릭터 3종 및 커스텀 레이어**: 말랑 모찌 정령, 치비 고양이, 솜구름 + 5개 커스텀 레이어(종·컬러·표정·머리 악세서리·오라)
+- **FT-03 360도 3D 턴테이블 온보딩 및 외형 편집**: 실시간 드래그 회전 미리보기 및 펫 이름/외형 설정
+- **FT-04 투명 바탕화면 펫 창 UX**: 시선 추적(Look-At), 5px 클릭/드래그/흔들기 판정, 클릭 투과 집중 모드, 시스템 트레이 메뉴, 단일 인스턴스 보장
+- **FT-05 AppData 분리 저장 및 스키마 마이그레이션**: `%AppData%\LabPet\` 원자적 저장(`.tmp`→`Move`), `.bak` 자동 복구, `schemaVersion` 승격
+- **FT-06 `NAudio` 루프백 오디오 분석기**: 1,024-point FFT, 적응형 비트 감지, 무음 120ms 감쇠, 장치 0개 폴백, 핫스왑 자동 재연결
+- **FT-07 캐릭터별 3D 리듬 애니메이션·타이핑 앞발**: 모찌 Squash & Stretch 점프/발광, 고양이 귀·꼬리·타이핑 앞발, 솜구름 풀링 3D 음표/별 방출
+- **FT-08 개인 성장 루프 · 뽀모도로 · 3D 상점/도감**: 활동량/가동시간/뽀모도로 보상 및 코인 해금·장착
+- **FT-09 ~ FT-10 서버리스 LAN P2P 소셜**: 물리 어댑터 필터링 UDP 탐색, `protocolVersion` 업데이트 배지, TCP 친구 인증/HMAC, 말풍선 메시지, 30Hz 노래 따라하기
+- **FT-11 ~ FT-12 배포 · 자동 업데이트 · 운영**: Velopack `Program.cs` 및 `UpdateService`, GitHub Actions 차분 릴리스, 시작 프로그램 등록, 방화벽/SmartScreen 안내
+
+## 기술 스택
+| 구분 | 기술 / 패키지 |
+| --- | --- |
+| 런타임 / UI | `.NET 10` (`net10.0-windows`), WPF |
+| 3D 렌더링 | `HelixToolkit.Wpf 3.1.2` (`HelixToolkit.Geometry.MeshBuilder` + WPF `Viewport3D`) |
+| 오디오 분석 | `NAudio 2.2.1` (`WasapiLoopbackCapture`, `FastFourierTransform`, `MMDeviceEnumerator`) |
+| MVVM / DI | `CommunityToolkit.Mvvm 8.4.0`, `Microsoft.Extensions.DependencyInjection 10.0.0` |
+| 시스템 트레이 | `H.NotifyIcon.Wpf 2.3.0` |
+| 배포 / 업데이트 | `Velopack 1.2.161` + GitHub Actions (`.github/workflows/release.yml`) |
+| 테스트 | `xUnit 2.9.3` |
+
+## 빌드 · 테스트 · 실행
+```powershell
+dotnet build LabPet.slnx -c Debug
+dotnet test LabPet.slnx -c Debug
+dotnet run --project src/LabPet.Client/LabPet.Client.csproj
+```
+
+## 문서 목차 (`docs/` — Obsidian 볼트 호환)
+- [AI 작업 기준서 (AGENTS.md)](AGENTS.md)
+- [01. 제품요구사항정의서](docs/01_제품요구사항정의서.md)
+- [02. 아키텍처 설계서](docs/02_아키텍처_설계서.md)
+- [03. 네트워크 프로토콜 및 보안 명세](docs/03_네트워크_프로토콜_및_보안명세.md)
+- [04-0. UI/UX 설계서 개요](docs/04_UI_UX_설계서/04-0_UI_UX_설계서_개요.md)
+  - [04-1. 3D 캐릭터 및 투명 창 UX](docs/04_UI_UX_설계서/04-1_3D캐릭터_및_투명창_UX.md)
+- [05. 일자별 변경 이력 (2026-11-20)](docs/05_변경이력/2026-11-20.md)
+- [06. 배포 · 자동 업데이트 · 방화벽 및 SmartScreen 가이드](docs/06_배포_자동업데이트_및_방화벽가이드.md)
+- [07. 향후 LabPet.Server (GCP SignalR + Firestore) 확장 가이드](docs/07_GCP_클라우드_확장가이드.md)
+- [08-0. 기능명세서 개요 및 RTM](docs/08_기능명세서/08-0_기능명세서_개요.md)
+  - [08-1. 코어 3D · 온보딩 · 분리 저장소 명세](docs/08_기능명세서/08-1_코어3D_온보딩_저장소.md)
+  - [08-2. 오디오 반응 및 개인 성장 명세](docs/08_기능명세서/08-2_오디오반응_및_개인성장.md)
+  - [08-3. 서버리스 LAN P2P 소셜 명세](docs/08_기능명세서/08-3_LAN_P2P_소셜.md)
+  - [08-4. 배포 · 자동 업데이트 · 운영 명세](docs/08_기능명세서/08-4_배포_업데이트_운영.md)
