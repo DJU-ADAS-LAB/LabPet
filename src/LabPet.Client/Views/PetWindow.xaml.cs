@@ -24,10 +24,12 @@ public partial class PetWindow : Window
     private const double DragThresholdPixels = 5.0;
     private const double BaseWindowWidth = 214.0;
     private const double DefaultWindowHeight = 274.0;
+    private const double LegacyMessageRowHeight = 78.0;
     private const double NameplateGap = 4.0;
     private const double BaseNameplateHeight = 24.0;
     private const double FriendOverlayGap = 4.0;
     private const double FriendOverlayTopInset = 12.0;
+    private const double SpeechBubbleBottomOverlap = 8.0;
 
     /// <summary>
     /// 타이핑 미니 키보드(Y=-0.80, Z=1.04)와 바닥 회전 링 오라(Y=-0.78, Z=1.24)의 앞쪽 하단 기준점.
@@ -60,9 +62,6 @@ public partial class PetWindow : Window
     private bool _lastReportedMusicActive;
     private Point3D _nameplateAnchor;
     private FrameworkElement? _messageEditorToClose;
-
-    private double BaseLayoutHeight => PetMessageRow.MinHeight + PetViewport.Height + PetNameplateRow.Height.Value;
-    private double MessageOverflow => Math.Max(0, PetMessageRow.ActualHeight - PetMessageRow.MinHeight);
 
     // 마우스 클릭(<=5px) vs 창 드래그(>5px) vs 빠른 좌우 흔들기 판정 상태
     private bool _isPointerPressed;
@@ -101,18 +100,22 @@ public partial class PetWindow : Window
         LightsVisual.Content = _meshFactory.CreateStudioLights();
         FriendOverlayPopup.CustomPopupPlacementCallback = (popupSize, targetSize, _) =>
             GetFriendOverlayPlacements(popupSize, targetSize, VisualTreeHelper.GetDpi(PetLayout),
-                FriendOverlayCard.Margin, PetMessageRow.ActualHeight);
+                FriendOverlayCard.Margin, messageRowHeight: 0);
+        SpeechBubblePopup.CustomPopupPlacementCallback = (popupSize, targetSize, _) =>
+            GetSpeechBubblePlacements(popupSize, targetSize, VisualTreeHelper.GetDpi(PetLayout));
 
+        Loaded += (_, _) => RepositionSpeechBubblePopup();
+        LocationChanged += (_, _) => RepositionSpeechBubblePopup();
         SizeChanged += (_, e) =>
         {
-            if (IsLoaded && e.HeightChanged && e.PreviousSize.Height > 0)
-            {
-                Top += e.PreviousSize.Height - e.NewSize.Height;
-            }
-
             FriendOverlayPopup.PlacementRectangle = new Rect(e.NewSize);
+            RepositionSpeechBubblePopup();
         };
-        PetViewport.SizeChanged += (_, _) => UpdateNameplatePosition();
+        PetViewport.SizeChanged += (_, _) =>
+        {
+            UpdateNameplatePosition();
+            RepositionSpeechBubblePopup();
+        };
 
         _viewModel.ProfileUpdated += OnProfileUpdated;
         _viewModel.PetScaleChanged += OnPetScaleChanged;
@@ -213,19 +216,51 @@ public partial class PetWindow : Window
     {
         var clamped = PetProfile.NormalizePetScale(scale);
         var previousWidth = Width;
+        var previousHeight = Height;
 
         // 뷰포트 너비로 펫 배율을 맞추고, 창은 이름표와 조절바가 들어갈 너비를 확보한다.
         PetViewport.Width = Math.Round(BaseWindowWidth * clamped);
         Width = Math.Max(180.0, PetViewport.Width);
-        PetViewport.Height = Math.Max(220.0, Math.Round(DefaultWindowHeight * clamped))
-            - PetMessageRow.MinHeight - BaseNameplateHeight;
+        var viewportHeight = Math.Max(220.0, Math.Round(DefaultWindowHeight * clamped))
+            - LegacyMessageRowHeight - BaseNameplateHeight;
+        PetViewport.Height = viewportHeight;
+        Height = viewportHeight + PetNameplateRow.Height.Value;
         UpdateNameplatePosition();
+        RepositionSpeechBubblePopup();
 
         // 슬라이더를 끌 때는 조절바 가운데를 유지하고, 메뉴에서 변경할 때는 우하단을 유지한다.
         if (IsLoaded)
         {
             Left += (previousWidth - Width) * (PetControls.IsMouseCaptureWithin ? 0.5 : 1.0);
+            Top += previousHeight - Height;
         }
+    }
+
+    private static CustomPopupPlacement[] GetSpeechBubblePlacements(Size popupSize, Size targetSize, DpiScale dpi)
+    {
+        var centerX = (targetSize.Width - popupSize.Width) / 2.0;
+        var overlapY = SpeechBubbleBottomOverlap * dpi.DpiScaleY;
+        return
+        [
+            new(new Point(centerX, -popupSize.Height + overlapY), PopupPrimaryAxis.Horizontal),
+            new(new Point(centerX, targetSize.Height), PopupPrimaryAxis.Horizontal)
+        ];
+    }
+
+    private void SpeechBubbleContent_SizeChanged(object sender, SizeChangedEventArgs e)
+        => RepositionSpeechBubblePopup();
+
+    private void RepositionSpeechBubblePopup()
+    {
+        if (!SpeechBubblePopup.IsOpen)
+        {
+            return;
+        }
+
+        // WPF Popup은 PlacementTarget이 이동하거나 내부 크기가 변할 때 offset을 미세 갱신해야 즉시 재배치된다.
+        var offset = SpeechBubblePopup.HorizontalOffset;
+        SpeechBubblePopup.HorizontalOffset = offset + 0.01;
+        SpeechBubblePopup.HorizontalOffset = offset;
     }
 
     private void UpdateNameplatePosition()
@@ -722,15 +757,16 @@ public partial class PetWindow : Window
 
     private void RestoreOrPlaceDefaultPosition(PetProfile profile)
     {
-        var workArea = SystemParameters.WorkArea;
         if (profile.LastWindowLeft is double savedLeft && profile.LastWindowTop is double savedTop)
         {
-            var clampedLeft = Math.Clamp(savedLeft, workArea.Left - 40, workArea.Right - Width + 40);
-            var minTop = workArea.Top - 40;
-            var maxTop = Math.Max(minTop, workArea.Bottom - BaseLayoutHeight);
-            var clampedTop = Math.Clamp(savedTop, minTop, maxTop);
-            Left = clampedLeft;
-            Top = clampedTop - MessageOverflow;
+            // 듀얼·멀티 모니터(보조 모니터 X < 0 포함)에서도 저장된 위치를 유지하도록 전체 가상 화면 범위로 클램핑
+            var minLeft = SystemParameters.VirtualScreenLeft - 40;
+            var maxLeft = Math.Max(minLeft, SystemParameters.VirtualScreenLeft + SystemParameters.VirtualScreenWidth - Width + 40);
+            var minTop = SystemParameters.VirtualScreenTop - 40;
+            var maxTop = Math.Max(minTop, SystemParameters.VirtualScreenTop + SystemParameters.VirtualScreenHeight - Height);
+
+            Left = Math.Clamp(savedLeft, minLeft, maxLeft);
+            Top = Math.Clamp(savedTop, minTop, maxTop);
             return;
         }
 
@@ -741,11 +777,11 @@ public partial class PetWindow : Window
     {
         var workArea = SystemParameters.WorkArea;
         Left = workArea.Right - Width - 28;
-        Top = workArea.Bottom - BaseLayoutHeight - MessageOverflow - 18;
+        Top = workArea.Bottom - Height - 18;
     }
 
     private void SaveRestingPosition()
-        => _ = _viewModel.SaveWindowPositionAsync(Left, Top + MessageOverflow);
+        => _ = _viewModel.SaveWindowPositionAsync(Left, Top);
 
     private static System.Drawing.Icon CreateTrayIcon()
     {

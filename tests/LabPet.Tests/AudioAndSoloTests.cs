@@ -62,20 +62,17 @@ public sealed class AudioAndSoloTests
         Assert.Equal(10, profile.SoloProgress.Xp);
         Assert.Equal(54, profile.SoloProgress.Coins);
 
-        // 60코인 아이템 구매 실패 (잔액 부족)
-        var ribbon = PetCustomizationCatalog.HeadAccessories.First(o => o.Id == "ribbon");
-        var (failOk, _) = svc.TryPurchaseItem(profile, ribbon);
-        Assert.False(failOk);
+        // 코인 차감 및 잔액 부족 차단 + 게임 정산 가산 검증
+        var (failSpend, _) = svc.TrySpendCoins(profile, 60);
+        Assert.False(failSpend);
+        Assert.Equal(54, profile.SoloProgress.Coins);
 
-        // 코인 추가 후 구매 성공 및 중복 구매 차단
-        svc.GrantRewards(profile, xp: 0, coins: 20);
-        var (ok, _) = svc.TryPurchaseItem(profile, ribbon);
-        Assert.True(ok);
-        Assert.Equal(14, profile.SoloProgress.Coins);
-        Assert.True(PetCustomizationCatalog.IsUnlocked(ribbon, profile.SoloProgress));
+        var (okSpend, _) = svc.TrySpendCoins(profile, 30);
+        Assert.True(okSpend);
+        Assert.Equal(24, profile.SoloProgress.Coins);
 
-        var (dupOk, _) = svc.TryPurchaseItem(profile, ribbon);
-        Assert.False(dupOk);
+        svc.AddCoins(profile, 60);
+        Assert.Equal(84, profile.SoloProgress.Coins);
     }
 
     private static float[] GenerateSineWave(double frequencyHz, int sampleRate, int length, float amplitude)

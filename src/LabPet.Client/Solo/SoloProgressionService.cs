@@ -1,10 +1,9 @@
-using LabPet.Client.Rendering;
 using LabPet.Shared.Models;
 
 namespace LabPet.Client.Solo;
 
 /// <summary>
-/// 활동량(키보드/마우스/PC 가동 시간), 뽀모도로 완료 보상, 레벨업 및 상점 구매를 담당하는 순수 도메인 서비스.
+/// 활동량(키보드/마우스/PC 가동 시간), 뽀모도로 완료 보상, 레벨업 및 코인 게임 정산을 담당하는 순수 도메인 서비스.
 /// </summary>
 public sealed class SoloProgressionService
 {
@@ -100,29 +99,44 @@ public sealed class SoloProgressionService
         }
     }
 
-    public (bool Success, string Message) TryPurchaseItem(PetProfile profile, CustomizationOption option)
+    /// <summary>코인 게임 배팅/참가비를 잔액에서 차감한다. 잔액이 부족하면 false를 반환한다.</summary>
+    public (bool Success, string Message) TrySpendCoins(PetProfile profile, long amount)
     {
-        if (option.CoinPrice <= 0 || string.IsNullOrWhiteSpace(option.UnlockItemId))
+        if (amount < 0)
         {
-            return (false, "이미 기본 제공되는 아이템입니다.");
+            return (false, "잘못된 코인 금액입니다.");
+        }
+
+        if (amount == 0)
+        {
+            return (true, string.Empty);
         }
 
         var progress = profile.SoloProgress;
         lock (progress)
         {
-            if (progress.UnlockedItemIds.Contains(option.UnlockItemId, StringComparer.OrdinalIgnoreCase))
+            if (progress.Coins < amount)
             {
-                return (false, "이미 해금된 아이템입니다.");
+                return (false, $"코인이 부족합니다. (필요: {amount}, 보유: {progress.Coins})");
             }
 
-            if (progress.Coins < option.CoinPrice)
-            {
-                return (false, $"코인이 부족합니다. (필요: {option.CoinPrice}, 보유: {progress.Coins})");
-            }
+            progress.Coins -= amount;
+            return (true, string.Empty);
+        }
+    }
 
-            progress.Coins -= option.CoinPrice;
-            progress.UnlockedItemIds.Add(option.UnlockItemId);
-            return (true, $"'{option.DisplayName}' 해금 완료!");
+    /// <summary>코인 게임 승리·정산·반환 코인을 잔액에 가산한다.</summary>
+    public void AddCoins(PetProfile profile, long amount)
+    {
+        if (amount <= 0)
+        {
+            return;
+        }
+
+        var progress = profile.SoloProgress;
+        lock (progress)
+        {
+            progress.Coins += amount;
         }
     }
 }

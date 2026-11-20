@@ -6,7 +6,7 @@
         xmlns:tb="clr-namespace:H.NotifyIcon;assembly=H.NotifyIcon.Wpf"
         Title="LabPet"
         Width="214"
-        SizeToContent="Height"
+        Height="234"
         WindowStyle="None"
         AllowsTransparency="True"
         Background="Transparent"
@@ -154,7 +154,6 @@
 
     <Grid x:Name="PetLayout" Background="Transparent" UseLayoutRounding="True" TextOptions.TextFormattingMode="Display">
         <Grid.RowDefinitions>
-            <RowDefinition x:Name="PetMessageRow" Height="Auto" MinHeight="78" />
             <RowDefinition Height="Auto" />
             <RowDefinition x:Name="PetNameplateRow" Height="62" />
         </Grid.RowDefinitions>
@@ -172,7 +171,7 @@
                               Foreground="#FFFF5D8F"
                               Visibility="{Binding IsUpdateReady, Converter={StaticResource BoolToVis}}" />
                     <MenuItem Header="💬  친구" Command="{Binding OpenSocialCommand}" />
-                    <MenuItem Header="✨  성장 · 뽀모도로 · 3D 상점" Command="{Binding OpenSoloHubCommand}" />
+                    <MenuItem Header="✨  성장 · 뽀모도로 · 코인 게임" Command="{Binding OpenSoloHubCommand}" />
                     <MenuItem Header="🎨  외형 · 이름 변경" Command="{Binding OpenCustomizationCommand}" />
                     <MenuItem Header="🔍  크기 조절">
                         <MenuItem Header="아주 작게 (50%)" Command="{Binding SetPetScaleCommand}" CommandParameter="0.5" />
@@ -208,9 +207,19 @@
             </tb:TaskbarIcon.ContextMenu>
         </tb:TaskbarIcon>
 
-        <!-- 펫 상단 꼬리 말풍선 (업데이트 확인 + 친구 신청 + 일반 알림) -->
-        <StackPanel Grid.Row="0" Panel.ZIndex="1" VerticalAlignment="Bottom" HorizontalAlignment="Center"
-                    Margin="6,5,6,2" Opacity="{Binding PetOpacity}">
+        <!-- 펫 상단 꼬리 말풍선 전용 Popup (창 크기를 바꾸지 않아 메시지 생성/소멸 시 캐릭터가 튕기지 않음) -->
+        <Popup x:Name="SpeechBubblePopup"
+               PlacementTarget="{Binding ElementName=PetViewport}"
+               Placement="Custom"
+               AllowsTransparency="True"
+               StaysOpen="True"
+               PopupAnimation="None"
+               IsOpen="{Binding HasAnyBubble, Mode=OneWay}">
+            <StackPanel x:Name="SpeechBubbleContent"
+                        Margin="10,10,10,4"
+                        HorizontalAlignment="Center"
+                        Opacity="{Binding PetOpacity}"
+                        SizeChanged="SpeechBubbleContent_SizeChanged">
             <!-- 새 버전 업데이트 확인 말풍선 -->
             <StackPanel Visibility="{Binding IsUpdateBubbleVisible, Converter={StaticResource BoolToVis}}" Margin="0,0,0,4">
                 <Border Padding="12,8"
@@ -274,6 +283,44 @@
                                     Margin="0,0,6,0" />
                             <Button Content="거절"
                                     Command="{Binding RejectFriendRequestCommand}"
+                                    Padding="12,4"
+                                    FontSize="11" />
+                        </StackPanel>
+                    </StackPanel>
+                </Border>
+                <Polygon Points="0,0 12,0 6,7"
+                         Fill="#FCFFFFFF"
+                         Stroke="#FFFF6B95"
+                         StrokeThickness="1"
+                         HorizontalAlignment="Center"
+                         Margin="0,-1,0,0" />
+            </StackPanel>
+
+            <!-- 친구 코인 게임 도전 수락/거절 말풍선 -->
+            <StackPanel Visibility="{Binding HasPendingGameInvite, Converter={StaticResource BoolToVis}}" Margin="0,0,0,4">
+                <Border Padding="12,8"
+                        CornerRadius="14"
+                        Background="#FCFFFFFF"
+                        BorderBrush="#FFFF6B95"
+                        BorderThickness="1.5"
+                        Effect="{StaticResource SoftCardShadow}">
+                    <StackPanel>
+                        <TextBlock Text="{Binding PendingGameInviteText}"
+                                   FontSize="11.5"
+                                   FontWeight="Bold"
+                                   Foreground="#FF1F2430"
+                                   TextAlignment="Center"
+                                   TextWrapping="Wrap"
+                                   MaxWidth="196" />
+                        <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Margin="0,6,0,0">
+                            <Button Content="수락"
+                                    Style="{StaticResource PrimaryButtonStyle}"
+                                    Command="{Binding AcceptGameInviteCommand}"
+                                    Padding="12,4"
+                                    FontSize="11"
+                                    Margin="0,0,6,0" />
+                            <Button Content="거절"
+                                    Command="{Binding RejectGameInviteCommand}"
                                     Padding="12,4"
                                     FontSize="11" />
                         </StackPanel>
@@ -351,11 +398,12 @@
                     </DataTemplate>
                 </ItemsControl.Resources>
             </ItemsControl>
-        </StackPanel>
+            </StackPanel>
+        </Popup>
 
         <!-- 순수 WPF Viewport3D (AllowsTransparency 호환, 에어스페이스 충돌 없음) -->
         <Viewport3D x:Name="PetViewport"
-                    Grid.Row="1"
+                    Grid.Row="0"
                     Height="172"
                     HorizontalAlignment="Center"
                     Opacity="{Binding PetOpacity}"
@@ -377,7 +425,7 @@
                               Foreground="#FFFF5D8F"
                               Visibility="{Binding IsUpdateReady, Converter={StaticResource BoolToVis}}" />
                     <MenuItem Header="💬  친구" Command="{Binding OpenSocialCommand}" />
-                    <MenuItem Header="✨  성장 · 뽀모도로 · 3D 상점" Command="{Binding OpenSoloHubCommand}" />
+                    <MenuItem Header="✨  성장 · 뽀모도로 · 코인 게임" Command="{Binding OpenSoloHubCommand}" />
                     <MenuItem Header="🎨  외형 · 이름 변경" Command="{Binding OpenCustomizationCommand}" />
                     <MenuItem Header="🔍  크기 조절">
                         <MenuItem Header="아주 작게 (50%)" Command="{Binding SetPetScaleCommand}" CommandParameter="0.5" />
@@ -560,7 +608,7 @@
         </Popup>
 
         <!-- 이름·레벨 바와 외형 조절바가 함께 펫 하단에 표시된다. -->
-        <Border Grid.Row="2" HorizontalAlignment="Center" VerticalAlignment="Top"
+        <Border Grid.Row="1" HorizontalAlignment="Center" VerticalAlignment="Top"
                 Opacity="{Binding PetOpacity}">
             <StackPanel x:Name="PetControls"
                         Width="166"

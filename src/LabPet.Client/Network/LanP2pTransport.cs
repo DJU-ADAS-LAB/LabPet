@@ -50,6 +50,7 @@ public sealed class LanP2pTransport : ISocialTransport
     public event EventHandler<PetInteractionReceivedEventArgs>? PetInteractionReceived;
     public event EventHandler<MusicFrameReceivedEventArgs>? MusicFrameReceived;
     public event EventHandler<MusicFollowStateChangedEventArgs>? MusicFollowStateChanged;
+    public event EventHandler<GameEventReceivedEventArgs>? GameEventReceived;
     public event EventHandler<TransportErrorEventArgs>? TransportError;
 
     public LanP2pTransport(
@@ -336,6 +337,24 @@ public sealed class LanP2pTransport : ISocialTransport
             enable ? PacketType.MusicFollowOn : PacketType.MusicFollowOff,
             new MusicFollowPayload { ListenerUdpPort = _udpMusicPort },
             hostFriend.PairSecretBase64,
+            cancellationToken).ConfigureAwait(false);
+
+        return ack is { Accepted: true };
+    }
+
+    public async Task<bool> SendGameEventAsync(FriendEntry friend, GameEventPayload payload, CancellationToken cancellationToken = default)
+    {
+        if (!TryResolveFriendEndpoint(friend, out var ip, out var port))
+        {
+            return false;
+        }
+
+        var ack = await SendControlPacketAsync(
+            ip,
+            port,
+            PacketType.GameEvent,
+            payload,
+            friend.PairSecretBase64,
             cancellationToken).ConfigureAwait(false);
 
         return ack is { Accepted: true };
@@ -690,7 +709,8 @@ public sealed class LanP2pTransport : ISocialTransport
             PacketType.QuickReaction or
             PacketType.PetInteraction or
             PacketType.MusicFollowOn or
-            PacketType.MusicFollowOff;
+            PacketType.MusicFollowOff or
+            PacketType.GameEvent;
 
         string? verifiedPairSecret = null;
         if (requiresFriendHmac)
@@ -798,6 +818,18 @@ public sealed class LanP2pTransport : ISocialTransport
                     MusicFollowStateChanged?.Invoke(this, new MusicFollowStateChangedEventArgs(header.SenderPetId, false));
                 }
 
+                break;
+            }
+
+            case PacketType.GameEvent:
+            {
+                var p = JsonSerializer.Deserialize<GameEventPayload>(envelope.PayloadJson, ProtocolJson.PacketOptions);
+                if (p is null || string.IsNullOrWhiteSpace(p.GameType) || string.IsNullOrWhiteSpace(p.Action))
+                {
+                    return RejectAck(header.MessageId, "INVALID_PAYLOAD");
+                }
+
+                GameEventReceived?.Invoke(this, new GameEventReceivedEventArgs(header.SenderPetId, p));
                 break;
             }
         }

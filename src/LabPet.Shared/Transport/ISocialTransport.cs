@@ -25,6 +25,7 @@ public interface ISocialTransport : IAsyncDisposable
     event EventHandler<PetInteractionReceivedEventArgs>? PetInteractionReceived;
     event EventHandler<MusicFrameReceivedEventArgs>? MusicFrameReceived;
     event EventHandler<MusicFollowStateChangedEventArgs>? MusicFollowStateChanged;
+    event EventHandler<GameEventReceivedEventArgs>? GameEventReceived;
     event EventHandler<TransportErrorEventArgs>? TransportError;
 
     Task StartAsync(PetProfile localProfile, IReadOnlyList<FriendEntry> friends, CancellationToken cancellationToken = default);
@@ -53,6 +54,7 @@ public interface ISocialTransport : IAsyncDisposable
     Task<bool> SendQuickReactionAsync(FriendEntry friend, string reactionId, CancellationToken cancellationToken = default);
     Task<bool> SendPetInteractionAsync(FriendEntry friend, string interactionType, CancellationToken cancellationToken = default);
     Task<bool> SetMusicFollowAsync(FriendEntry hostFriend, bool enable, CancellationToken cancellationToken = default);
+    Task<bool> SendGameEventAsync(FriendEntry friend, GameEventPayload payload, CancellationToken cancellationToken = default);
 
     /// <summary>구독 중인 팔로워들에게만 30Hz 경량 오디오 프레임을 전송한다.</summary>
     ValueTask PublishMusicFrameAsync(MusicFrameData frame, CancellationToken cancellationToken = default);
@@ -134,6 +136,12 @@ public sealed class MusicFollowStateChangedEventArgs(string peerPetId, bool isFo
 {
     public string PeerPetId { get; } = peerPetId;
     public bool IsFollowing { get; } = isFollowing;
+}
+
+public sealed class GameEventReceivedEventArgs(string senderPetId, GameEventPayload payload) : EventArgs
+{
+    public string SenderPetId { get; } = senderPetId;
+    public GameEventPayload Payload { get; } = payload;
 }
 
 public sealed class TransportErrorEventArgs(string operation, string message, Exception? exception = null) : EventArgs

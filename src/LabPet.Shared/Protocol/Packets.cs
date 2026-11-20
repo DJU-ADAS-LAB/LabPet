@@ -16,7 +16,8 @@ public enum PacketType
     PetInteraction = 6,
     MusicFollowOn = 7,
     MusicFollowOff = 8,
-    Ack = 9
+    Ack = 9,
+    GameEvent = 10
 }
 
 /// <summary>
@@ -124,4 +125,25 @@ public sealed class AckPayload
     public string AckMessageId { get; set; } = string.Empty;
     public bool Accepted { get; set; } = true;
     public string? ErrorCode { get; set; }
+}
+
+/// <summary>
+/// 친구 전용 LAN P2P 코인 게임(가위바위보, 타이핑 스프린트, 공동 사다리) 이벤트 페이로드.
+/// </summary>
+public sealed class GameEventPayload
+{
+    /// <summary>게임 종류: "rps", "typing", "ladder".</summary>
+    public string GameType { get; set; } = string.Empty;
+
+    /// <summary>게임 세션 고유 ID.</summary>
+    public string SessionId { get; set; } = string.Empty;
+
+    /// <summary>동작: "invite", "accept", "decline", "move", "progress", "finish", "cancel".</summary>
+    public string Action { get; set; } = string.Empty;
+
+    /// <summary>배팅/참가 코인.</summary>
+    public int WagerCoins { get; set; }
+
+    /// <summary>선택값(rock/paper/scissors), 타이핑 점수, 사다리 결과 요약 등 부가 데이터.</summary>
+    public string Data { get; set; } = string.Empty;
 }

@@ -127,6 +127,25 @@ public partial class App : Application
         var social = _serviceProvider.GetRequiredService<SocialCoordinatorService>();
         social.NewerAppVersionDetected += (_, _) => updateService.TriggerImmediateCheckFromPeerHint();
 
+        // 코인 게임 허브(LAN 가위바위보·타이핑 도전 수신 및 펫 반응 연결)
+        var gamesVm = _serviceProvider.GetRequiredService<CoinGamesViewModel>();
+        gamesVm.BindProfile(profile);
+        var animator = _serviceProvider.GetRequiredService<PetAnimationController>();
+        gamesVm.IncomingInviteArrived += (_, invite) => Dispatcher.BeginInvoke(() => petVm.PendingGameInvite = invite);
+        gamesVm.GameNotification += (_, msg) => Dispatcher.BeginInvoke(() => petVm.ShowBubble(msg, 3400));
+        gamesVm.PetEmotionTriggered += (_, isHappy) => Dispatcher.BeginInvoke(() =>
+        {
+            if (isHappy) animator.TriggerPetReaction();
+            else animator.TriggerDizzyReaction();
+        });
+        gamesVm.OpenGameTabRequested += (_, _) => Dispatcher.BeginInvoke(() => OpenSoloHub(selectGamesTab: true));
+        gamesVm.ProfileChanged += (_, updated) => Dispatcher.BeginInvoke(() => petVm.ApplyProfile(updated));
+        petVm.GameInviteResponded += async (_, accept) =>
+        {
+            if (accept) await gamesVm.AcceptIncomingInviteAsync();
+            else await gamesVm.DeclineIncomingInviteAsync();
+        };
+
         _petWindow = _serviceProvider.GetRequiredService<PetWindow>();
         MainWindow = _petWindow;
         _petWindow.InitializeWithProfile(profile);
@@ -159,6 +178,9 @@ public partial class App : Application
     }
 
     private void OnOpenSoloHubRequested(object? sender, EventArgs e)
+        => OpenSoloHub(selectGamesTab: false);
+
+    private void OpenSoloHub(bool selectGamesTab)
     {
         if (_serviceProvider is null || _petWindow is null)
         {
@@ -167,6 +189,11 @@ public partial class App : Application
 
         if (_soloHubWindow is not null)
         {
+            if (selectGamesTab && _soloHubWindow.DataContext is SoloHubViewModel existingVm)
+            {
+                existingVm.SelectGamesTab();
+            }
+
             _soloHubWindow.Activate();
             return;
         }
@@ -174,6 +201,11 @@ public partial class App : Application
         var petVm = _serviceProvider.GetRequiredService<PetWindowViewModel>();
         var hubVm = _serviceProvider.GetRequiredService<SoloHubViewModel>();
         hubVm.BindProfile(petVm.CurrentProfile);
+        if (selectGamesTab)
+        {
+            hubVm.SelectGamesTab();
+        }
+
         hubVm.ProfileChanged += (_, updated) => petVm.ApplyProfile(updated);
 
         _soloHubWindow = new SoloHubWindow(hubVm)
@@ -323,6 +355,7 @@ public partial class App : Application
         services.AddSingleton<UpdateService>();
 
         services.AddSingleton<PetWindowViewModel>();
+        services.AddSingleton<CoinGamesViewModel>();
         services.AddTransient<OnboardingViewModel>();
         services.AddTransient<SoloHubViewModel>();
         services.AddTransient<SocialViewModel>();

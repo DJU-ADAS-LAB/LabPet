@@ -125,5 +125,22 @@ public sealed class LanP2pTransportTests
         Assert.Equal(7u, receivedFrame.Sequence);
         Assert.True(receivedFrame.IsBeat);
         Assert.InRange(receivedFrame.Bass, 0.80f, 0.84f);
+
+        // 6. 친구 전용 HMAC 서명 코인 게임 이벤트 송수신 확인
+        var gameTcs = new TaskCompletionSource<GameEventPayload>();
+        host.GameEventReceived += (_, e) => gameTcs.TrySetResult(e.Payload);
+
+        var gameOk = await guest.SendGameEventAsync(hostAsFriend, new GameEventPayload
+        {
+            GameType = "rps",
+            SessionId = "test-sess-1",
+            Action = "invite",
+            WagerCoins = 30
+        });
+        Assert.True(gameOk);
+        var receivedGame = await gameTcs.Task.WaitAsync(TimeSpan.FromSeconds(3));
+        Assert.Equal("rps", receivedGame.GameType);
+        Assert.Equal("invite", receivedGame.Action);
+        Assert.Equal(30, receivedGame.WagerCoins);
     }
 }

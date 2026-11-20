@@ -60,6 +60,7 @@ public sealed class SocialCoordinatorService : IAsyncDisposable
     public event EventHandler<string>? SocialNotification;
     public event EventHandler? PetReactionTriggered;
     public event EventHandler<string>? NewerAppVersionDetected;
+    public event EventHandler<GameEventReceivedEventArgs>? GameEventReceived;
 
     public SocialCoordinatorService(
         ISocialTransport transport,
@@ -78,6 +79,7 @@ public sealed class SocialCoordinatorService : IAsyncDisposable
         _transport.QuickReactionReceived += OnQuickReactionReceived;
         _transport.PetInteractionReceived += OnPetInteractionReceived;
         _transport.MusicFrameReceived += OnMusicFrameReceived;
+        _transport.GameEventReceived += OnGameEventReceived;
         _transport.TransportError += OnTransportError;
     }
 
@@ -183,6 +185,11 @@ public sealed class SocialCoordinatorService : IAsyncDisposable
 
     public Task<bool> SendFriendRequestAsync(PeerSnapshot peer)
         => _transport.SendFriendRequestAsync(peer);
+
+    public Task<bool> SendGameEventAsync(FriendEntry friend, GameEventPayload payload)
+        => _transport.SendGameEventAsync(friend, payload);
+
+    public string GetFriendDisplayName(string petId) => FindFriendName(petId);
 
     private string? _lastTransportError;
 
@@ -309,6 +316,11 @@ public sealed class SocialCoordinatorService : IAsyncDisposable
     private void OnTransportError(object? sender, TransportErrorEventArgs e)
     {
         _lastTransportError = e.Message;
+    }
+
+    private void OnGameEventReceived(object? sender, GameEventReceivedEventArgs e)
+    {
+        GameEventReceived?.Invoke(this, e);
     }
 
     private void OnPeersChanged(object? sender, IReadOnlyList<PeerSnapshot> peers)
@@ -519,6 +531,7 @@ public sealed class SocialCoordinatorService : IAsyncDisposable
         _transport.QuickReactionReceived -= OnQuickReactionReceived;
         _transport.PetInteractionReceived -= OnPetInteractionReceived;
         _transport.MusicFrameReceived -= OnMusicFrameReceived;
+        _transport.GameEventReceived -= OnGameEventReceived;
         _transport.TransportError -= OnTransportError;
         await _transport.StopAsync().ConfigureAwait(false);
     }

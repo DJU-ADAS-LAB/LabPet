@@ -3,16 +3,14 @@ using LabPet.Shared.Models;
 namespace LabPet.Client.Rendering;
 
 /// <summary>
-/// 온보딩·편집·상점에서 공용으로 사용하는 3D 커스텀 레이어 옵션 메타데이터.
-/// <see cref="CoinPrice"/>가 0이면 기본 무료 해금 아이템이며, 양수이면 상점에서 코인으로 해금한다.
+/// 온보딩·외형 편집에서 공용으로 사용하는 3D 커스텀 레이어 옵션 메타데이터.
+/// 모든 커스텀 옵션은 기본 무료로 제공된다.
 /// </summary>
 public sealed record CustomizationOption(
     string Id,
     string DisplayName,
     string Description,
-    string? PreviewHex = null,
-    string? UnlockItemId = null,
-    int CoinPrice = 0);
+    string? PreviewHex = null);
 
 public static class PetCustomizationCatalog
 {
@@ -31,8 +29,8 @@ public static class PetCustomizationCatalog
         new("#F2C27D", "허니 골드", "포근한 골든 강아지 털색", "#F2C27D"),
         new("#E6F4FF", "소다 솜사탕", "맑은 하늘 파스텔", "#E6F4FF"),
         new("#E9F7E8", "말차 밀크", "포근한 민트 그린", "#E9F7E8"),
-        new("#F3E8FF", "라벤더", "은은한 연보라 클레이", "#F3E8FF", "color_lavender", 40),
-        new("#FFF7CC", "버터 옐로우", "달콤한 레몬 크림", "#FFF7CC", "color_butter", 40)
+        new("#F3E8FF", "라벤더", "은은한 연보라 클레이", "#F3E8FF"),
+        new("#FFF7CC", "버터 옐로우", "달콤한 레몬 크림", "#FFF7CC")
     ];
 
     public static IReadOnlyList<CustomizationOption> AccentColors { get; } =
@@ -40,55 +38,33 @@ public static class PetCustomizationCatalog
         new("#FF9EB5", "딸기 핑크", "말랑한 볼터치 핑크", "#FF9EB5"),
         new("#FFAD75", "살구 코랄", "따뜻한 오렌지 포인트", "#FFAD75"),
         new("#7CC6FE", "스카이 블루", "시원한 하늘색 포인트", "#7CC6FE"),
-        new("#A78BFA", "바이올렛", "몽환적인 보라 포인트", "#A78BFA", "accent_violet", 35),
-        new("#6EE7B7", "민트 리프", "산뜻한 민트 포인트", "#6EE7B7", "accent_mint", 35)
+        new("#A78BFA", "바이올렛", "몽환적인 보라 포인트", "#A78BFA"),
+        new("#6EE7B7", "민트 리프", "산뜻한 민트 포인트", "#6EE7B7")
     ];
 
     public static IReadOnlyList<CustomizationOption> Expressions { get; } =
     [
-        new("default", "기본 미소", "동글동글 순한 눈망울과 작은 미소", null, "expr_default", 0),
-        new("happy", "방긋 웃음", "반달 눈웃음과 환한 볼터치", null, "expr_happy", 0),
-        new("sleepy", "졸림", "나른하게 감긴 눈과 평온한 표정", null, "expr_sleepy", 50),
-        new("sparkle", "반짝임", "하이라이트가 강조된 호기심 눈빛", null, "expr_sparkle", 80)
+        new("default", "기본 미소", "동글동글 순한 눈망울과 작은 미소"),
+        new("happy", "방긋 웃음", "반달 눈웃음과 환한 볼터치"),
+        new("sleepy", "졸림", "나른하게 감긴 눈과 평온한 표정"),
+        new("sparkle", "반짝임", "하이라이트가 강조된 호기심 눈빛")
     ];
 
     public static IReadOnlyList<CustomizationOption> HeadAccessories { get; } =
     [
-        new("none", "없음", "자연스러운 기본 실루엣", null, "acc_none", 0),
-        new("sprout", "새싹", "정수리 위 초록 줄기와 두 잎", null, "acc_sprout", 0),
-        new("ribbon", "리본", "입체 나비 리본 파츠", null, "acc_ribbon", 60),
-        new("headset", "3D 헤드셋", "음악 감상용 둥근 이어컵 헤드셋", null, "acc_headset", 100),
-        new("santa_hat", "산타 모자", "복슬한 흰 방울이 달린 꼬깔 모자", null, "acc_santa_hat", 120),
-        new("crown", "미니 왕관", "반짝이는 골드 3D 미니 왕관", null, "acc_crown", 160)
+        new("none", "없음", "자연스러운 기본 실루엣"),
+        new("sprout", "새싹", "정수리 위 초록 줄기와 두 잎"),
+        new("ribbon", "리본", "입체 나비 리본 파츠"),
+        new("headset", "3D 헤드셋", "음악 감상용 둥근 이어컵 헤드셋"),
+        new("santa_hat", "산타 모자", "복슬한 흰 방울이 달린 꼬깔 모자"),
+        new("crown", "미니 왕관", "반짝이는 골드 3D 미니 왕관")
     ];
 
     public static IReadOnlyList<CustomizationOption> AuraEffects { get; } =
     [
-        new("none", "없음", "오라 이펙트 비활성", null, "aura_none", 0),
-        new("halo_ring", "회전 링", "펫 주위를 부드럽게 도는 발광 링", null, "aura_halo_ring", 90),
-        new("music_notes", "음표", "주변에 떠다니는 3D 음표 파츠", null, "aura_music_notes", 110),
-        new("snowflakes", "눈송이", "은은하게 회전하는 3D 결정 파티클", null, "aura_snowflakes", 110)
+        new("none", "없음", "오라 이펙트 비활성"),
+        new("halo_ring", "회전 링", "펫 주위를 부드럽게 도는 발광 링"),
+        new("music_notes", "음표", "주변에 떠다니는 3D 음표 파츠"),
+        new("snowflakes", "눈송이", "은은하게 회전하는 3D 결정 파티클")
     ];
-
-    /// <summary>상점에서 코인으로 구매할 수 있는 전체 잠금 아이템 목록.</summary>
-    public static IReadOnlyList<(string Category, CustomizationOption Option)> GetShopItems()
-    {
-        var list = new List<(string, CustomizationOption)>();
-        list.AddRange(HeadAccessories.Where(o => o.CoinPrice > 0).Select(o => ("머리 악세서리", o)));
-        list.AddRange(Expressions.Where(o => o.CoinPrice > 0).Select(o => ("표정", o)));
-        list.AddRange(AuraEffects.Where(o => o.CoinPrice > 0).Select(o => ("3D 오라", o)));
-        list.AddRange(BodyColors.Where(o => o.CoinPrice > 0).Select(o => ("바디 컬러", o)));
-        list.AddRange(AccentColors.Where(o => o.CoinPrice > 0).Select(o => ("포인트 컬러", o)));
-        return list;
-    }
-
-    public static bool IsUnlocked(CustomizationOption option, SoloProgress progress)
-    {
-        if (option.CoinPrice <= 0 || string.IsNullOrWhiteSpace(option.UnlockItemId))
-        {
-            return true;
-        }
-
-        return progress.UnlockedItemIds.Contains(option.UnlockItemId, StringComparer.OrdinalIgnoreCase);
-    }
 }
