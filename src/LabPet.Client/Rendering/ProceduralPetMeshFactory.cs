@@ -517,9 +517,9 @@ public sealed class ProceduralPetMeshFactory : IPetMeshFactory
 
         triangleCount += AddGeometry(kbGroup, kbKeysMb, kbKeyMat);
 
-        // 스페이스바(포인트 컬러)
+        // 펫과 가까운 쪽에 스페이스바를 배치한다.
         var spaceMb = new MeshBuilder(true, false);
-        spaceMb.AddBox(new Vector3(0, kbCenterY + 0.055f, kbCenterZ + 0.16f), 0.44f, 0.04f, 0.07f);
+        spaceMb.AddBox(new Vector3(0, kbCenterY + 0.055f, kbCenterZ - 0.16f), 0.44f, 0.04f, 0.07f);
         triangleCount += AddGeometry(kbGroup, spaceMb, kbAccentMat);
         rootGroup.Children.Add(kbGroup);
 
