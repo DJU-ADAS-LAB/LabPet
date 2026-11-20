@@ -328,6 +328,7 @@
                                  Height="28"
                                  FontSize="11.5"
                                  Padding="7,3"
+                                 PreviewMouseDown="QuickMessageInput_PreviewMouseDown"
                                  KeyDown="QuickMessageInput_KeyDown" />
                     </DockPanel>
                 </StackPanel>

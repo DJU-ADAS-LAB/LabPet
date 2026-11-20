@@ -53,6 +53,7 @@ public sealed class SocialCoordinatorService : IAsyncDisposable
     public event EventHandler<PendingFriendRequest>? FriendRequestArrived;
     public event EventHandler<string>? SocialNotification;
     public event EventHandler? PetReactionTriggered;
+    public event EventHandler<string>? NewerAppVersionDetected;
 
     public SocialCoordinatorService(
         ISocialTransport transport,
@@ -295,6 +296,20 @@ public sealed class SocialCoordinatorService : IAsyncDisposable
 
     private void OnPeersChanged(object? sender, IReadOnlyList<PeerSnapshot> peers)
     {
+        var localVersion = typeof(SocialCoordinatorService).Assembly.GetName().Version;
+        if (localVersion is not null)
+        {
+            var normalizedLocal = new Version(localVersion.Major, localVersion.Minor, Math.Max(0, localVersion.Build));
+            foreach (var peer in peers)
+            {
+                if (Version.TryParse(peer.AppVersion, out var peerVer) && peerVer > normalizedLocal)
+                {
+                    NewerAppVersionDetected?.Invoke(this, peer.AppVersion);
+                    break;
+                }
+            }
+        }
+
         StateChanged?.Invoke(this, EventArgs.Empty);
     }
 

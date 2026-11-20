@@ -4,11 +4,12 @@ namespace LabPet.Client.Updates;
 
 /// <summary>
 /// Velopack 기반 백그라운드 차분 자동 업데이트 서비스.
-/// 앱 시작 시, 1시간 주기, 또는 사용자 수동 확인 시 업데이트를 내려받고 재시작 적용을 제공한다.
+/// 앱 시작 시, 5분 주기, LAN 피어 신버전 감지 시, 또는 사용자 수동 확인 시 업데이트를 내려받고 재시작 적용을 제공한다.
 /// </summary>
 public sealed class UpdateService : IDisposable
 {
-    private static readonly TimeSpan PeriodicCheckInterval = TimeSpan.FromHours(1);
+    private static readonly TimeSpan PeriodicCheckInterval = TimeSpan.FromMinutes(5);
+    private static readonly TimeSpan PeerHintCooldown = TimeSpan.FromMinutes(2);
 
     private readonly UpdateSourceOptions _options;
     private readonly SemaphoreSlim _checkLock = new(1, 1);
@@ -16,6 +17,7 @@ public sealed class UpdateService : IDisposable
     private UpdateManager? _manager;
     private UpdateInfo? _pendingUpdate;
     private CancellationTokenSource? _periodicCts;
+    private DateTimeOffset _lastPeerHintCheckUtc = DateTimeOffset.MinValue;
 
     public bool IsUpdateReady => _pendingUpdate is not null;
     public string? PendingVersion => _pendingUpdate?.TargetFullRelease.Version.ToString();
@@ -57,6 +59,26 @@ public sealed class UpdateService : IDisposable
                 // 정상 종료
             }
         }, ct);
+    }
+
+    /// <summary>
+    /// LAN 피어에서 더 높은 앱 버전이 관측되었을 때 5분 주기를 기다리지 않고 즉시 업데이트 확인을 트리거한다.
+    /// </summary>
+    public void TriggerImmediateCheckFromPeerHint()
+    {
+        if (IsUpdateReady)
+        {
+            return;
+        }
+
+        var now = DateTimeOffset.UtcNow;
+        if (now - _lastPeerHintCheckUtc < PeerHintCooldown)
+        {
+            return;
+        }
+
+        _lastPeerHintCheckUtc = now;
+        _ = Task.Run(() => CheckAndDownloadUpdatesAsync(isManualCheck: false));
     }
 
     public async Task<bool> CheckAndDownloadUpdatesAsync(bool isManualCheck, CancellationToken cancellationToken = default)

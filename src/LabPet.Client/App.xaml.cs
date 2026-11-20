@@ -121,6 +121,10 @@ public partial class App : Application
         updateService.StatusMessage += (_, msg) => Dispatcher.BeginInvoke(() => petVm.ShowBubble(msg, 3600));
         updateService.StartPeriodicChecks();
 
+        // LAN 피어 중 더 높은 앱 버전이 감지되면 5분 주기를 기다리지 않고 즉시 업데이트 확인
+        var social = _serviceProvider.GetRequiredService<SocialCoordinatorService>();
+        social.NewerAppVersionDetected += (_, _) => updateService.TriggerImmediateCheckFromPeerHint();
+
         _petWindow = _serviceProvider.GetRequiredService<PetWindow>();
         MainWindow = _petWindow;
         _petWindow.InitializeWithProfile(profile);

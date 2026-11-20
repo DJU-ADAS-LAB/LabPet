@@ -80,6 +80,7 @@ public partial class PetWindow : Window
 
         _viewModel.ProfileUpdated += OnProfileUpdated;
         _viewModel.PetScaleChanged += OnPetScaleChanged;
+        _viewModel.PropertyChanged += OnViewModelPropertyChanged;
         _viewModel.ClickThroughChanged += OnClickThroughChanged;
         _viewModel.ResetPositionRequested += OnResetPositionRequested;
         _viewModel.ExitRequested += OnExitRequested;
@@ -147,6 +148,7 @@ public partial class PetWindow : Window
             TrayIcon.Dispose();
             _viewModel.ProfileUpdated -= OnProfileUpdated;
             _viewModel.PetScaleChanged -= OnPetScaleChanged;
+            _viewModel.PropertyChanged -= OnViewModelPropertyChanged;
             _viewModel.ClickThroughChanged -= OnClickThroughChanged;
             _viewModel.ResetPositionRequested -= OnResetPositionRequested;
             _viewModel.ExitRequested -= OnExitRequested;
@@ -231,6 +233,36 @@ public partial class PetWindow : Window
         _isMouseOverOverlay = false;
         _overlayCloseTimer.Stop();
         _overlayCloseTimer.Start();
+    }
+
+    private void OnViewModelPropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName == nameof(PetWindowViewModel.QuickMessageTarget) && _viewModel.QuickMessageTarget is not null)
+        {
+            FocusQuickMessageInput();
+        }
+    }
+
+    private void FocusQuickMessageInput()
+    {
+        Dispatcher.BeginInvoke(DispatcherPriority.Input, () =>
+        {
+            if (!FriendOverlayPopup.IsOpen || _viewModel.QuickMessageTarget is null)
+            {
+                return;
+            }
+
+            Win32WindowHelper.ActivatePopupForKeyboardInput(QuickMessageInput);
+            QuickMessageInput.Focus();
+            Keyboard.Focus(QuickMessageInput);
+        });
+    }
+
+    private void QuickMessageInput_PreviewMouseDown(object sender, MouseButtonEventArgs e)
+    {
+        Win32WindowHelper.ActivatePopupForKeyboardInput(QuickMessageInput);
+        QuickMessageInput.Focus();
+        Keyboard.Focus(QuickMessageInput);
     }
 
     private void QuickMessageInput_KeyDown(object sender, KeyEventArgs e)

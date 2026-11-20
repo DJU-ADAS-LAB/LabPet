@@ -30,6 +30,22 @@ public static partial class Win32WindowHelper
     [return: MarshalAs(UnmanagedType.Bool)]
     private static partial bool GetCursorPos(out NativePoint lpPoint);
 
+    [LibraryImport("user32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool SetForegroundWindow(IntPtr hWnd);
+
+    /// <summary>
+    /// WPF Popup(WS_EX_NOACTIVATE) 내부 TextBox가 비활성 상태에서도 키보드 입력을 받을 수 있도록
+    /// 실제 Popup HWND를 포그라운드로 활성화한다.
+    /// </summary>
+    public static void ActivatePopupForKeyboardInput(UIElement element)
+    {
+        if (PresentationSource.FromVisual(element) is HwndSource source && source.Handle != IntPtr.Zero)
+        {
+            _ = SetForegroundWindow(source.Handle);
+        }
+    }
+
     /// <summary>
     /// 창을 Alt+Tab 목록에서 숨기는 ToolWindow 스타일을 적용한다.
     /// </summary>
