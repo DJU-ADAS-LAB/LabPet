@@ -99,6 +99,63 @@ public sealed class StorageAndMigratorTests : IDisposable
         Assert.Equal(label, appearanceEditor.PetScalePercentText);
     }
 
+    [Fact]
+    public async Task SaveFriends_ProtectsPairSecretWithDpapiAndMigratesLegacyPlaintext()
+    {
+        var store = new JsonAppDataStore(new StateMigrator(), _tempDir);
+        var plainSecret = PacketSigner.GeneratePairSecretBase64();
+        var friendsStore = new FriendsStore
+        {
+            Friends =
+            [
+                new FriendEntry
+                {
+                    PetId = "friend-dpapi-001",
+                    PetName = "보안모찌",
+                    PairSecretBase64 = plainSecret
+                }
+            ]
+        };
+
+        // 1. 저장 시 디스크에는 DPAPI 암호문만 기록되고, 메모리 원본은 평문 유지
+        await store.SaveFriendsAsync(friendsStore);
+        Assert.Equal(plainSecret, friendsStore.Friends[0].PairSecretBase64);
+
+        var friendsPath = Path.Combine(_tempDir, "friends.json");
+        var rawDiskJson = await File.ReadAllTextAsync(friendsPath);
+        Assert.DoesNotContain(plainSecret, rawDiskJson);
+        Assert.Contains(LocalSecretProtector.ProtectedPrefix, rawDiskJson);
+
+        // 2. 재로드 시 원래 평문 비밀키 복원
+        var loaded = await store.LoadFriendsAsync();
+        Assert.Single(loaded.Friends);
+        Assert.Equal(plainSecret, loaded.Friends[0].PairSecretBase64);
+
+        // 3. 구버전 평문 friends.json 로드 시 자동 DPAPI 마이그레이션
+        var legacySecret = PacketSigner.GeneratePairSecretBase64();
+        var legacyJson = $$"""
+        {
+          "schemaVersion": 1,
+          "friends": [
+            {
+              "petId": "friend-legacy-002",
+              "petName": "레거시냥이",
+              "pairSecretBase64": "{{legacySecret}}"
+            }
+          ]
+        }
+        """;
+        await File.WriteAllTextAsync(friendsPath, legacyJson);
+
+        var migrated = await store.LoadFriendsAsync();
+        Assert.Single(migrated.Friends);
+        Assert.Equal(legacySecret, migrated.Friends[0].PairSecretBase64);
+
+        var migratedDiskJson = await File.ReadAllTextAsync(friendsPath);
+        Assert.DoesNotContain(legacySecret, migratedDiskJson);
+        Assert.Contains(LocalSecretProtector.ProtectedPrefix, migratedDiskJson);
+    }
+
     public void Dispose()
     {
         if (Directory.Exists(_tempDir))

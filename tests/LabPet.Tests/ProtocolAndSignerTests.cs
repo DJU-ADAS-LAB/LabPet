@@ -49,6 +49,73 @@ public sealed class ProtocolAndSignerTests
     }
 
     [Fact]
+    public void PacketCrypto_EncryptsDecryptsAndRejectsTampering()
+    {
+        var secret = PacketSigner.GeneratePairSecretBase64();
+        var header = new PacketHeader
+        {
+            ProtocolVersion = ProtocolConstants.CurrentProtocolVersion,
+            PacketType = PacketType.BubbleMessage,
+            SenderPetId = Guid.NewGuid().ToString("D")
+        };
+        const string plaintext = """{"text":"비밀 말풍선 테스트 1234"}""";
+
+        var (cipher1, nonce1, tag1) = PacketCrypto.EncryptControlPayload(header, plaintext, secret);
+        var (cipher2, nonce2, _) = PacketCrypto.EncryptControlPayload(header, plaintext, secret);
+
+        Assert.DoesNotContain("비밀 말풍선", cipher1);
+        Assert.NotEqual(nonce1, nonce2);
+        Assert.NotEqual(cipher1, cipher2);
+
+        var envelope = new ControlPacketEnvelope
+        {
+            Header = header,
+            PayloadJson = cipher1,
+            IsEncrypted = true,
+            NonceBase64 = nonce1,
+            AuthTagBase64 = tag1
+        };
+
+        Assert.True(PacketCrypto.TryDecryptControlPayload(envelope, secret, out var decrypted));
+        Assert.Equal(plaintext, decrypted);
+
+        // 다른 키로 복호화 시도 -> 실패
+        var wrongSecret = PacketSigner.GeneratePairSecretBase64();
+        Assert.False(PacketCrypto.TryDecryptControlPayload(envelope, wrongSecret, out _));
+
+        // 헤더(AAD) 변조 -> 실패
+        var tamperedHeaderEnvelope = new ControlPacketEnvelope
+        {
+            Header = new PacketHeader
+            {
+                ProtocolVersion = header.ProtocolVersion,
+                PacketType = header.PacketType,
+                SenderPetId = Guid.NewGuid().ToString("D"),
+                MessageId = header.MessageId,
+                TimestampUtc = header.TimestampUtc
+            },
+            PayloadJson = cipher1,
+            IsEncrypted = true,
+            NonceBase64 = nonce1,
+            AuthTagBase64 = tag1
+        };
+        Assert.False(PacketCrypto.TryDecryptControlPayload(tamperedHeaderEnvelope, secret, out _));
+
+        // 암호문 1비트 변조 -> 실패
+        var cipherBytes = Convert.FromBase64String(cipher1);
+        cipherBytes[0] ^= 0xFF;
+        var tamperedCipherEnvelope = new ControlPacketEnvelope
+        {
+            Header = header,
+            PayloadJson = Convert.ToBase64String(cipherBytes),
+            IsEncrypted = true,
+            NonceBase64 = nonce1,
+            AuthTagBase64 = tag1
+        };
+        Assert.False(PacketCrypto.TryDecryptControlPayload(tamperedCipherEnvelope, secret, out _));
+    }
+
+    [Fact]
     public void ProtocolJson_IgnoresUnknownFutureFieldsAndAppliesDefaults()
     {
         const string futureJson = """

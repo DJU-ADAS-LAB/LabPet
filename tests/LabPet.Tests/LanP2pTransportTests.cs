@@ -1,5 +1,8 @@
+using System.Buffers.Binary;
 using System.Net;
 using System.Net.NetworkInformation;
+using System.Net.Sockets;
+using System.Text.Json;
 using LabPet.Client.Network;
 using LabPet.Shared.Models;
 using LabPet.Shared.Protocol;
@@ -142,5 +145,67 @@ public sealed class LanP2pTransportTests
         Assert.Equal("rps", receivedGame.GameType);
         Assert.Equal("invite", receivedGame.Action);
         Assert.Equal(30, receivedGame.WagerCoins);
+    }
+
+    [Fact]
+    public async Task LanP2pTransport_RejectsUnencryptedFriendControlPacket()
+    {
+        await using var host = new LanP2pTransport(udpDiscoveryPort: 46778, udpMusicPort: 46779, tcpControlPort: 0);
+        var hostProfile = new PetProfile { OwnerName = "호스트", PetName = "모찌" };
+        var guestPetId = Guid.NewGuid().ToString("D");
+        var pairSecret = PacketSigner.GeneratePairSecretBase64();
+
+        await host.StartAsync(hostProfile,
+        [
+            new FriendEntry
+            {
+                PetId = guestPetId,
+                PetName = "게스트",
+                LastKnownIp = "127.0.0.1",
+                PairSecretBase64 = pairSecret
+            }
+        ]);
+
+        var plainPayload = """{"text":"평문 전송 시도"}""";
+        var header = new PacketHeader
+        {
+            ProtocolVersion = ProtocolConstants.CurrentProtocolVersion,
+            PacketType = PacketType.BubbleMessage,
+            SenderPetId = guestPetId
+        };
+        header.SignatureBase64 = PacketSigner.ComputeSignature(
+            PacketSigner.BuildControlCanonicalString(header, plainPayload),
+            pairSecret);
+
+        var unencryptedEnvelope = new ControlPacketEnvelope
+        {
+            Header = header,
+            PayloadJson = plainPayload,
+            IsEncrypted = false
+        };
+
+        using var client = new TcpClient();
+        await client.ConnectAsync("127.0.0.1", host.BoundTcpPort);
+        await using var stream = client.GetStream();
+
+        var body = JsonSerializer.SerializeToUtf8Bytes(unencryptedEnvelope, ProtocolJson.PacketOptions);
+        var prefix = new byte[4];
+        BinaryPrimitives.WriteInt32BigEndian(prefix, body.Length);
+        await stream.WriteAsync(prefix);
+        await stream.WriteAsync(body);
+        await stream.FlushAsync();
+
+        var ackLenBytes = new byte[4];
+        await stream.ReadExactlyAsync(ackLenBytes);
+        var ackLen = BinaryPrimitives.ReadInt32BigEndian(ackLenBytes);
+        var ackBody = new byte[ackLen];
+        await stream.ReadExactlyAsync(ackBody);
+
+        var ackEnvelope = JsonSerializer.Deserialize<ControlPacketEnvelope>(ackBody, ProtocolJson.PacketOptions);
+        Assert.NotNull(ackEnvelope);
+        var ack = JsonSerializer.Deserialize<AckPayload>(ackEnvelope!.PayloadJson, ProtocolJson.PacketOptions);
+        Assert.NotNull(ack);
+        Assert.False(ack!.Accepted);
+        Assert.Equal("ENCRYPTION_REQUIRED", ack.ErrorCode);
     }
 }

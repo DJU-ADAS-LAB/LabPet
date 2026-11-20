@@ -70,11 +70,15 @@ public sealed class MusicFramePacket
 
 /// <summary>
 /// TCP 45680 제어 패킷 봉투.
+/// 친구 전용 패킷은 <see cref="IsEncrypted"/>가 true이며, <see cref="PayloadJson"/>에 AES-256-GCM 암호문(Base64)이 담긴다.
 /// </summary>
 public sealed class ControlPacketEnvelope
 {
     public PacketHeader Header { get; set; } = new();
     public string PayloadJson { get; set; } = "{}";
+    public bool IsEncrypted { get; set; }
+    public string? NonceBase64 { get; set; }
+    public string? AuthTagBase64 { get; set; }
 }
 
 public sealed class FriendRequestPayload

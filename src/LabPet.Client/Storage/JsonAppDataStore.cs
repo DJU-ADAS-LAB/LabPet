@@ -101,9 +101,27 @@ public sealed class JsonAppDataStore : IAppDataStore
 
             store.Friends ??= [];
 
+            // friends.json에 저장된 DPAPI 비밀키 복호화 및 기존 평문 비밀키 자동 마이그레이션
+            foreach (var friend in store.Friends)
+            {
+                if (LocalSecretProtector.TryUnprotect(friend.PairSecretBase64, out var plainSecret, out var wasPlaintext))
+                {
+                    friend.PairSecretBase64 = plainSecret;
+                    if (wasPlaintext && !string.IsNullOrWhiteSpace(plainSecret))
+                    {
+                        needsSave = true;
+                    }
+                }
+                else
+                {
+                    // 다른 Windows 사용자 계정 파일이거나 손상된 키는 빈 값으로 안전 처리
+                    friend.PairSecretBase64 = string.Empty;
+                }
+            }
+
             if (needsSave)
             {
-                await WriteAtomicCoreAsync(path, store, cancellationToken).ConfigureAwait(false);
+                await WriteAtomicFriendsAsync(path, store, cancellationToken).ConfigureAwait(false);
             }
 
             return store;
@@ -122,12 +140,33 @@ public sealed class JsonAppDataStore : IAppDataStore
             friendsStore.SchemaVersion = ProtocolConstants.CurrentStorageSchemaVersion;
             friendsStore.UpdatedAtUtc = DateTimeOffset.UtcNow;
             var path = Path.Combine(DataDirectory, FriendsFileName);
-            await WriteAtomicCoreAsync(path, friendsStore, cancellationToken).ConfigureAwait(false);
+            await WriteAtomicFriendsAsync(path, friendsStore, cancellationToken).ConfigureAwait(false);
         }
         finally
         {
             _ioLock.Release();
         }
+    }
+
+    /// <summary>
+    /// 메모리 내 FriendEntry 원본의 평문 PairSecretBase64는 유지하면서,
+    /// 디스크 직렬화용 복사본에만 Windows DPAPI 암호화를 적용해 원자적 저장한다.
+    /// </summary>
+    private Task WriteAtomicFriendsAsync(string path, FriendsStore friendsStore, CancellationToken cancellationToken)
+    {
+        var protectedCopy = new FriendsStore
+        {
+            SchemaVersion = friendsStore.SchemaVersion,
+            UpdatedAtUtc = friendsStore.UpdatedAtUtc,
+            Friends = (friendsStore.Friends ?? []).Select(friend =>
+            {
+                var clone = friend.Clone();
+                clone.PairSecretBase64 = LocalSecretProtector.Protect(clone.PairSecretBase64);
+                return clone;
+            }).ToList()
+        };
+
+        return WriteAtomicCoreAsync(path, protectedCopy, cancellationToken);
     }
 
     private static async Task<(T Result, bool NeedsSave)> LoadWithFallbackAsync<T>(

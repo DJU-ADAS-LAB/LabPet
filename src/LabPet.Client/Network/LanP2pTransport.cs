@@ -710,8 +710,8 @@ public sealed class LanP2pTransport : ISocialTransport
             };
         }
 
-        // 2. 친구 전용 패킷은 HMAC-SHA256 서명 검증 필수
-        var requiresFriendHmac = header.PacketType is
+        // 2. 친구 전용 패킷은 AES-256-GCM 암호화 + HMAC-SHA256 서명 검증 필수
+        var requiresFriendAuth = header.PacketType is
             PacketType.BubbleMessage or
             PacketType.QuickReaction or
             PacketType.PetInteraction or
@@ -720,20 +720,32 @@ public sealed class LanP2pTransport : ISocialTransport
             PacketType.GameEvent;
 
         string? verifiedPairSecret = null;
-        if (requiresFriendHmac)
+        var effectivePayloadJson = envelope.PayloadJson;
+        if (requiresFriendAuth)
         {
             if (!_friendsByPetId.TryGetValue(header.SenderPetId, out var friend))
             {
                 return new AckPayload { AckMessageId = header.MessageId, Accepted = false, ErrorCode = "NOT_FRIEND" };
             }
 
-            var canonical = PacketSigner.BuildControlCanonicalString(header, envelope.PayloadJson);
+            if (!envelope.IsEncrypted)
+            {
+                return RejectAck(header.MessageId, "ENCRYPTION_REQUIRED");
+            }
+
+            var signatureInput = PacketCrypto.BuildEncryptedPayloadSignatureInput(envelope);
+            var canonical = PacketSigner.BuildControlCanonicalString(header, signatureInput);
             lock (friend)
             {
                 verifiedPairSecret = friend.PairSecretBase64;
                 if (!PacketSigner.VerifySignature(canonical, header.SignatureBase64, verifiedPairSecret))
                 {
                     return new AckPayload { AckMessageId = header.MessageId, Accepted = false, ErrorCode = "INVALID_SIGNATURE" };
+                }
+
+                if (!PacketCrypto.TryDecryptControlPayload(envelope, verifiedPairSecret, out effectivePayloadJson))
+                {
+                    return RejectAck(header.MessageId, "DECRYPTION_FAILED");
                 }
 
                 if (!string.IsNullOrWhiteSpace(remoteIp))
@@ -756,7 +768,7 @@ public sealed class LanP2pTransport : ISocialTransport
         {
             case PacketType.FriendRequest:
             {
-                var p = JsonSerializer.Deserialize<FriendRequestPayload>(envelope.PayloadJson, ProtocolJson.PacketOptions);
+                var p = JsonSerializer.Deserialize<FriendRequestPayload>(effectivePayloadJson, ProtocolJson.PacketOptions);
                 if (p is null) return RejectAck(header.MessageId, "INVALID_PAYLOAD");
 
                 FriendRequestReceived?.Invoke(this, new FriendRequestReceivedEventArgs(
@@ -766,7 +778,7 @@ public sealed class LanP2pTransport : ISocialTransport
 
             case PacketType.FriendAccept:
             {
-                var p = JsonSerializer.Deserialize<FriendAcceptPayload>(envelope.PayloadJson, ProtocolJson.PacketOptions);
+                var p = JsonSerializer.Deserialize<FriendAcceptPayload>(effectivePayloadJson, ProtocolJson.PacketOptions);
                 if (p is null || string.IsNullOrWhiteSpace(p.PairSecretBase64)) return RejectAck(header.MessageId, "INVALID_PAYLOAD");
 
                 FriendAccepted?.Invoke(this, new FriendAcceptedEventArgs(
@@ -776,14 +788,14 @@ public sealed class LanP2pTransport : ISocialTransport
 
             case PacketType.FriendReject:
             {
-                var p = JsonSerializer.Deserialize<FriendRejectPayload>(envelope.PayloadJson, ProtocolJson.PacketOptions);
+                var p = JsonSerializer.Deserialize<FriendRejectPayload>(effectivePayloadJson, ProtocolJson.PacketOptions);
                 FriendRejected?.Invoke(this, new FriendRejectedEventArgs(header.SenderPetId, p?.Reason));
                 break;
             }
 
             case PacketType.BubbleMessage:
             {
-                var p = JsonSerializer.Deserialize<BubbleMessagePayload>(envelope.PayloadJson, ProtocolJson.PacketOptions);
+                var p = JsonSerializer.Deserialize<BubbleMessagePayload>(effectivePayloadJson, ProtocolJson.PacketOptions);
                 if (p is null || string.IsNullOrWhiteSpace(p.Text)) return RejectAck(header.MessageId, "INVALID_PAYLOAD");
 
                 var safeText = p.Text.Length > ProtocolConstants.MaxBubbleMessageLength
@@ -796,7 +808,7 @@ public sealed class LanP2pTransport : ISocialTransport
 
             case PacketType.QuickReaction:
             {
-                var p = JsonSerializer.Deserialize<QuickReactionPayload>(envelope.PayloadJson, ProtocolJson.PacketOptions);
+                var p = JsonSerializer.Deserialize<QuickReactionPayload>(effectivePayloadJson, ProtocolJson.PacketOptions);
                 if (p is null) return RejectAck(header.MessageId, "INVALID_PAYLOAD");
 
                 QuickReactionReceived?.Invoke(this, new QuickReactionReceivedEventArgs(header.SenderPetId, p.ReactionId));
@@ -805,7 +817,7 @@ public sealed class LanP2pTransport : ISocialTransport
 
             case PacketType.PetInteraction:
             {
-                var p = JsonSerializer.Deserialize<PetInteractionPayload>(envelope.PayloadJson, ProtocolJson.PacketOptions);
+                var p = JsonSerializer.Deserialize<PetInteractionPayload>(effectivePayloadJson, ProtocolJson.PacketOptions);
                 PetInteractionReceived?.Invoke(this, new PetInteractionReceivedEventArgs(
                     header.SenderPetId, p?.InteractionType ?? "pet"));
                 break;
@@ -813,7 +825,7 @@ public sealed class LanP2pTransport : ISocialTransport
 
             case PacketType.MusicFollowOn:
             {
-                var p = JsonSerializer.Deserialize<MusicFollowPayload>(envelope.PayloadJson, ProtocolJson.PacketOptions);
+                var p = JsonSerializer.Deserialize<MusicFollowPayload>(effectivePayloadJson, ProtocolJson.PacketOptions);
                 var udpPort = p?.ListenerUdpPort ?? _udpMusicPort;
                 if (IPAddress.TryParse(remoteIp, out var parsedIp) && verifiedPairSecret is not null)
                 {
@@ -840,7 +852,7 @@ public sealed class LanP2pTransport : ISocialTransport
 
             case PacketType.GameEvent:
             {
-                var p = JsonSerializer.Deserialize<GameEventPayload>(envelope.PayloadJson, ProtocolJson.PacketOptions);
+                var p = JsonSerializer.Deserialize<GameEventPayload>(effectivePayloadJson, ProtocolJson.PacketOptions);
                 if (p is null || string.IsNullOrWhiteSpace(p.GameType) || string.IsNullOrWhiteSpace(p.Action))
                 {
                     return RejectAck(header.MessageId, "INVALID_PAYLOAD");
@@ -875,17 +887,34 @@ public sealed class LanP2pTransport : ISocialTransport
                 TimestampUtc = DateTimeOffset.UtcNow
             };
 
+            ControlPacketEnvelope envelope;
             if (!string.IsNullOrWhiteSpace(pairSecretBase64))
             {
-                var canonical = PacketSigner.BuildControlCanonicalString(header, payloadJson);
+                var (ciphertextBase64, nonceBase64, tagBase64) =
+                    PacketCrypto.EncryptControlPayload(header, payloadJson, pairSecretBase64);
+
+                envelope = new ControlPacketEnvelope
+                {
+                    Header = header,
+                    PayloadJson = ciphertextBase64,
+                    IsEncrypted = true,
+                    NonceBase64 = nonceBase64,
+                    AuthTagBase64 = tagBase64
+                };
+
+                var signatureInput = PacketCrypto.BuildEncryptedPayloadSignatureInput(envelope);
+                var canonical = PacketSigner.BuildControlCanonicalString(header, signatureInput);
                 header.SignatureBase64 = PacketSigner.ComputeSignature(canonical, pairSecretBase64);
             }
-
-            var envelope = new ControlPacketEnvelope
+            else
             {
-                Header = header,
-                PayloadJson = payloadJson
-            };
+                envelope = new ControlPacketEnvelope
+                {
+                    Header = header,
+                    PayloadJson = payloadJson,
+                    IsEncrypted = false
+                };
+            }
 
             using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
             timeoutCts.CancelAfter(TimeSpan.FromSeconds(3));

@@ -36,13 +36,13 @@
                 <StackPanel>
                     <Border Background="White" BorderBrush="{StaticResource BorderSubtleBrush}" BorderThickness="1" CornerRadius="16" Padding="16" Margin="0,0,0,12">
                         <StackPanel>
-                            <TextBlock Text="1. LAN P2P 소셜용 Windows 방화벽 허용 (개인 네트워크)" FontWeight="Bold" FontSize="13.5" Foreground="{StaticResource BrandPinkBrush}" />
-                            <TextBlock Text="같은 Wi-Fi/LAN의 친구가 보이지 않거나 친구 신청이 실패할 경우, 아래 인바운드 포트가 개인 네트워크에서 허용되어 있는지 확인해 주세요."
+                            <TextBlock Text="1. LAN P2P 소셜용 Windows 방화벽 허용 (로컬 서브넷 · LabPet 전용)" FontWeight="Bold" FontSize="13.5" Foreground="{StaticResource BrandPinkBrush}" />
+                            <TextBlock Text="같은 Wi-Fi/LAN의 친구가 보이지 않거나 친구 신청이 실패할 경우, 아래 인바운드 포트가 허용되어 있는지 확인해 주세요. 보안 강화를 위해 같은 로컬 서브넷(LocalSubnet)에서 LabPet 실행 파일로 들어오는 통신만 허용합니다."
                                        TextWrapping="Wrap"
                                        FontSize="12"
                                        Foreground="{StaticResource TextSecondaryBrush}"
                                        Margin="0,6,0,8" />
-                            <TextBlock Text="• UDP 45678: 주변 펫 자동 탐색 (HELLO 브로드캐스트)&#x0a;• UDP 45679: 노래 따라하기 30Hz 오디오 프레임&#x0a;• TCP 45680: 친구 신청/수락, 말풍선 메시지, 구독 제어"
+                            <TextBlock Text="• UDP 45678: 주변 펫 자동 탐색 (HELLO 브로드캐스트)&#x0a;• UDP 45679: 노래 따라하기 30Hz 오디오 프레임&#x0a;• TCP 45680: 친구 신청/수락, 말풍선 메시지, 구독 제어, 친구 코인 게임"
                                        FontSize="12"
                                        Foreground="{StaticResource TextPrimaryBrush}"
                                        Margin="0,0,0,10" />
@@ -61,6 +61,7 @@
                                         Click="CopyFirewallCommand_Click" />
                             </StackPanel>
                             <TextBlock x:Name="FirewallStatusText"
+                                       TextWrapping="Wrap"
                                        FontSize="11.5"
                                        FontWeight="SemiBold"
                                        Foreground="{StaticResource BrandPinkBrush}"

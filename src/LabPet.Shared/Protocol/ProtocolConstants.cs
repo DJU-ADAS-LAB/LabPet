@@ -5,11 +5,11 @@ namespace LabPet.Shared.Protocol;
 /// </summary>
 public static class ProtocolConstants
 {
-    /// <summary>현재 클라이언트가 송신하는 프로토콜 버전.</summary>
-    public const int CurrentProtocolVersion = 1;
+    /// <summary>현재 클라이언트가 송신하는 프로토콜 버전 (v2: 친구 전용 제어 패킷 AES-256-GCM 암호화 필수).</summary>
+    public const int CurrentProtocolVersion = 2;
 
     /// <summary>이 클라이언트가 하위 호환으로 수용할 수 있는 최소 프로토콜 버전.</summary>
-    public const int MinSupportedProtocolVersion = 1;
+    public const int MinSupportedProtocolVersion = 2;
 
     /// <summary>로컬 JSON 저장소 프로필/친구 스키마 현재 버전.</summary>
     public const int CurrentStorageSchemaVersion = 1;
@@ -46,6 +46,15 @@ public static class ProtocolConstants
 
     /// <summary>친구 인증용 HMAC 공유 비밀키 길이(바이트).</summary>
     public const int PairSecretByteLength = 32;
+
+    /// <summary>AES-256-GCM 대칭 키 길이(바이트).</summary>
+    public const int AesGcmKeyByteLength = 32;
+
+    /// <summary>AES-256-GCM 난수 Nonce 길이(바이트).</summary>
+    public const int AesGcmNonceByteLength = 12;
+
+    /// <summary>AES-256-GCM 인증 태그 길이(바이트).</summary>
+    public const int AesGcmTagByteLength = 16;
 
     /// <summary>상대 피어의 프로토콜 버전 호환성을 판정한다.</summary>
     public static ProtocolCompatibility EvaluateCompatibility(int peerProtocolVersion)

@@ -1,5 +1,6 @@
 using System.IO;
 using LabPet.Client.Storage;
+using LabPet.Client.SystemIntegration;
 using LabPet.Client.Updates;
 using LabPet.Shared.Models;
 using Velopack.Sources;
@@ -89,5 +90,95 @@ public sealed class UpgradeAndUpdateTests
                 Directory.Delete(isolatedDir, recursive: true);
             }
         }
+    }
+
+    [Fact]
+    public void FirewallRegistration_BuildsHardenedNetshAndPowerShellCommands()
+    {
+        const string exePath = @"C:\Users\TestUser\AppData\Local\LabPet\current\LabPet.Client.exe";
+
+        var netsh = FirewallRegistrationService.BuildNetshRegisterCommand(exePath);
+        Assert.Contains("delete rule name=\"LabPet LAN UDP\"", netsh);
+        Assert.Contains("delete rule name=\"LabPet LAN TCP\"", netsh);
+        Assert.Contains("protocol=UDP localport=45678,45679 profile=any remoteip=localsubnet program=\"C:\\Users\\TestUser\\AppData\\Local\\LabPet\\current\\LabPet.Client.exe\"", netsh);
+        Assert.Contains("protocol=TCP localport=45680 profile=any remoteip=localsubnet program=\"C:\\Users\\TestUser\\AppData\\Local\\LabPet\\current\\LabPet.Client.exe\"", netsh);
+
+        var ps = FirewallRegistrationService.BuildPowerShellRegisterCommand(exePath);
+        Assert.Contains("Remove-NetFirewallRule -DisplayName 'LabPet LAN UDP','LabPet LAN TCP' -ErrorAction SilentlyContinue;", ps);
+        Assert.Contains("-RemoteAddress LocalSubnet -Program 'C:\\Users\\TestUser\\AppData\\Local\\LabPet\\current\\LabPet.Client.exe' -Protocol UDP -LocalPort 45678,45679", ps);
+        Assert.Contains("-RemoteAddress LocalSubnet -Program 'C:\\Users\\TestUser\\AppData\\Local\\LabPet\\current\\LabPet.Client.exe' -Protocol TCP -LocalPort 45680", ps);
+
+        // 작은따옴표가 포함된 경로는 PowerShell 문자열 이스케이프('') 처리
+        var quotePath = @"C:\Users\O'Brien\LabPet\LabPet.Client.exe";
+        var psWithQuote = FirewallRegistrationService.BuildPowerShellRegisterCommand(quotePath);
+        Assert.Contains("-Program 'C:\\Users\\O''Brien\\LabPet\\LabPet.Client.exe'", psWithQuote);
+
+        // 경로가 비어 있거나 셸 메타문자가 포함된 경우 program 인자를 안전하게 생략
+        var fallbackNetsh = FirewallRegistrationService.BuildNetshRegisterCommand(null);
+        Assert.Contains("remoteip=localsubnet", fallbackNetsh);
+        Assert.DoesNotContain("program=", fallbackNetsh);
+
+        var unsafeNetsh = FirewallRegistrationService.BuildNetshRegisterCommand(@"C:\Temp\a&calc.exe");
+        Assert.DoesNotContain("program=", unsafeNetsh);
+    }
+
+    [Fact]
+    public void FirewallRegistration_DetectsHardenedAndLegacyNetshOutput()
+    {
+        const string expectedPath = @"C:\Users\TestUser\AppData\Local\LabPet\current\LabPet.Client.exe";
+
+        // 영문 netsh verbose 출력 + 긴 Program 경로 줄바꿈 케이스
+        const string hardenedEnglishOutput = """
+            Rule Name:                            LabPet LAN TCP
+            ----------------------------------------------------------------------
+            Enabled:                              Yes
+            Direction:                            In
+            Profiles:                             Domain,Private,Public
+            LocalIP:                              Any
+            RemoteIP:                             LocalSubnet
+            Protocol:                             TCP
+            LocalPort:                            45680
+            Program:                              c:\users\testuser\appdata\local\labpet\c
+            urrent\labpet.client.exe
+            Action:                               Allow
+            Ok.
+            """;
+
+        // 한글 netsh verbose 출력 케이스
+        const string hardenedKoreanOutput = """
+            규칙 이름:                            LabPet LAN TCP
+            ----------------------------------------------------------------------
+            원격 IP:                              로컬 서브넷
+            프로그램:                             C:\Users\TestUser\AppData\Local\LabPet\current\LabPet.Client.exe
+            작업:                                 허용
+            확인.
+            """;
+
+        // 구버전(RemoteIP: Any, Program 미지정) 출력 케이스
+        const string legacyOutput = """
+            Rule Name:                            LabPet LAN TCP
+            ----------------------------------------------------------------------
+            LocalIP:                              Any
+            RemoteIP:                             Any
+            Protocol:                             TCP
+            LocalPort:                            45680
+            Action:                               Allow
+            Ok.
+            """;
+
+        // 다른 실행 파일 경로가 등록된 케이스
+        const string mismatchedProgramOutput = """
+            Rule Name:                            LabPet LAN TCP
+            ----------------------------------------------------------------------
+            RemoteIP:                             LocalSubnet
+            Program:                              C:\OtherApp\Other.exe
+            Action:                               Allow
+            Ok.
+            """;
+
+        Assert.True(FirewallRegistrationService.IsHardenedRuleOutput(hardenedEnglishOutput, expectedPath));
+        Assert.True(FirewallRegistrationService.IsHardenedRuleOutput(hardenedKoreanOutput, expectedPath));
+        Assert.False(FirewallRegistrationService.IsHardenedRuleOutput(legacyOutput, expectedPath));
+        Assert.False(FirewallRegistrationService.IsHardenedRuleOutput(mismatchedProgramOutput, expectedPath));
     }
 }
