@@ -4,7 +4,7 @@
 - **프로젝트명**: `LabPet` (Windows WPF 3D 데스크톱 펫 애플리케이션)
 - **기술 스택**: `.NET 10` (`net10.0` / `net10.0-windows`), WPF, `HelixToolkit.Wpf 3.1.2`, `CommunityToolkit.Mvvm`, `H.NotifyIcon.Wpf`, `Microsoft.Extensions.DependencyInjection`
 - **핵심 목표**:
-  1. 투명 바탕화면 창 위에서 3종 3D 캐릭터(`mochi_spirit`, `chibi_cat`, `fluffy_cloud`)를 말랑한 클레이/토이 감성으로 저부하 렌더링
+  1. 투명 바탕화면 창 위에서 4종 3D 캐릭터(`mochi_spirit`, `chibi_cat`, `fluffy_cloud`, `fluffy_puppy`)를 말랑한 클레이/토이 감성으로 저부하 렌더링
   2. 외부 서버 없이 로컬 네트워크(LAN)만으로 동작하는 서버리스 P2P 소셜 기능(`ISocialTransport`) 구현
   3. 개인 성장 루프 및 시스템 오디오 반응 콘텐츠 제공
   4. 추후 GCP 서버(ASP.NET Core SignalR + Cloud Firestore) 확장 시 UI/도메인 수정 없이 전송 계층만 교체 가능하도록 `LabPet.Shared` 분리 유지

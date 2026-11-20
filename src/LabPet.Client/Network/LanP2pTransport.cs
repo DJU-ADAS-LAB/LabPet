@@ -494,6 +494,11 @@ public sealed class LanP2pTransport : ISocialTransport
                     {
                         friendEntry.PetName = hello.PetName;
                     }
+
+                    if (hello.Appearance is not null)
+                    {
+                        friendEntry.CachedAppearance = hello.Appearance.Clone();
+                    }
                 }
 
                 var snapshot = new PeerSnapshot

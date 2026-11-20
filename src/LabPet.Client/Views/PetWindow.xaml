@@ -179,7 +179,7 @@
                          Margin="0,-1,0,0" />
             </StackPanel>
 
-            <!-- 일반 꼬리 말풍선 -->
+            <!-- 일반 꼬리 말풍선 (최대 3줄까지 쌓아서 표시, 줄마다 개별 만료) -->
             <StackPanel Visibility="{Binding IsBubbleVisible, Converter={StaticResource BoolToVis}}"
                         IsHitTestVisible="False">
                 <Border Padding="11,6"
@@ -188,13 +188,21 @@
                         BorderBrush="#FFFFC2D4"
                         BorderThickness="1.5"
                         Effect="{StaticResource SoftCardShadow}">
-                    <TextBlock Text="{Binding BubbleText}"
-                               FontSize="11"
-                               FontWeight="SemiBold"
-                               Foreground="#FF2E3440"
-                               TextAlignment="Center"
-                               TextWrapping="Wrap"
-                               MaxWidth="188" />
+                    <ItemsControl ItemsSource="{Binding BubbleLines}">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                                <TextBlock Text="{Binding Text}"
+                                           FontSize="11"
+                                           FontWeight="SemiBold"
+                                           Foreground="#FF2E3440"
+                                           TextAlignment="Center"
+                                           TextWrapping="NoWrap"
+                                           TextTrimming="CharacterEllipsis"
+                                           Margin="0,1"
+                                           MaxWidth="188" />
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
                 </Border>
                 <Polygon Points="0,0 10,0 5,6"
                          Fill="#FAFFFFFF"
@@ -208,6 +216,7 @@
         <!-- 순수 WPF Viewport3D (AllowsTransparency 호환, 에어스페이스 충돌 없음) -->
         <Viewport3D x:Name="PetViewport"
                     Grid.Row="1"
+                    Opacity="{Binding PetOpacity}"
                     ClipToBounds="False"
                     MouseEnter="PetViewport_MouseEnter"
                     MouseLeave="PetViewport_MouseLeave"
@@ -275,7 +284,7 @@
                StaysOpen="True"
                PopupAnimation="Fade">
             <Border x:Name="FriendOverlayCard"
-                    Width="232"
+                    Width="262"
                     Margin="8"
                     Padding="10,9"
                     CornerRadius="15"
@@ -322,7 +331,7 @@
                                                        TextTrimming="CharacterEllipsis" />
                                         </StackPanel>
 
-                                        <!-- 친구인 경우: 메시지 / 쓰다듬기 / 노래 따라하기 -->
+                                        <!-- 친구인 경우: 메시지 / 쓰다듬기 / 노래 따라하기 / 데려오기 -->
                                         <StackPanel DockPanel.Dock="Right"
                                                     Orientation="Horizontal"
                                                     Visibility="{Binding IsFriend, Converter={StaticResource BoolToVis}}">
@@ -343,6 +352,12 @@
                                                     Style="{StaticResource MiniActionIconButton}"
                                                     IsEnabled="{Binding CanFollowMusic}"
                                                     Command="{Binding DataContext.QuickToggleMusicFollowCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                    CommandParameter="{Binding}"
+                                                    Margin="0,0,3,0" />
+                                            <Button Content="🏠"
+                                                    ToolTip="내 바탕화면에 데려오기 / 돌려보내기"
+                                                    Style="{StaticResource MiniActionIconButton}"
+                                                    Command="{Binding DataContext.QuickToggleVisitFriendCommand, RelativeSource={RelativeSource AncestorType=Window}}"
                                                     CommandParameter="{Binding}" />
                                         </StackPanel>
 
@@ -389,6 +404,42 @@
                                  PreviewMouseDown="QuickMessageInput_PreviewMouseDown"
                                  KeyDown="QuickMessageInput_KeyDown" />
                     </DockPanel>
+
+                    <!-- 하단 미니멀 크기 · 투명도 조절 바 -->
+                    <Separator Margin="2,7,2,6" />
+                    <Grid Margin="2,0,2,0">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="30" />
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="34" />
+                        </Grid.ColumnDefinitions>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="20" />
+                            <RowDefinition Height="20" />
+                        </Grid.RowDefinitions>
+
+                        <TextBlock Grid.Row="0" Grid.Column="0" Text="크기" FontSize="10.5" Foreground="#FF6B7280" VerticalAlignment="Center" />
+                        <Slider Grid.Row="0" Grid.Column="1"
+                                Minimum="0.65"
+                                Maximum="1.45"
+                                Value="{Binding PetScale, Mode=TwoWay}"
+                                TickFrequency="0.05"
+                                IsSnapToTickEnabled="True"
+                                VerticalAlignment="Center"
+                                Margin="4,0" />
+                        <TextBlock Grid.Row="0" Grid.Column="2" Text="{Binding PetScalePercentText}" FontSize="10" FontWeight="SemiBold" Foreground="#FF4B5563" HorizontalAlignment="Right" VerticalAlignment="Center" />
+
+                        <TextBlock Grid.Row="1" Grid.Column="0" Text="투명" FontSize="10.5" Foreground="#FF6B7280" VerticalAlignment="Center" />
+                        <Slider Grid.Row="1" Grid.Column="1"
+                                Minimum="0.25"
+                                Maximum="1.0"
+                                Value="{Binding PetOpacity, Mode=TwoWay}"
+                                TickFrequency="0.05"
+                                IsSnapToTickEnabled="True"
+                                VerticalAlignment="Center"
+                                Margin="4,0" />
+                        <TextBlock Grid.Row="1" Grid.Column="2" Text="{Binding PetOpacityPercentText}" FontSize="10" FontWeight="SemiBold" Foreground="#FF4B5563" HorizontalAlignment="Right" VerticalAlignment="Center" />
+                    </Grid>
                 </StackPanel>
             </Border>
         </Popup>

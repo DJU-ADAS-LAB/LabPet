@@ -29,6 +29,14 @@ public sealed class QuickOverlayEntry
 }
 
 /// <summary>
+/// 펫 말풍선에 쌓여 표시되는 메시지 한 줄. 같은 문구가 연속으로 와도 개별 줄로 구분되도록 참조 타입으로 둔다.
+/// </summary>
+public sealed class BubbleLine(string text)
+{
+    public string Text { get; } = text;
+}
+
+/// <summary>
 /// 바탕화면 투명 펫 창 ViewModel.
 /// </summary>
 public sealed partial class PetWindowViewModel : ObservableObject
@@ -49,6 +57,7 @@ public sealed partial class PetWindowViewModel : ObservableObject
     public event EventHandler<PetProfile>? ProfileUpdated;
     public event EventHandler<double>? PetScaleChanged;
     public event EventHandler<(PendingFriendRequest Request, bool Accept)>? FriendRequestResponded;
+    public event EventHandler<(FriendEntry Friend, PetAppearance Appearance)>? ToggleVisitFriendRequested;
 
     public PetProfile CurrentProfile { get; private set; } = new();
 
@@ -62,11 +71,25 @@ public sealed partial class PetWindowViewModel : ObservableObject
     [ObservableProperty] private bool _isUpdateBubbleVisible;
     [ObservableProperty] private string _updateBubbleText = string.Empty;
     [ObservableProperty] private string _updateReadyMenuHeader = "새 버전 준비됨 · 재시작하여 적용";
-    [ObservableProperty] private string _bubbleText = string.Empty;
     [ObservableProperty] private bool _isBubbleVisible;
+
+    /// <summary>
+    /// 말풍선에 동시에 쌓아 보여 줄 최대 줄 수. 초과 시 가장 오래된 줄부터 밀려난다.
+    /// </summary>
+    public const int MaxBubbleLines = 3;
+
+    /// <summary>
+    /// 말풍선에 쌓여 표시 중인 메시지 줄 목록(오래된 순 → 최신 순).
+    /// 각 줄은 자신의 표시 시간이 끝나면 개별적으로 사라진다.
+    /// </summary>
+    public ObservableCollection<BubbleLine> BubbleLines { get; } = [];
     [ObservableProperty] private PendingFriendRequest? _pendingFriendRequest;
     [ObservableProperty] private string _trayTooltip = "LabPet";
     [ObservableProperty] private double _petScale = 1.0;
+    [ObservableProperty] private double _petOpacity = 1.0;
+
+    public string PetScalePercentText => $"{Math.Round(PetScale * 100)}%";
+    public string PetOpacityPercentText => $"{Math.Round(PetOpacity * 100)}%";
 
     // 미니멀 오버레이 빠른 메시지 입력 상태
     [ObservableProperty] private QuickOverlayEntry? _quickMessageTarget;
@@ -103,8 +126,9 @@ public sealed partial class PetWindowViewModel : ObservableObject
         return $"현재 버전 v{ver}";
     }
 
-    private CancellationTokenSource? _bubbleCts;
+    private CancellationTokenSource? _appearanceSaveCts;
     private bool _suppressStartupToggleEvent;
+    private bool _suppressSliderSideEffects;
 
     public PetWindowViewModel(IAppDataStore store, SocialCoordinatorService social)
     {
@@ -117,11 +141,62 @@ public sealed partial class PetWindowViewModel : ObservableObject
         CurrentProfile = profile;
         PetName = profile.PetName;
         FriendCode = profile.FriendCode;
-        PetScale = Math.Clamp(profile.PetScale <= 0 ? 1.0 : profile.PetScale, 0.65, 1.45);
+
+        _suppressSliderSideEffects = true;
+        try
+        {
+            PetScale = Math.Clamp(profile.PetScale <= 0 ? 1.0 : profile.PetScale, 0.65, 1.45);
+            PetOpacity = Math.Clamp(profile.PetOpacity <= 0 ? 1.0 : profile.PetOpacity, 0.25, 1.0);
+        }
+        finally
+        {
+            _suppressSliderSideEffects = false;
+        }
+
         var label = SocialCoordinatorService.FormatDisplayName(profile.OwnerName, profile.PetName);
         TrayTooltip = $"{label} · Lv.{profile.SoloProgress.Level}";
         ProfileUpdated?.Invoke(this, profile);
         PetScaleChanged?.Invoke(this, PetScale);
+    }
+
+    partial void OnPetScaleChanged(double value)
+    {
+        OnPropertyChanged(nameof(PetScalePercentText));
+        if (_suppressSliderSideEffects) return;
+
+        var clamped = Math.Clamp(value, 0.65, 1.45);
+        CurrentProfile.PetScale = clamped;
+        PetScaleChanged?.Invoke(this, clamped);
+        ScheduleDebouncedProfileSave();
+    }
+
+    partial void OnPetOpacityChanged(double value)
+    {
+        OnPropertyChanged(nameof(PetOpacityPercentText));
+        if (_suppressSliderSideEffects) return;
+
+        CurrentProfile.PetOpacity = Math.Clamp(value, 0.25, 1.0);
+        ScheduleDebouncedProfileSave();
+    }
+
+    private async void ScheduleDebouncedProfileSave()
+    {
+        _appearanceSaveCts?.Cancel();
+        _appearanceSaveCts?.Dispose();
+        _appearanceSaveCts = new CancellationTokenSource();
+        var token = _appearanceSaveCts.Token;
+
+        try
+        {
+            await Task.Delay(350, token);
+            if (!token.IsCancellationRequested)
+            {
+                await _store.SaveProfileAsync(CurrentProfile, token);
+            }
+        }
+        catch (TaskCanceledException)
+        {
+        }
     }
 
     public void RefreshQuickOverlayEntries()
@@ -202,27 +277,27 @@ public sealed partial class PetWindowViewModel : ObservableObject
         await _store.SaveProfileAsync(CurrentProfile);
     }
 
+    /// <summary>
+    /// 펫 말풍선에 메시지 한 줄을 추가한다. 새 메시지가 와도 기존 줄을 즉시 지우지 않고
+    /// 최대 <see cref="MaxBubbleLines"/>줄까지 쌓으며, 각 줄은 자신의 표시 시간이 지나면 사라진다.
+    /// UI 스레드에서 호출해야 한다.
+    /// </summary>
     public async void ShowBubble(string message, int durationMs = 2600)
     {
-        _bubbleCts?.Cancel();
-        _bubbleCts?.Dispose();
-        _bubbleCts = new CancellationTokenSource();
-        var token = _bubbleCts.Token;
+        var line = new BubbleLine(message);
+        BubbleLines.Add(line);
+        while (BubbleLines.Count > MaxBubbleLines)
+        {
+            BubbleLines.RemoveAt(0);
+        }
 
-        BubbleText = message;
         IsBubbleVisible = true;
 
-        try
-        {
-            await Task.Delay(durationMs, token);
-            if (!token.IsCancellationRequested)
-            {
-                IsBubbleVisible = false;
-            }
-        }
-        catch (TaskCanceledException)
-        {
-        }
+        await Task.Delay(durationMs);
+
+        // 이미 밀려난 줄이면 Remove는 아무 일도 하지 않는다.
+        BubbleLines.Remove(line);
+        IsBubbleVisible = BubbleLines.Count > 0;
     }
 
     partial void OnIsClickThroughEnabledChanged(bool value)
@@ -363,6 +438,18 @@ public sealed partial class PetWindowViewModel : ObservableObject
         {
             ShowBubble("노래 따라하기 요청 실패", 2000);
         }
+    }
+
+    [RelayCommand]
+    private void QuickToggleVisitFriend(QuickOverlayEntry? entry)
+    {
+        if (entry?.Friend is null)
+        {
+            return;
+        }
+
+        var appearance = (entry.Peer?.Appearance ?? entry.Friend.CachedAppearance ?? new PetAppearance()).Clone();
+        ToggleVisitFriendRequested?.Invoke(this, (entry.Friend, appearance));
     }
 
     [RelayCommand]

@@ -42,9 +42,11 @@ public sealed class PeerListItemViewModel
 public sealed class FriendListItemViewModel
 {
     public FriendEntry Entry { get; }
+    public PetAppearance EffectiveAppearance { get; }
     public bool IsOnline { get; }
     public bool IsMusicActive { get; }
     public bool IsFollowingMusic { get; }
+    public bool IsVisitingDesktop { get; }
     public bool RequiresUpdate { get; }
     public string UpdateBadgeText { get; }
 
@@ -60,18 +62,22 @@ public sealed class FriendListItemViewModel
 
     public string IntimacyText => $"친밀도 {Entry.Intimacy}";
     public string MusicFollowButtonText => IsFollowingMusic ? "따라하기 중지" : "노래 따라하기";
+    public string VisitButtonText => IsVisitingDesktop ? "바탕화면에서 돌려보내기" : "내 바탕화면에 데려오기";
     public bool CanFollowMusic => IsOnline && !RequiresUpdate && (IsMusicActive || IsFollowingMusic);
     public bool CanInteract => IsOnline && !RequiresUpdate;
 
     public FriendListItemViewModel(
         FriendEntry entry,
         PeerSnapshot? livePeer,
-        bool isFollowingMusic)
+        bool isFollowingMusic,
+        bool isVisitingDesktop)
     {
         Entry = entry;
+        EffectiveAppearance = (livePeer?.Appearance ?? entry.CachedAppearance ?? new PetAppearance()).Clone();
         IsOnline = livePeer is not null;
         IsMusicActive = livePeer?.IsMusicActive ?? false;
         IsFollowingMusic = isFollowingMusic;
+        IsVisitingDesktop = isVisitingDesktop;
         RequiresUpdate = livePeer?.RequiresUpdate ?? false;
         UpdateBadgeText = livePeer?.Compatibility switch
         {
@@ -88,6 +94,9 @@ public sealed class FriendListItemViewModel
 public sealed partial class SocialViewModel : ObservableObject
 {
     private readonly SocialCoordinatorService _social;
+    private Func<string, bool>? _isVisitorActivePredicate;
+
+    public event EventHandler<(FriendEntry Friend, PetAppearance Appearance)>? ToggleVisitDesktopRequested;
 
     public ObservableCollection<PeerListItemViewModel> NearbyPeers { get; } = [];
     public ObservableCollection<FriendListItemViewModel> Friends { get; } = [];
@@ -97,12 +106,25 @@ public sealed partial class SocialViewModel : ObservableObject
     [ObservableProperty] private string _statusBanner = "같은 로컬 네트워크(LAN)의 LabPet을 자동 탐색 중입니다.";
     [ObservableProperty] private bool _preferLocalMusicWhenActive = true;
 
+    public bool HasSelectedFriend => SelectedFriend is not null;
+
     public SocialViewModel(SocialCoordinatorService social)
     {
         _social = social;
         _preferLocalMusicWhenActive = _social.PreferLocalMusicWhenActive;
         _social.StateChanged += OnSocialStateChanged;
         RefreshLists();
+    }
+
+    public void AttachVisitorStateChecker(Func<string, bool> isVisitorActivePredicate)
+    {
+        _isVisitorActivePredicate = isVisitorActivePredicate;
+        RefreshLists();
+    }
+
+    partial void OnSelectedFriendChanged(FriendListItemViewModel? value)
+    {
+        OnPropertyChanged(nameof(HasSelectedFriend));
     }
 
     partial void OnPreferLocalMusicWhenActiveChanged(bool value)
@@ -140,7 +162,8 @@ public sealed partial class SocialViewModel : ObservableObject
         {
             var live = peers.FirstOrDefault(p => string.Equals(p.PetId, friend.PetId, StringComparison.OrdinalIgnoreCase));
             var isFollowing = string.Equals(_social.FollowingHostPetId, friend.PetId, StringComparison.OrdinalIgnoreCase);
-            Friends.Add(new FriendListItemViewModel(friend, live, isFollowing));
+            var isVisiting = _isVisitorActivePredicate?.Invoke(friend.PetId) ?? false;
+            Friends.Add(new FriendListItemViewModel(friend, live, isFollowing, isVisiting));
         }
 
         if (selectedPetId is not null)
@@ -236,6 +259,19 @@ public sealed partial class SocialViewModel : ObservableObject
         {
             StatusBanner = "노래 따라하기 요청에 실패했습니다.";
         }
+    }
+
+    [RelayCommand]
+    private void ToggleVisitDesktop(FriendListItemViewModel? friend)
+    {
+        var target = friend ?? SelectedFriend;
+        if (target is null)
+        {
+            return;
+        }
+
+        ToggleVisitDesktopRequested?.Invoke(this, (target.Entry, target.EffectiveAppearance));
+        RefreshLists();
     }
 
     public void Detach()

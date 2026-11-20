@@ -8,12 +8,14 @@ public static class PetSpeciesIds
     public const string MochiSpirit = "mochi_spirit";
     public const string ChibiCat = "chibi_cat";
     public const string FluffyCloud = "fluffy_cloud";
+    public const string FluffyPuppy = "fluffy_puppy";
 
     public static IReadOnlyList<string> All { get; } =
     [
         MochiSpirit,
         ChibiCat,
-        FluffyCloud
+        FluffyCloud,
+        FluffyPuppy
     ];
 }
 

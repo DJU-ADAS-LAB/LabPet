@@ -1,4 +1,4 @@
-using System.Windows.Media;
+﻿using System.Windows.Media;
 using LabPet.Shared.Models;
 
 namespace LabPet.Client.Rendering;
@@ -242,7 +242,40 @@ public sealed class PetAnimationController
                     rig.TailRotation.Angle = Math.Sin(_tailPhase) * (14.0 + groove * 16.0) + signedTap * 7.0;
                 }
 
-                UpdateCatPaws(rig, groove, _dancePhase, stance, leftStrike, rightStrike);
+                UpdateFrontPaws(rig, groove, _dancePhase, stance, leftStrike, rightStrike,
+                    stanceLiftY: 0.08, stanceReachZ: 0.28, strikeHeight: 0.16);
+                break;
+            }
+
+            case PetSpeciesIds.FluffyPuppy:
+            {
+                // 솜뭉치 강아지: 살랑 바운스 + 신나게 빠른 꼬리 흔들기 + 처진 귀 펄럭임
+                // 타이핑 시 짧은 앞다리를 미니 키보드 위로 들어 올려 좌우 교대로 콕콕 두드림
+                var sway = Math.Sin(_dancePhase);
+                var bounce = Math.Abs(Math.Sin(_dancePhase));
+
+                offsetY = bounce * (0.03 + groove * 0.09) + beat * 0.06 + anyTapWave * 0.02;
+                scaleY = 1.0 + Math.Sin(_dancePhase * 2.0) * (0.015 + groove * 0.04) + beat * 0.04 - anyTapWave * 0.025;
+                bodyRoll = sway * (2.0 + groove * 6.0) + signedTap * 3.0;
+
+                headRollExtra = sway * (2.5 + groove * 5.0) + signedTap * 3.0;
+                headPitchExtra = Math.Sin(_dancePhase * 2.0) * (1.5 + groove * 4.0) + stance * 11.0 + anyTapWave * 5.0;
+
+                if (rig.LeftEarRotation is not null && rig.RightEarRotation is not null)
+                {
+                    // 처진 귀는 바깥쪽(왼쪽 귀 음수, 오른쪽 귀 양수)으로 펄럭임
+                    var earFlop = Math.Abs(Math.Sin(_tailPhase * 0.9)) * (2.0 + treble * 7.0) + beat * 6.0;
+                    rig.LeftEarRotation.Angle = -4.0 - earFlop - leftTapWave * 5.0;
+                    rig.RightEarRotation.Angle = 4.0 + earFlop + rightTapWave * 5.0;
+                }
+
+                if (rig.TailRotation is not null)
+                {
+                    rig.TailRotation.Angle = Math.Sin(_tailPhase * 2.2) * (18.0 + groove * 14.0) + signedTap * 6.0;
+                }
+
+                UpdateFrontPaws(rig, groove, _dancePhase, stance, leftStrike, rightStrike,
+                    stanceLiftY: 0.18, stanceReachZ: 0.30, strikeHeight: 0.12);
                 break;
             }
 
@@ -404,7 +437,22 @@ public sealed class PetAnimationController
             : Math.Cos(((progress - 0.45) / 0.55) * Math.PI) * 0.92;
     }
 
-    private static void UpdateCatPaws(PetRigHandle rig, double groove, double dancePhase, double stance, double leftStrike, double rightStrike)
+    /// <summary>
+    /// 앞발(치비 고양이·솜뭉치 강아지) 공용 갱신: 리듬 들썩임 + 타이핑 자세에서 미니 키보드 위로 뻗어 교대 타건.
+    /// </summary>
+    /// <param name="stanceLiftY">타이핑 자세에서 앞발을 들어 올리는 높이.</param>
+    /// <param name="stanceReachZ">타이핑 자세에서 앞발을 앞으로 뻗는 거리.</param>
+    /// <param name="strikeHeight">타건 곡선 1.0당 앞발 상하 이동량.</param>
+    private static void UpdateFrontPaws(
+        PetRigHandle rig,
+        double groove,
+        double dancePhase,
+        double stance,
+        double leftStrike,
+        double rightStrike,
+        double stanceLiftY,
+        double stanceReachZ,
+        double strikeHeight)
     {
         if (rig.LeftPawTranslate is null || rig.RightPawTranslate is null)
         {
@@ -416,12 +464,12 @@ public sealed class PetAnimationController
         var rightDance = Math.Max(0.0, -Math.Sin(dancePhase)) * groove * 0.08 * (1.0 - stance);
 
         // 타이핑 자세: 앞발을 미니 키보드 위로 앞으로 뻗고, 타건 시 위→아래로 타닥타닥 내려침
-        var baseY = stance * 0.08;
-        var baseZ = stance * 0.28;
+        var baseY = stance * stanceLiftY;
+        var baseZ = stance * stanceReachZ;
 
-        rig.LeftPawTranslate.OffsetY = baseY + leftStrike * 0.16 + leftDance;
+        rig.LeftPawTranslate.OffsetY = baseY + leftStrike * strikeHeight + leftDance;
         rig.LeftPawTranslate.OffsetZ = baseZ + leftDance * 0.45;
-        rig.RightPawTranslate.OffsetY = baseY + rightStrike * 0.16 + rightDance;
+        rig.RightPawTranslate.OffsetY = baseY + rightStrike * strikeHeight + rightDance;
         rig.RightPawTranslate.OffsetZ = baseZ + rightDance * 0.45;
     }
 

@@ -24,6 +24,7 @@ public partial class App : Application
     private SoloHubWindow? _soloHubWindow;
     private SocialWindow? _socialWindow;
     private EnvironmentGuideWindow? _guideWindow;
+    private readonly Dictionary<string, VisitorPetWindow> _visitorWindows = new(StringComparer.OrdinalIgnoreCase);
 
     protected override async void OnStartup(StartupEventArgs e)
     {
@@ -93,6 +94,7 @@ public partial class App : Application
         petVm.OpenSoloHubRequested += OnOpenSoloHubRequested;
         petVm.OpenSocialRequested += OnOpenSocialRequested;
         petVm.OpenEnvironmentGuideRequested += OnOpenEnvironmentGuideRequested;
+        petVm.ToggleVisitFriendRequested += (_, args) => ToggleVisitorPetWindow(args.Friend, args.Appearance);
         petVm.StartupAutoRunToggled += async (_, enabled) =>
         {
             var ok = startupService.SetEnabled(enabled);
@@ -192,12 +194,55 @@ public partial class App : Application
         }
 
         var socialVm = _serviceProvider.GetRequiredService<SocialViewModel>();
-        _socialWindow = new SocialWindow(socialVm)
+        socialVm.AttachVisitorStateChecker(petId => _visitorWindows.ContainsKey(petId));
+        socialVm.ToggleVisitDesktopRequested += (_, args) => ToggleVisitorPetWindow(args.Friend, args.Appearance);
+
+        _socialWindow = new SocialWindow(
+            socialVm,
+            _serviceProvider.GetRequiredService<IPetMeshFactory>())
         {
             Owner = _petWindow
         };
         _socialWindow.Closed += (_, _) => _socialWindow = null;
         _socialWindow.Show();
+    }
+
+    private void ToggleVisitorPetWindow(LabPet.Shared.Models.FriendEntry friend, LabPet.Shared.Models.PetAppearance appearance)
+    {
+        if (_serviceProvider is null || _petWindow is null)
+        {
+            return;
+        }
+
+        var petVm = _serviceProvider.GetRequiredService<PetWindowViewModel>();
+        if (_visitorWindows.TryGetValue(friend.PetId, out var existing))
+        {
+            existing.Close();
+            _visitorWindows.Remove(friend.PetId);
+            petVm.ShowBubble($"{SocialCoordinatorService.FormatDisplayName(friend.OwnerName, friend.PetName)}(을)를 돌려보냈어요.", 2000);
+            return;
+        }
+
+        var visitor = new VisitorPetWindow(
+            friend,
+            appearance,
+            _serviceProvider.GetRequiredService<IPetMeshFactory>(),
+            _serviceProvider.GetRequiredService<IAudioAnalyzer>(),
+            _serviceProvider.GetRequiredService<SocialCoordinatorService>());
+
+        visitor.PlaceBeside(_petWindow);
+        visitor.Closed += (_, _) =>
+        {
+            _visitorWindows.Remove(friend.PetId);
+            if (_socialWindow?.DataContext is SocialViewModel vm)
+            {
+                vm.RefreshLists();
+            }
+        };
+
+        _visitorWindows[friend.PetId] = visitor;
+        visitor.Show();
+        visitor.ShowVisitorBubble("놀러 왔어!", 2200);
     }
 
     private void OnOpenEnvironmentGuideRequested(object? sender, EventArgs e)
@@ -223,6 +268,13 @@ public partial class App : Application
 
     protected override void OnExit(ExitEventArgs e)
     {
+        foreach (var visitor in _visitorWindows.Values.ToList())
+        {
+            visitor.Close();
+        }
+
+        _visitorWindows.Clear();
+
         if (_serviceProvider is not null)
         {
             // IAsyncDisposable 서비스(SocialCoordinatorService, LanP2pTransport) 안전 정리

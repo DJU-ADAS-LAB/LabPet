@@ -20,13 +20,15 @@ public static class PetCustomizationCatalog
     [
         new(PetSpeciesIds.MochiSpirit, "말랑 모찌 정령", "쫀득한 3D 타원체 바디와 볼록한 볼터치", "#FFF5F7"),
         new(PetSpeciesIds.ChibiCat, "치비 고양이", "큰 둥근 머리, 쫑긋한 3D 귀, 곡선 꼬리", "#FFE6CC"),
-        new(PetSpeciesIds.FluffyCloud, "솜구름", "유기적으로 뭉친 몽실한 구름 클러스터", "#F0F8FF")
+        new(PetSpeciesIds.FluffyCloud, "솜구름", "유기적으로 뭉친 몽실한 구름 클러스터", "#F0F8FF"),
+        new(PetSpeciesIds.FluffyPuppy, "솜뭉치 강아지", "축 처진 복슬 귀, 짧은 네 발, 깃털 꼬리", "#F2C27D")
     ];
 
     public static IReadOnlyList<CustomizationOption> BodyColors { get; } =
     [
         new("#FFF5F7", "밀크 모찌", "따뜻한 크림 화이트", "#FFF5F7"),
         new("#FFE6CC", "피치 크림", "부드러운 복숭아 파스텔", "#FFE6CC"),
+        new("#F2C27D", "허니 골드", "포근한 골든 강아지 털색", "#F2C27D"),
         new("#E6F4FF", "소다 솜사탕", "맑은 하늘 파스텔", "#E6F4FF"),
         new("#E9F7E8", "말차 밀크", "포근한 민트 그린", "#E9F7E8"),
         new("#F3E8FF", "라벤더", "은은한 연보라 클레이", "#F3E8FF", "color_lavender", 40),

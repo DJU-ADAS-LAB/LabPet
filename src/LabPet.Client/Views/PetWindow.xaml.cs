@@ -23,6 +23,11 @@ public partial class PetWindow : Window
     private const double BaseWindowHeight = 274.0;
     private const double BaseCameraDistanceZ = 5.95;
 
+    /// <summary>
+    /// 친구 메시지·소셜 알림 말풍선 줄의 표시 시간(ms). 새 메시지가 와도 기존 줄은 이 시간 동안 유지된다.
+    /// </summary>
+    private const int SocialNotificationBubbleDurationMs = 8000;
+
     private readonly PetWindowViewModel _viewModel;
     private readonly IPetMeshFactory _meshFactory;
     private readonly PetAnimationController _animator;
@@ -375,7 +380,7 @@ public partial class PetWindow : Window
 
     private void OnSocialNotification(object? sender, string message)
     {
-        Dispatcher.BeginInvoke(() => _viewModel.ShowBubble(message, 3400));
+        Dispatcher.BeginInvoke(() => _viewModel.ShowBubble(message, SocialNotificationBubbleDurationMs));
     }
 
     private void OnSocialPetReactionTriggered(object? sender, EventArgs e)

@@ -42,6 +42,9 @@ public sealed class PetProfile
     /// <summary>바탕화면 펫 표시 배율 (0.65 ~ 1.45, 기본값 1.0).</summary>
     public double PetScale { get; set; } = 1.0;
 
+    /// <summary>바탕화면 펫 투명도 (0.25 ~ 1.0, 기본값 1.0).</summary>
+    public double PetOpacity { get; set; } = 1.0;
+
     /// <summary>Windows 시작 시 자동 실행 설정 (null이면 최초 실행 시 기본값 true로 자동 등록).</summary>
     public bool? AutoStartEnabled { get; set; }
 

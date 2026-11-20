@@ -13,6 +13,7 @@ public sealed partial class OnboardingViewModel : ObservableObject
 {
     private readonly IAppDataStore _store;
     private PetProfile _profile = new();
+    private bool _isLoadingProfile;
 
     public event EventHandler<PetAppearance>? AppearancePreviewChanged;
     public event EventHandler<PetProfile>? ProfileSaved;
@@ -78,20 +79,28 @@ public sealed partial class OnboardingViewModel : ObservableObject
 
     public void LoadFromProfile(PetProfile profile, bool isEditMode)
     {
-        _profile = profile;
-        WindowTitle = isEditMode ? "LabPet · 외형 및 이름 변경" : "LabPet · 나만의 3D 펫 만들기";
-        SubmitButtonText = isEditMode ? "변경 내용 저장" : "LabPet 시작하기";
+        _isLoadingProfile = true;
+        try
+        {
+            _profile = profile;
+            WindowTitle = isEditMode ? "LabPet · 외형 및 이름 변경" : "LabPet · 나만의 3D 펫 만들기";
+            SubmitButtonText = isEditMode ? "변경 내용 저장" : "LabPet 시작하기";
 
-        OwnerName = string.IsNullOrWhiteSpace(profile.OwnerName) ? Environment.UserName : profile.OwnerName;
-        PetName = string.IsNullOrWhiteSpace(profile.PetName) ? "모찌" : profile.PetName;
-        SelectedSpeciesId = profile.Appearance.SpeciesId;
-        SelectedBodyColorHex = profile.Appearance.BodyColorHex;
-        SelectedAccentColorHex = profile.Appearance.AccentColorHex;
-        SelectedExpressionId = profile.Appearance.ExpressionId;
-        SelectedHeadAccessoryId = profile.Appearance.HeadAccessoryId;
-        SelectedAuraEffectId = profile.Appearance.AuraEffectId;
-        PetScale = Math.Clamp(profile.PetScale <= 0 ? 1.0 : profile.PetScale, 0.65, 1.45);
-        ValidationMessage = string.Empty;
+            OwnerName = string.IsNullOrWhiteSpace(profile.OwnerName) ? Environment.UserName : profile.OwnerName;
+            PetName = string.IsNullOrWhiteSpace(profile.PetName) ? "모찌" : profile.PetName;
+            SelectedSpeciesId = profile.Appearance.SpeciesId;
+            SelectedBodyColorHex = profile.Appearance.BodyColorHex;
+            SelectedAccentColorHex = profile.Appearance.AccentColorHex;
+            SelectedExpressionId = profile.Appearance.ExpressionId;
+            SelectedHeadAccessoryId = profile.Appearance.HeadAccessoryId;
+            SelectedAuraEffectId = profile.Appearance.AuraEffectId;
+            PetScale = Math.Clamp(profile.PetScale <= 0 ? 1.0 : profile.PetScale, 0.65, 1.45);
+            ValidationMessage = string.Empty;
+        }
+        finally
+        {
+            _isLoadingProfile = false;
+        }
 
         NotifyPreviewChanged();
     }
@@ -106,7 +115,20 @@ public sealed partial class OnboardingViewModel : ObservableObject
         AuraEffectId = SelectedAuraEffectId
     };
 
-    partial void OnSelectedSpeciesIdChanged(string value) => NotifyPreviewChanged();
+    partial void OnSelectedSpeciesIdChanged(string value)
+    {
+        if (!_isLoadingProfile)
+        {
+            var speciesOpt = SpeciesOptions.FirstOrDefault(s => string.Equals(s.Id, value, StringComparison.OrdinalIgnoreCase));
+            if (!string.IsNullOrWhiteSpace(speciesOpt?.PreviewHex) &&
+                BodyColorOptions.Any(c => string.Equals(c.Id, speciesOpt.PreviewHex, StringComparison.OrdinalIgnoreCase)))
+            {
+                SelectedBodyColorHex = speciesOpt.PreviewHex;
+            }
+        }
+
+        NotifyPreviewChanged();
+    }
     partial void OnSelectedBodyColorHexChanged(string value) => NotifyPreviewChanged();
     partial void OnSelectedAccentColorHexChanged(string value) => NotifyPreviewChanged();
     partial void OnSelectedExpressionIdChanged(string value) => NotifyPreviewChanged();

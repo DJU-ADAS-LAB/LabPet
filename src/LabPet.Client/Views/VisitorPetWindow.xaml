@@ -1,0 +1,84 @@
+<Window x:Class="LabPet.Client.Views.VisitorPetWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="LabPet · 놀러 온 친구"
+        Width="176"
+        Height="226"
+        WindowStyle="None"
+        AllowsTransparency="True"
+        Background="Transparent"
+        Topmost="True"
+        ShowInTaskbar="False"
+        ResizeMode="NoResize">
+
+    <Grid Background="Transparent">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="34" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="24" />
+        </Grid.RowDefinitions>
+
+        <!-- 상단 미니 말풍선 -->
+        <Border x:Name="VisitorBubble"
+                Grid.Row="0"
+                HorizontalAlignment="Center"
+                VerticalAlignment="Bottom"
+                Padding="9,4"
+                CornerRadius="11"
+                Background="#F5FFFFFF"
+                BorderBrush="#FFFFC2D4"
+                BorderThickness="1.2"
+                Visibility="Collapsed"
+                IsHitTestVisible="False"
+                Effect="{StaticResource SoftCardShadow}">
+            <TextBlock x:Name="VisitorBubbleText"
+                       FontSize="10.5"
+                       FontWeight="SemiBold"
+                       Foreground="#FF2E3440"
+                       TextAlignment="Center" />
+        </Border>
+
+        <!-- 친구 3D 펫 뷰포트 -->
+        <Viewport3D x:Name="VisitorViewport"
+                    Grid.Row="1"
+                    ClipToBounds="False"
+                    MouseLeftButtonDown="VisitorViewport_MouseLeftButtonDown"
+                    MouseMove="VisitorViewport_MouseMove"
+                    MouseLeftButtonUp="VisitorViewport_MouseLeftButtonUp">
+            <Viewport3D.ContextMenu>
+                <ContextMenu>
+                    <MenuItem Header="👋  쓰다듬기 보내기" Click="PetFriendMenu_Click" />
+                    <MenuItem Header="🎵  노래 따라하기 토글" Click="ToggleMusicFollowMenu_Click" />
+                    <Separator />
+                    <MenuItem Header="✕  친구 돌려보내기" Click="DismissMenu_Click" />
+                </ContextMenu>
+            </Viewport3D.ContextMenu>
+
+            <Viewport3D.Camera>
+                <PerspectiveCamera Position="0,0.34,6.15"
+                                   LookDirection="0,-0.06,-1"
+                                   UpDirection="0,1,0"
+                                   FieldOfView="36" />
+            </Viewport3D.Camera>
+
+            <ModelVisual3D x:Name="LightsVisual" />
+            <ModelVisual3D x:Name="VisitorPetVisual" />
+        </Viewport3D>
+
+        <!-- 하단 글래스 이름표 -->
+        <Border Grid.Row="2"
+                HorizontalAlignment="Center"
+                VerticalAlignment="Top"
+                Padding="9,2"
+                CornerRadius="10"
+                Background="#DCFFFFFF"
+                BorderBrush="#FFE8ECF4"
+                BorderThickness="1"
+                IsHitTestVisible="False">
+            <TextBlock x:Name="VisitorNameText"
+                       FontSize="10"
+                       FontWeight="Bold"
+                       Foreground="#FF4B5563" />
+        </Border>
+    </Grid>
+</Window>
