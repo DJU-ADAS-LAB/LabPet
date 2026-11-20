@@ -59,6 +59,8 @@ public sealed partial class PetWindowViewModel : ObservableObject
     [ObservableProperty] private bool _isClickThroughEnabled;
     [ObservableProperty] private bool _isStartupAutoRunEnabled;
     [ObservableProperty] private bool _isUpdateReady;
+    [ObservableProperty] private bool _isUpdateBubbleVisible;
+    [ObservableProperty] private string _updateBubbleText = string.Empty;
     [ObservableProperty] private string _updateReadyMenuHeader = "새 버전 준비됨 · 재시작하여 적용";
     [ObservableProperty] private string _bubbleText = string.Empty;
     [ObservableProperty] private bool _isBubbleVisible;
@@ -81,6 +83,25 @@ public sealed partial class PetWindowViewModel : ObservableObject
     public string PendingFriendRequestText => PendingFriendRequest is null
         ? string.Empty
         : $"{PendingFriendRequest.DisplayName} 친구 신청!";
+
+    public string CurrentVersionText { get; } = BuildCurrentVersionText();
+
+    private static string BuildCurrentVersionText()
+    {
+        var asm = typeof(PetWindowViewModel).Assembly;
+        var infoAttr = asm.GetCustomAttributes(typeof(System.Reflection.AssemblyInformationalVersionAttribute), false)
+            .OfType<System.Reflection.AssemblyInformationalVersionAttribute>()
+            .FirstOrDefault()?.InformationalVersion;
+
+        if (!string.IsNullOrWhiteSpace(infoAttr))
+        {
+            var clean = infoAttr.Split('+')[0];
+            return $"현재 버전 v{clean}";
+        }
+
+        var ver = asm.GetName().Version?.ToString(3) ?? "0.1.0";
+        return $"현재 버전 v{ver}";
+    }
 
     private CancellationTokenSource? _bubbleCts;
     private bool _suppressStartupToggleEvent;
@@ -249,8 +270,12 @@ public sealed partial class PetWindowViewModel : ObservableObject
     {
         IsUpdateReady = true;
         UpdateReadyMenuHeader = $"새 버전 v{versionText} 준비됨 · 재시작하여 적용";
-        ShowBubble($"새 버전 v{versionText} 준비됨! 트레이에서 재시작하세요.", 5000);
+        UpdateBubbleText = $"새 버전 v{versionText} 업데이트할까요?";
+        IsUpdateBubbleVisible = true;
     }
+
+    [RelayCommand]
+    private void DismissUpdateBubble() => IsUpdateBubbleVisible = false;
 
     [RelayCommand]
     private async Task SetPetScaleAsync(string? scaleText)
@@ -301,7 +326,7 @@ public sealed partial class PetWindowViewModel : ObservableObject
         {
             QuickMessageText = string.Empty;
             QuickMessageTarget = null;
-            ShowBubble($"{targetName}에게 전송됨 (+2 코인)", 2000);
+            ShowBubble($"{targetName}에게 메시지를 전송했습니다.", 2000);
         }
         else
         {
@@ -318,7 +343,7 @@ public sealed partial class PetWindowViewModel : ObservableObject
         }
 
         var ok = await _social.SendPetInteractionAsync(entry.Friend);
-        ShowBubble(ok ? $"{entry.DisplayTitle} 쓰다듬기 완료! (+2 코인)" : "쓰다듬기 전송 실패", 2000);
+        ShowBubble(ok ? $"{entry.DisplayTitle}을(를) 쓰다듬어 주었습니다." : "쓰다듬기 전송 실패", 2000);
     }
 
     [RelayCommand]

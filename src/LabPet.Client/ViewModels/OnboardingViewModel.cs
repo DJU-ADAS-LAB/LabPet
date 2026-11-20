@@ -66,6 +66,9 @@ public sealed partial class OnboardingViewModel : ObservableObject
     private bool _isRhythmPreviewEnabled;
 
     [ObservableProperty]
+    private bool _isTypingPreviewEnabled;
+
+    [ObservableProperty]
     private string _validationMessage = string.Empty;
 
     public OnboardingViewModel(IAppDataStore store)

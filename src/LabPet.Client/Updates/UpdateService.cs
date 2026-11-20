@@ -30,7 +30,7 @@ public sealed class UpdateService : IDisposable
         _options = options ?? new UpdateSourceOptions();
     }
 
-    public void StartPeriodicChecks()
+    public void StartPeriodicChecks(bool silentAutoApplyOnStartup = false)
     {
         if (_periodicCts is not null)
         {
@@ -42,16 +42,29 @@ public sealed class UpdateService : IDisposable
 
         _ = Task.Run(async () =>
         {
-            // 앱 시작 직후 UI 초기화를 방해하지 않도록 잠시 대기 후 첫 확인
             try
             {
+                // Windows 부팅 직후 Wi-Fi/LAN 연결 안정화를 위해 8초 대기 후 첫 확인
                 await Task.Delay(TimeSpan.FromSeconds(8), ct).ConfigureAwait(false);
-                await CheckAndDownloadUpdatesAsync(isManualCheck: false, ct).ConfigureAwait(false);
+                var updated = await CheckAndDownloadUpdatesAsync(
+                    isManualCheck: false,
+                    silentAutoApply: silentAutoApplyOnStartup,
+                    ct).ConfigureAwait(false);
+
+                // 부팅 직후 네트워크가 아직 안 붙었을 수 있으므로 1회 재시도 (20초 후)
+                if (silentAutoApplyOnStartup && !updated && !IsUpdateReady)
+                {
+                    await Task.Delay(TimeSpan.FromSeconds(20), ct).ConfigureAwait(false);
+                    await CheckAndDownloadUpdatesAsync(
+                        isManualCheck: false,
+                        silentAutoApply: true,
+                        ct).ConfigureAwait(false);
+                }
 
                 using var timer = new PeriodicTimer(PeriodicCheckInterval);
                 while (await timer.WaitForNextTickAsync(ct).ConfigureAwait(false))
                 {
-                    await CheckAndDownloadUpdatesAsync(isManualCheck: false, ct).ConfigureAwait(false);
+                    await CheckAndDownloadUpdatesAsync(isManualCheck: false, silentAutoApply: false, ct).ConfigureAwait(false);
                 }
             }
             catch (OperationCanceledException)
@@ -81,7 +94,13 @@ public sealed class UpdateService : IDisposable
         _ = Task.Run(() => CheckAndDownloadUpdatesAsync(isManualCheck: false));
     }
 
-    public async Task<bool> CheckAndDownloadUpdatesAsync(bool isManualCheck, CancellationToken cancellationToken = default)
+    public Task<bool> CheckAndDownloadUpdatesAsync(bool isManualCheck, CancellationToken cancellationToken = default)
+        => CheckAndDownloadUpdatesAsync(isManualCheck, silentAutoApply: false, cancellationToken);
+
+    private async Task<bool> CheckAndDownloadUpdatesAsync(
+        bool isManualCheck,
+        bool silentAutoApply,
+        CancellationToken cancellationToken)
     {
         await _checkLock.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
@@ -124,9 +143,15 @@ public sealed class UpdateService : IDisposable
             await _manager.DownloadUpdatesAsync(updateInfo, cancelToken: cancellationToken).ConfigureAwait(false);
             _pendingUpdate = updateInfo;
 
+            // Windows 시작 자동 실행(--autostart) 시에는 팝업 없이 백그라운드 다운로드 후 즉시 재시작 적용
+            if (silentAutoApply)
+            {
+                _manager.ApplyUpdatesAndRestart(updateInfo);
+                return true;
+            }
+
             var versionStr = updateInfo.TargetFullRelease.Version.ToString();
             UpdateReady?.Invoke(this, versionStr);
-            StatusMessage?.Invoke(this, $"새 버전 v{versionStr} 준비됨 · 트레이에서 재시작하여 적용");
             return true;
         }
         catch (Exception ex) when (ex is not OperationCanceledException)

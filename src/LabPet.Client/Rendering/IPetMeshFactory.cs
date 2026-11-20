@@ -41,6 +41,9 @@ public sealed class PetRigHandle
     // 바닥 소프트 접지 그림자 스케일 (점프/부유 높이에 연동)
     public ScaleTransform3D? ShadowScale { get; init; }
 
+    // 타이핑 시 펫 앞에 팝인되는 3D 미니 키보드 스케일
+    public ScaleTransform3D? TypingKeyboardScale { get; init; }
+
     // 종별 보조 파츠 (치비 고양이 귀/꼬리/앞발, 모찌 미니 팔, 솜구름 미니 날개)
     public AxisAngleRotation3D? LeftEarRotation { get; init; }
     public AxisAngleRotation3D? RightEarRotation { get; init; }
@@ -49,6 +52,8 @@ public sealed class PetRigHandle
     public TranslateTransform3D? RightPawTranslate { get; init; }
     public AxisAngleRotation3D? LeftArmRotation { get; init; }
     public AxisAngleRotation3D? RightArmRotation { get; init; }
+    public AxisAngleRotation3D? LeftArmPitch { get; init; }
+    public AxisAngleRotation3D? RightArmPitch { get; init; }
 
     // 3종 공통 댄스·음악 반응용 풀링 3D 음표/별 파티클
     public IReadOnlyList<MusicParticleHandle> MusicParticles { get; init; } = [];

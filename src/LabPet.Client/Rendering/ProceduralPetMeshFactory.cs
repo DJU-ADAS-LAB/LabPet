@@ -95,6 +95,8 @@ public sealed class ProceduralPetMeshFactory : IPetMeshFactory
         TranslateTransform3D? rightPawTrans = null;
         AxisAngleRotation3D? leftArmRot = null;
         AxisAngleRotation3D? rightArmRot = null;
+        AxisAngleRotation3D? leftArmPitch = null;
+        AxisAngleRotation3D? rightArmPitch = null;
         var musicParticles = new List<MusicParticleHandle>();
 
         float headPivotY;
@@ -264,24 +266,26 @@ public sealed class ProceduralPetMeshFactory : IPetMeshFactory
                 cloudBottomMb.AddSphere(new Vector3(0.56f, -0.58f, 0.08f), 0.14f, 14, 10);
                 triangleCount += AddGeometry(headGroup, cloudBottomMb, softShadeBodyMaterial);
 
-                // 양옆에 살랑이는 미니 천사 구름 날개
+                // 양옆에 살랑이는 미니 천사 구름 날개 (Z축 파닥임 + X축 앞쪽 타건 회전)
                 leftArmRot = new AxisAngleRotation3D(new Vector3D(0, 0, 1), 0);
+                leftArmPitch = new AxisAngleRotation3D(new Vector3D(1, 0, 0), 0);
+                var leftWingTf = new Transform3DGroup();
+                var leftWingPivot = new Point3D(-0.92, 0.06, -0.04);
+                leftWingTf.Children.Add(new RotateTransform3D(leftArmRot, leftWingPivot));
+                leftWingTf.Children.Add(new RotateTransform3D(leftArmPitch, leftWingPivot));
                 var leftWingMb = new MeshBuilder(true, false);
                 leftWingMb.AddEllipsoid(new Vector3(-1.12f, 0.08f, -0.04f), 0.26f, 0.14f, 0.12f, 16, 10);
-                triangleCount += AddGeometry(
-                    headGroup,
-                    leftWingMb,
-                    softLightBodyMaterial,
-                    new RotateTransform3D(leftArmRot, new Point3D(-0.92, 0.06, -0.04)));
+                triangleCount += AddGeometry(headGroup, leftWingMb, softLightBodyMaterial, leftWingTf);
 
                 rightArmRot = new AxisAngleRotation3D(new Vector3D(0, 0, 1), 0);
+                rightArmPitch = new AxisAngleRotation3D(new Vector3D(1, 0, 0), 0);
+                var rightWingTf = new Transform3DGroup();
+                var rightWingPivot = new Point3D(0.92, 0.06, -0.04);
+                rightWingTf.Children.Add(new RotateTransform3D(rightArmRot, rightWingPivot));
+                rightWingTf.Children.Add(new RotateTransform3D(rightArmPitch, rightWingPivot));
                 var rightWingMb = new MeshBuilder(true, false);
                 rightWingMb.AddEllipsoid(new Vector3(1.12f, 0.08f, -0.04f), 0.26f, 0.14f, 0.12f, 16, 10);
-                triangleCount += AddGeometry(
-                    headGroup,
-                    rightWingMb,
-                    softLightBodyMaterial,
-                    new RotateTransform3D(rightArmRot, new Point3D(0.92, 0.06, -0.04)));
+                triangleCount += AddGeometry(headGroup, rightWingMb, softLightBodyMaterial, rightWingTf);
 
                 break;
             }
@@ -303,24 +307,26 @@ public sealed class ProceduralPetMeshFactory : IPetMeshFactory
                 mochiMb.AddSphere(new Vector3(0, -0.34f, -0.96f), 0.18f, 14, 10);
                 triangleCount += AddGeometry(headGroup, mochiMb, bodyMaterial);
 
-                // 양옆에 귀엽게 달린 말랑 미니 팔 (댄스·쓰다듬기 시 흔들림)
+                // 양옆에 귀엽게 달린 말랑 미니 팔 (Z축 흔들림 + X축 앞쪽 키보드 타건)
                 leftArmRot = new AxisAngleRotation3D(new Vector3D(0, 0, 1), 0);
+                leftArmPitch = new AxisAngleRotation3D(new Vector3D(1, 0, 0), 0);
+                var leftArmTf = new Transform3DGroup();
+                var leftArmPivot = new Point3D(-0.88, -0.16, 0.22);
+                leftArmTf.Children.Add(new RotateTransform3D(leftArmRot, leftArmPivot));
+                leftArmTf.Children.Add(new RotateTransform3D(leftArmPitch, leftArmPivot));
                 var leftArmMb = new MeshBuilder(true, false);
                 leftArmMb.AddEllipsoid(new Vector3(-1.02f, -0.18f, 0.24f), 0.22f, 0.14f, 0.16f, 16, 10);
-                triangleCount += AddGeometry(
-                    headGroup,
-                    leftArmMb,
-                    bodyMaterial,
-                    new RotateTransform3D(leftArmRot, new Point3D(-0.88, -0.16, 0.22)));
+                triangleCount += AddGeometry(headGroup, leftArmMb, bodyMaterial, leftArmTf);
 
                 rightArmRot = new AxisAngleRotation3D(new Vector3D(0, 0, 1), 0);
+                rightArmPitch = new AxisAngleRotation3D(new Vector3D(1, 0, 0), 0);
+                var rightArmTf = new Transform3DGroup();
+                var rightArmPivot = new Point3D(0.88, -0.16, 0.22);
+                rightArmTf.Children.Add(new RotateTransform3D(rightArmRot, rightArmPivot));
+                rightArmTf.Children.Add(new RotateTransform3D(rightArmPitch, rightArmPivot));
                 var rightArmMb = new MeshBuilder(true, false);
                 rightArmMb.AddEllipsoid(new Vector3(1.02f, -0.18f, 0.24f), 0.22f, 0.14f, 0.16f, 16, 10);
-                triangleCount += AddGeometry(
-                    headGroup,
-                    rightArmMb,
-                    bodyMaterial,
-                    new RotateTransform3D(rightArmRot, new Point3D(0.88, -0.16, 0.22)));
+                triangleCount += AddGeometry(headGroup, rightArmMb, bodyMaterial, rightArmTf);
 
                 break;
             }
@@ -355,6 +361,38 @@ public sealed class ProceduralPetMeshFactory : IPetMeshFactory
             accentColor);
 
         bodyGroup.Children.Add(headGroup);
+
+        // 3종 캐릭터 공통: 타이핑 시 앞쪽 하단에 뿅 나타나는 파스텔 3D 미니 키보드 (평소 스케일 0)
+        var kbCenterY = -0.76f;
+        var kbCenterZ = 0.82f;
+        var typingKeyboardScale = new ScaleTransform3D(0, 0, 0, 0, kbCenterY, kbCenterZ);
+        var kbGroup = new Model3DGroup { Transform = typingKeyboardScale };
+        var kbBaseMat = CreateClayMaterial(Color.FromRgb(242, 245, 252), null, 22, 80);
+        var kbKeyMat = CreateClayMaterial(Colors.White, null, 18, 70);
+        var kbAccentMat = CreateClayMaterial(accentColor, null, 20, 75);
+
+        var kbBaseMb = new MeshBuilder(true, false);
+        kbBaseMb.AddBox(new Vector3(0, kbCenterY, kbCenterZ), 1.16f, 0.085f, 0.44f);
+        triangleCount += AddGeometry(kbGroup, kbBaseMb, kbBaseMat);
+
+        var kbKeysMb = new MeshBuilder(true, false);
+        for (var row = 0; row < 3; row++)
+        {
+            var kz = kbCenterZ - 0.11f + row * 0.11f;
+            for (var col = 0; col < 7; col++)
+            {
+                var kx = -0.45f + col * 0.15f;
+                kbKeysMb.AddBox(new Vector3(kx, kbCenterY + 0.055f, kz), 0.11f, 0.04f, 0.08f);
+            }
+        }
+
+        triangleCount += AddGeometry(kbGroup, kbKeysMb, kbKeyMat);
+
+        // 스페이스바(포인트 컬러)
+        var spaceMb = new MeshBuilder(true, false);
+        spaceMb.AddBox(new Vector3(0, kbCenterY + 0.055f, kbCenterZ + 0.16f), 0.44f, 0.04f, 0.07f);
+        triangleCount += AddGeometry(kbGroup, spaceMb, kbAccentMat);
+        rootGroup.Children.Add(kbGroup);
 
         // 3종 캐릭터 공통: 댄스/음악 반응 시 방출되는 풀링 3D 음표/별 파티클 6개 사전 생성
         var particleMat = CreateClayMaterial(Lighten(accentColor, 0.25), auraEmissiveBrush, 32, 110);
@@ -421,6 +459,7 @@ public sealed class ProceduralPetMeshFactory : IPetMeshFactory
             HeadRoll = headRoll,
             EyeBlinkScale = eyeBlinkScale,
             ShadowScale = shadowScale,
+            TypingKeyboardScale = typingKeyboardScale,
             LeftEarRotation = leftEarRot,
             RightEarRotation = rightEarRot,
             TailRotation = tailRot,
@@ -428,6 +467,8 @@ public sealed class ProceduralPetMeshFactory : IPetMeshFactory
             RightPawTranslate = rightPawTrans,
             LeftArmRotation = leftArmRot,
             RightArmRotation = rightArmRot,
+            LeftArmPitch = leftArmPitch,
+            RightArmPitch = rightArmPitch,
             MusicParticles = musicParticles,
             AuraRotation = auraRot,
             AuraTranslate = auraTrans,

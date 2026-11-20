@@ -9,6 +9,8 @@ namespace LabPet.Client.SystemIntegration;
 /// </summary>
 public sealed class StartupRegistrationService
 {
+    public const string AutoStartArgument = "--autostart";
+
     private const string RunRegistryKeyPath = @"Software\Microsoft\Windows\CurrentVersion\Run";
     private const string AppRegistryValueName = "LabPet";
 
@@ -46,7 +48,8 @@ public sealed class StartupRegistrationService
                     return false;
                 }
 
-                key.SetValue(AppRegistryValueName, $"\"{exePath}\"");
+                // Windows 부팅 자동 실행 시 무인 백그라운드 업데이트를 구분하기 위해 --autostart 인자 포함
+                key.SetValue(AppRegistryValueName, $"\"{exePath}\" {AutoStartArgument}");
             }
             else
             {

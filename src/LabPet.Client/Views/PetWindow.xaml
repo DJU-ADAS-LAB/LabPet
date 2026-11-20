@@ -85,7 +85,17 @@
                               IsChecked="{Binding IsStartupAutoRunEnabled, Mode=TwoWay}" />
                     <MenuItem Header="📍  기본 위치로 복귀" Command="{Binding ResetPositionCommand}" />
                     <Separator />
-                    <MenuItem Header="🔄  업데이트 확인" Command="{Binding CheckUpdatesCommand}" />
+                    <MenuItem Command="{Binding CheckUpdatesCommand}">
+                        <MenuItem.Header>
+                            <StackPanel>
+                                <TextBlock Text="🔄  업데이트 확인" />
+                                <TextBlock Text="{Binding CurrentVersionText}"
+                                           FontSize="10"
+                                           Foreground="#FF9CA3AF"
+                                           Margin="20,1,0,0" />
+                            </StackPanel>
+                        </MenuItem.Header>
+                    </MenuItem>
                     <MenuItem Header="🛡️  방화벽 · 네트워크 안내" Command="{Binding OpenEnvironmentGuideCommand}" />
                     <Separator />
                     <MenuItem Header="⏻  LabPet 종료" Command="{Binding ExitApplicationCommand}" />
@@ -93,8 +103,46 @@
             </tb:TaskbarIcon.ContextMenu>
         </tb:TaskbarIcon>
 
-        <!-- 펫 상단 꼬리 말풍선 (친구 신청 + 일반 알림) -->
+        <!-- 펫 상단 꼬리 말풍선 (업데이트 확인 + 친구 신청 + 일반 알림) -->
         <StackPanel Grid.Row="0" VerticalAlignment="Bottom" HorizontalAlignment="Center" Margin="6,0,6,2">
+            <!-- 새 버전 업데이트 확인 말풍선 -->
+            <StackPanel Visibility="{Binding IsUpdateBubbleVisible, Converter={StaticResource BoolToVis}}" Margin="0,0,0,4">
+                <Border Padding="12,8"
+                        CornerRadius="14"
+                        Background="#FCFFFFFF"
+                        BorderBrush="#FFFF6B95"
+                        BorderThickness="1.5"
+                        Effect="{StaticResource SoftCardShadow}">
+                    <StackPanel>
+                        <TextBlock Text="{Binding UpdateBubbleText}"
+                                   FontSize="11.5"
+                                   FontWeight="Bold"
+                                   Foreground="#FF1F2430"
+                                   TextAlignment="Center"
+                                   TextWrapping="Wrap"
+                                   MaxWidth="188" />
+                        <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Margin="0,6,0,0">
+                            <Button Content="업데이트"
+                                    Style="{StaticResource PrimaryButtonStyle}"
+                                    Command="{Binding ApplyUpdateAndRestartCommand}"
+                                    Padding="10,4"
+                                    FontSize="11"
+                                    Margin="0,0,6,0" />
+                            <Button Content="나중에"
+                                    Command="{Binding DismissUpdateBubbleCommand}"
+                                    Padding="10,4"
+                                    FontSize="11" />
+                        </StackPanel>
+                    </StackPanel>
+                </Border>
+                <Polygon Points="0,0 12,0 6,7"
+                         Fill="#FCFFFFFF"
+                         Stroke="#FFFF6B95"
+                         StrokeThickness="1"
+                         HorizontalAlignment="Center"
+                         Margin="0,-1,0,0" />
+            </StackPanel>
+
             <!-- 친구 신청 수락/거절 말풍선 -->
             <StackPanel Visibility="{Binding HasPendingFriendRequest, Converter={StaticResource BoolToVis}}" Margin="0,0,0,4">
                 <Border Padding="12,8"
@@ -188,7 +236,17 @@
                               IsChecked="{Binding IsClickThroughEnabled, Mode=TwoWay}" />
                     <MenuItem Header="📍  기본 위치로 복귀" Command="{Binding ResetPositionCommand}" />
                     <Separator />
-                    <MenuItem Header="🔄  업데이트 확인" Command="{Binding CheckUpdatesCommand}" />
+                    <MenuItem Command="{Binding CheckUpdatesCommand}">
+                        <MenuItem.Header>
+                            <StackPanel>
+                                <TextBlock Text="🔄  업데이트 확인" />
+                                <TextBlock Text="{Binding CurrentVersionText}"
+                                           FontSize="10"
+                                           Foreground="#FF9CA3AF"
+                                           Margin="20,1,0,0" />
+                            </StackPanel>
+                        </MenuItem.Header>
+                    </MenuItem>
                     <MenuItem Header="🛡️  방화벽 · 네트워크 안내" Command="{Binding OpenEnvironmentGuideCommand}" />
                     <Separator />
                     <MenuItem Header="⏻  LabPet 종료" Command="{Binding ExitApplicationCommand}" />

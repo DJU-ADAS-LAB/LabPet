@@ -44,10 +44,12 @@ public sealed class PetAnimationController
     private double _petReactionTime;
     private double _dizzyReactionTime;
 
-    // 비트 펄스 및 치비 고양이 키보드 타이핑 앞발 모션 상태
+    // 비트 펄스 및 3종 캐릭터 키보드 타이핑 자세·타건 상태
     private double _beatPulse;
     private double _leftPawTapTime;
     private double _rightPawTapTime;
+    private double _typingStanceHoldTime;
+    private double _typingStanceWeight;
     private int _nextPawParity;
     private int _pendingPawTaps;
 
@@ -143,18 +145,45 @@ public sealed class PetAnimationController
             _beatPulse = Math.Max(0.0, _beatPulse - deltaSeconds * 4.2);
         }
 
-        // 키보드 타이핑 앞발 요청 소비
+        // 키보드 타이핑 요청 소비 (3종 캐릭터 공통 미니 키보드 자세 + 좌/우 교대 타건)
         var taps = Interlocked.Exchange(ref _pendingPawTaps, 0);
         if (taps > 0)
         {
+            _typingStanceHoldTime = 0.95;
             if ((_nextPawParity++ & 1) == 0)
             {
-                _leftPawTapTime = 0.16;
+                _leftPawTapTime = 0.17;
             }
             else
             {
-                _rightPawTapTime = 0.16;
+                _rightPawTapTime = 0.17;
             }
+        }
+
+        _typingStanceHoldTime = Math.Max(0, _typingStanceHoldTime - deltaSeconds);
+        var stanceTarget = _typingStanceHoldTime > 0 ? 1.0 : 0.0;
+        var stanceSpeed = stanceTarget > _typingStanceWeight ? 14.0 : 5.5;
+        _typingStanceWeight += (stanceTarget - _typingStanceWeight) * Math.Min(1.0, deltaSeconds * stanceSpeed);
+        var stance = _typingStanceWeight;
+
+        _leftPawTapTime = Math.Max(0, _leftPawTapTime - deltaSeconds);
+        _rightPawTapTime = Math.Max(0, _rightPawTapTime - deltaSeconds);
+
+        // 타건 곡선: 살짝 들어 올렸다 키보드를 콕 내려찍는 실제 타자 모션
+        var leftTapWave = _leftPawTapTime > 0 ? Math.Sin((_leftPawTapTime / 0.17) * Math.PI) : 0.0;
+        var rightTapWave = _rightPawTapTime > 0 ? Math.Sin((_rightPawTapTime / 0.17) * Math.PI) : 0.0;
+        var leftStrike = ComputeKeyStrikeOffset(_leftPawTapTime, 0.17);
+        var rightStrike = ComputeKeyStrikeOffset(_rightPawTapTime, 0.17);
+        var anyTapWave = Math.Max(leftTapWave, rightTapWave);
+        var signedTap = rightTapWave - leftTapWave; // 왼쪽 타자: -1, 오른쪽 타자: +1
+
+        // 3D 미니 키보드 팝인/팝아웃
+        if (rig.TypingKeyboardScale is not null)
+        {
+            var kbScale = stance < 0.01 ? 0.0 : stance;
+            rig.TypingKeyboardScale.ScaleX = kbScale;
+            rig.TypingKeyboardScale.ScaleY = kbScale;
+            rig.TypingKeyboardScale.ScaleZ = kbScale;
         }
 
         var bass = _smoothBass;
@@ -180,53 +209,54 @@ public sealed class PetAnimationController
         {
             case PetSpeciesIds.FluffyCloud:
             {
-                // 솜구름: 부드러운 사인파 공중 부유
-                offsetY = Math.Sin(_elapsedSeconds * 2.1) * 0.14 + bass * 0.15 + beat * 0.12;
-                scaleY = 1.0 + Math.Sin(_elapsedSeconds * 2.1 + 0.5) * 0.03 + bass * 0.08 + beat * 0.08;
-                bodyRoll = Math.Sin(_elapsedSeconds * 1.3) * (3.5 + mid * 7.5);
+                // 솜구름: 부드러운 사인파 공중 부유 + 타이핑 자세 시 키보드 쪽 집중 & 날개 타닥타닥
+                offsetY = Math.Sin(_elapsedSeconds * 2.1) * 0.14 * (1.0 - stance * 0.55) + bass * 0.15 + beat * 0.12 - stance * 0.06 + anyTapWave * 0.05;
+                scaleY = 1.0 + Math.Sin(_elapsedSeconds * 2.1 + 0.5) * 0.03 + bass * 0.08 + beat * 0.08 - anyTapWave * 0.035;
+                bodyRoll = Math.Sin(_elapsedSeconds * 1.3) * (3.5 + mid * 7.5) + signedTap * 5.5;
+                headPitchExtra = stance * 10.0 + anyTapWave * 4.5;
                 break;
             }
 
             case PetSpeciesIds.ChibiCat:
             {
-                // 치비 고양이: 구름처럼 부드러운 좌우 리듬 갸우뚱 + 통통 바운스 + 귀 쫑긋 + 매끄러운 꼬리 스윙
+                // 치비 고양이: 타이핑 시 미니 키보드 위에서 봉고캣처럼 양 앞발 교대 내려치기
                 var sway = Math.Sin(_dancePhase);
                 var bounce = Math.Abs(Math.Sin(_dancePhase));
 
-                offsetY = bounce * (0.04 + groove * 0.11) + beat * 0.07;
-                scaleY = 1.0 + Math.Sin(_dancePhase * 2.0) * (0.02 + groove * 0.045) + beat * 0.045;
-                bodyRoll = sway * (2.5 + groove * 7.5);
+                offsetY = bounce * (0.04 + groove * 0.11) + beat * 0.07 + anyTapWave * 0.025;
+                scaleY = 1.0 + Math.Sin(_dancePhase * 2.0) * (0.02 + groove * 0.045) + beat * 0.045 - anyTapWave * 0.03;
+                bodyRoll = sway * (2.5 + groove * 7.5) + signedTap * 4.0;
 
-                // 머리는 몸통 리듬을 자연스럽게 따라가며 살짝 까딱까딱
-                headRollExtra = sway * (2.0 + groove * 5.0);
-                headPitchExtra = Math.Sin(_dancePhase * 2.0) * (1.8 + groove * 4.5);
+                headRollExtra = sway * (2.0 + groove * 5.0) + signedTap * 3.5;
+                headPitchExtra = Math.Sin(_dancePhase * 2.0) * (1.8 + groove * 4.5) + stance * 11.5 + anyTapWave * 5.5;
 
                 if (rig.LeftEarRotation is not null && rig.RightEarRotation is not null)
                 {
                     var earTwitch = Math.Sin(_tailPhase * 1.2) * (2.5 + treble * 7.5) + beat * 6.5;
-                    rig.LeftEarRotation.Angle = 15.0 + earTwitch;
-                    rig.RightEarRotation.Angle = -15.0 - earTwitch;
+                    rig.LeftEarRotation.Angle = 15.0 + earTwitch + leftTapWave * 8.0;
+                    rig.RightEarRotation.Angle = -15.0 - earTwitch - rightTapWave * 8.0;
                 }
 
                 if (rig.TailRotation is not null)
                 {
-                    rig.TailRotation.Angle = Math.Sin(_tailPhase) * (14.0 + groove * 16.0);
+                    rig.TailRotation.Angle = Math.Sin(_tailPhase) * (14.0 + groove * 16.0) + signedTap * 7.0;
                 }
 
-                UpdateCatPaws(rig, deltaSeconds, groove, _dancePhase);
+                UpdateCatPaws(rig, groove, _dancePhase, stance, leftStrike, rightStrike);
                 break;
             }
 
             default:
             {
-                // 말랑 모찌 정령: 구름처럼 귀엽게 좌우로 살랑살랑 흔들며 통통 말랑 바운스 + 은은한 발광
+                // 말랑 모찌 정령: 좌우 살랑 바운스 + 타이핑 자세 시 앞쪽 키보드 집중 & 양팔 교대 타건
                 var sway = Math.Sin(_dancePhase);
                 var bounce = Math.Abs(Math.Sin(_dancePhase));
 
-                offsetY = bounce * (0.04 + bass * 0.13) + beat * 0.10;
-                scaleY = 1.0 + Math.Sin(_dancePhase * 2.0 - 0.4) * (0.035 + bass * 0.065) + beat * 0.06;
-                bodyRoll = sway * (3.0 + groove * 8.5);
-                headRollExtra = sway * (1.5 + groove * 3.5);
+                offsetY = bounce * (0.04 + bass * 0.13) + beat * 0.10 + anyTapWave * 0.04;
+                scaleY = 1.0 + Math.Sin(_dancePhase * 2.0 - 0.4) * (0.035 + bass * 0.065) + beat * 0.06 - anyTapWave * 0.05;
+                bodyRoll = sway * (3.0 + groove * 8.5) + signedTap * 5.0;
+                headRollExtra = sway * (1.5 + groove * 3.5) + signedTap * 3.5;
+                headPitchExtra = stance * 10.5 + anyTapWave * 4.5;
                 emissiveStrength += beat * 0.03;
                 break;
             }
@@ -235,12 +265,20 @@ public sealed class PetAnimationController
         // 3종 캐릭터 공통: 댄스/음악 반응 시 3D 음표·별 파티클 방출
         UpdateMusicParticles(rig, deltaSeconds, bass, treble, beat);
 
-        // 미니 팔/날개 살랑임 (모찌 팔, 솜구름 날개)
+        // 미니 팔/날개 살랑임 + 타이핑 시 앞쪽 키보드를 향해 교대로 타닥타닥 내려치기
         if (rig.LeftArmRotation is not null && rig.RightArmRotation is not null)
         {
-            var armSwing = Math.Sin(_dancePhase * 1.4) * (8.0 + groove * 18.0) + (_petReactionTime > 0 ? 18.0 : 0.0);
-            rig.LeftArmRotation.Angle = -armSwing;
-            rig.RightArmRotation.Angle = armSwing;
+            var armSwing = Math.Sin(_dancePhase * 1.4) * (8.0 + groove * 18.0) * (1.0 - stance * 0.7) + (_petReactionTime > 0 ? 18.0 : 0.0);
+            var stanceInward = stance * 28.0;
+            rig.LeftArmRotation.Angle = -armSwing + stanceInward - leftStrike * 26.0;
+            rig.RightArmRotation.Angle = armSwing - stanceInward + rightStrike * 26.0;
+        }
+
+        if (rig.LeftArmPitch is not null && rig.RightArmPitch is not null)
+        {
+            // X축 회전으로 팔/날개가 앞쪽 아래 미니 키보드를 향해 콕콕 두드림
+            rig.LeftArmPitch.Angle = stance * 24.0 - leftStrike * 34.0;
+            rig.RightArmPitch.Angle = stance * 24.0 - rightStrike * 34.0;
         }
 
         // 자연스러운 자동 눈 깜빡임 (2.4~5.2초 주기, 0.15초 지속)
@@ -278,8 +316,8 @@ public sealed class PetAnimationController
         rig.BodyScale.ScaleZ = scaleXZ;
 
         rig.BodyTranslate.OffsetY = offsetY;
-        rig.BodyYaw.Angle = _currentLookX * 14.0 + dizzyYaw;
-        rig.BodyPitch.Angle = _currentLookY * 8.0;
+        rig.BodyYaw.Angle = _currentLookX * 14.0 * (1.0 - stance * 0.65) + dizzyYaw;
+        rig.BodyPitch.Angle = _currentLookY * 8.0 * (1.0 - stance * 0.7) + stance * 4.5;
         rig.BodyRoll.Angle = bodyRoll;
 
         // 바닥 접지 그림자: 펫이 높게 뜰수록 은은하게 작아져 공간감 강화
@@ -350,30 +388,41 @@ public sealed class PetAnimationController
         }
     }
 
-    private void UpdateCatPaws(PetRigHandle rig, double dt, double groove, double dancePhase)
+    /// <summary>
+    /// 키 타건 모션 곡선: 초반에 살짝 들어 올렸다가(+1.0) 후반에 키보드로 콕 내려찍음(-0.85).
+    /// </summary>
+    private static double ComputeKeyStrikeOffset(double remainingTime, double duration)
+    {
+        if (remainingTime <= 0)
+        {
+            return 0.0;
+        }
+
+        var progress = 1.0 - (remainingTime / duration);
+        return progress < 0.45
+            ? Math.Sin((progress / 0.45) * Math.PI * 0.5)
+            : Math.Cos(((progress - 0.45) / 0.55) * Math.PI) * 0.92;
+    }
+
+    private static void UpdateCatPaws(PetRigHandle rig, double groove, double dancePhase, double stance, double leftStrike, double rightStrike)
     {
         if (rig.LeftPawTranslate is null || rig.RightPawTranslate is null)
         {
             return;
         }
 
-        _leftPawTapTime = Math.Max(0, _leftPawTapTime - dt);
-        _rightPawTapTime = Math.Max(0, _rightPawTapTime - dt);
-
-        var leftTap = _leftPawTapTime > 0 ? Math.Sin((_leftPawTapTime / 0.16) * Math.PI) * 0.17 : 0.0;
-        var rightTap = _rightPawTapTime > 0 ? Math.Sin((_rightPawTapTime / 0.16) * Math.PI) * 0.17 : 0.0;
-
         // 리듬 댄스 중 앞발도 좌우 교대로 귀엽게 살짝 들썩임
-        var leftDance = Math.Max(0.0, Math.Sin(dancePhase)) * groove * 0.08;
-        var rightDance = Math.Max(0.0, -Math.Sin(dancePhase)) * groove * 0.08;
+        var leftDance = Math.Max(0.0, Math.Sin(dancePhase)) * groove * 0.08 * (1.0 - stance);
+        var rightDance = Math.Max(0.0, -Math.Sin(dancePhase)) * groove * 0.08 * (1.0 - stance);
 
-        var leftLift = Math.Max(leftTap, leftDance);
-        var rightLift = Math.Max(rightTap, rightDance);
+        // 타이핑 자세: 앞발을 미니 키보드 위로 앞으로 뻗고, 타건 시 위→아래로 타닥타닥 내려침
+        var baseY = stance * 0.08;
+        var baseZ = stance * 0.28;
 
-        rig.LeftPawTranslate.OffsetY = leftLift;
-        rig.LeftPawTranslate.OffsetZ = leftLift * 0.45;
-        rig.RightPawTranslate.OffsetY = rightLift;
-        rig.RightPawTranslate.OffsetZ = rightLift * 0.45;
+        rig.LeftPawTranslate.OffsetY = baseY + leftStrike * 0.16 + leftDance;
+        rig.LeftPawTranslate.OffsetZ = baseZ + leftDance * 0.45;
+        rig.RightPawTranslate.OffsetY = baseY + rightStrike * 0.16 + rightDance;
+        rig.RightPawTranslate.OffsetZ = baseZ + rightDance * 0.45;
     }
 
     private void UpdateMusicParticles(PetRigHandle rig, double dt, double bass, double treble, double beat)

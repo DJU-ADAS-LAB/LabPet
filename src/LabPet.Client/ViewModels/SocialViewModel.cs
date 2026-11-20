@@ -186,7 +186,7 @@ public sealed partial class SocialViewModel : ObservableObject
         if (ok)
         {
             MessageText = string.Empty;
-            StatusBanner = $"{SelectedFriend.DisplayTitle}에게 메시지를 전송했습니다. (+2 코인)";
+            StatusBanner = $"{SelectedFriend.DisplayTitle}에게 메시지를 전송했습니다.";
         }
         else
         {
@@ -204,7 +204,7 @@ public sealed partial class SocialViewModel : ObservableObject
 
         var ok = await _social.SendQuickReactionAsync(SelectedFriend.Entry, emoji);
         StatusBanner = ok
-            ? $"{SelectedFriend.DisplayTitle}에게 {emoji} 반응을 보냈습니다. (+1 코인)"
+            ? $"{SelectedFriend.DisplayTitle}에게 {emoji} 반응을 보냈습니다."
             : "반응 전송에 실패했습니다.";
     }
 
@@ -218,7 +218,7 @@ public sealed partial class SocialViewModel : ObservableObject
 
         var ok = await _social.SendPetInteractionAsync(SelectedFriend.Entry);
         StatusBanner = ok
-            ? $"{SelectedFriend.DisplayTitle}을(를) 쓰다듬어 주었습니다! (+2 코인)"
+            ? $"{SelectedFriend.DisplayTitle}을(를) 쓰다듬어 주었습니다."
             : "쓰다듬기 전송에 실패했습니다.";
     }
 

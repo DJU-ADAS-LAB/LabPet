@@ -386,7 +386,7 @@ public sealed class SocialCoordinatorService : IAsyncDisposable
             await RewardSocialBonusAsync(friend, coins: 2).ConfigureAwait(false);
         }
 
-        SocialNotification?.Invoke(this, $"{name}(이)가 쓰다듬어 줬어요! (+2 코인)");
+        SocialNotification?.Invoke(this, $"{name}(이)가 쓰다듬어 줬어요!");
         PetReactionTriggered?.Invoke(this, EventArgs.Empty);
     }
 

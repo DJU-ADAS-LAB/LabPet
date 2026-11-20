@@ -25,6 +25,7 @@ public partial class OnboardingWindow : Window
     private Point _lastDragPoint;
     private double _lastTimestamp;
     private double _rhythmBeatTimer;
+    private double _typingPreviewTimer;
 
     public PetProfile? SavedProfile { get; private set; }
 
@@ -116,6 +117,21 @@ public partial class OnboardingWindow : Window
             _previewAnimator.UpdateAudioSnapshot(0f, 0f, 0f, isBeat: false);
         }
 
+        // 타이핑 미리보기 토글 시 초당 약 7.5타 리듬으로 미니 키보드 타건 연속 시연
+        if (_viewModel.IsTypingPreviewEnabled)
+        {
+            _typingPreviewTimer += dt;
+            if (_typingPreviewTimer >= 0.13)
+            {
+                _typingPreviewTimer -= 0.13;
+                _previewAnimator.TriggerTypingPawTap();
+            }
+        }
+        else
+        {
+            _typingPreviewTimer = 0;
+        }
+
         _previewAnimator.UpdateFrame(dt, targetLookX: 0, targetLookY: 0);
     }
 
@@ -124,9 +140,6 @@ public partial class OnboardingWindow : Window
 
     private void PreviewDizzyMotion_Click(object sender, RoutedEventArgs e)
         => _previewAnimator.TriggerDizzyReaction();
-
-    private void PreviewPawTapMotion_Click(object sender, RoutedEventArgs e)
-        => _previewAnimator.TriggerTypingPawTap();
 
     private void StageThemeToggle_Changed(object sender, RoutedEventArgs e)
     {

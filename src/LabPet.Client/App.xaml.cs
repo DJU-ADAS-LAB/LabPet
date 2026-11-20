@@ -24,8 +24,6 @@ public partial class App : Application
     private SoloHubWindow? _soloHubWindow;
     private SocialWindow? _socialWindow;
     private EnvironmentGuideWindow? _guideWindow;
-    private bool _isUpdatePromptOpen;
-    private string? _lastPromptedUpdateVersion;
 
     protected override async void OnStartup(StartupEventArgs e)
     {
@@ -73,6 +71,9 @@ public partial class App : Application
         var startupService = _serviceProvider.GetRequiredService<StartupRegistrationService>();
         var updateService = _serviceProvider.GetRequiredService<UpdateService>();
 
+        var isWindowsAutoStart = e.Args.Any(a =>
+            string.Equals(a, StartupRegistrationService.AutoStartArgument, StringComparison.OrdinalIgnoreCase));
+
         // 최초 실행(AutoStartEnabled == null) 시 Windows 시작 프로그램 자동 실행을 기본값(true)으로 등록
         if (profile.AutoStartEnabled is null)
         {
@@ -80,8 +81,9 @@ public partial class App : Application
             profile.AutoStartEnabled = true;
             await store.SaveProfileAsync(profile);
         }
-        else if (profile.AutoStartEnabled == true && !startupService.IsEnabled())
+        else if (profile.AutoStartEnabled == true)
         {
+            // 기존 등록 PC도 --autostart 인자가 포함되도록 레지스트리 값 최신화
             startupService.SetEnabled(true);
         }
 
@@ -106,20 +108,14 @@ public partial class App : Application
         };
         petVm.CheckUpdatesRequested += async (_, _) =>
         {
-            // 수동 확인 시에는 이미 안내했던 버전이라도 다시 물어보도록 초기화
-            _lastPromptedUpdateVersion = null;
             petVm.ShowBubble("새 버전을 확인 중입니다...", 2000);
             await updateService.CheckAndDownloadUpdatesAsync(isManualCheck: true);
         };
         petVm.ApplyUpdateRestartRequested += (_, _) => updateService.ApplyUpdatesAndRestart();
 
-        updateService.UpdateReady += (_, version) => Dispatcher.BeginInvoke(() =>
-        {
-            petVm.NotifyUpdateReady(version);
-            ShowUpdatePromptIfNeeded(version, updateService);
-        });
+        updateService.UpdateReady += (_, version) => Dispatcher.BeginInvoke(() => petVm.NotifyUpdateReady(version));
         updateService.StatusMessage += (_, msg) => Dispatcher.BeginInvoke(() => petVm.ShowBubble(msg, 3600));
-        updateService.StartPeriodicChecks();
+        updateService.StartPeriodicChecks(silentAutoApplyOnStartup: isWindowsAutoStart);
 
         // LAN 피어 중 더 높은 앱 버전이 감지되면 5분 주기를 기다리지 않고 즉시 업데이트 확인
         var social = _serviceProvider.GetRequiredService<SocialCoordinatorService>();
@@ -223,34 +219,6 @@ public partial class App : Application
         };
         _guideWindow.Closed += (_, _) => _guideWindow = null;
         _guideWindow.Show();
-    }
-
-    private void ShowUpdatePromptIfNeeded(string version, UpdateService updateService)
-    {
-        if (_isUpdatePromptOpen || string.Equals(_lastPromptedUpdateVersion, version, StringComparison.OrdinalIgnoreCase))
-        {
-            return;
-        }
-
-        _isUpdatePromptOpen = true;
-        _lastPromptedUpdateVersion = version;
-        try
-        {
-            var prompt = new UpdatePromptWindow(version);
-            if (_petWindow is not null && _petWindow.IsVisible)
-            {
-                prompt.Owner = _petWindow;
-            }
-
-            if (prompt.ShowDialog() == true)
-            {
-                updateService.ApplyUpdatesAndRestart();
-            }
-        }
-        finally
-        {
-            _isUpdatePromptOpen = false;
-        }
     }
 
     protected override void OnExit(ExitEventArgs e)
