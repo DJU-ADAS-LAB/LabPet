@@ -55,6 +55,11 @@ public sealed partial class OnboardingViewModel : ObservableObject
     private string _selectedAuraEffectId = "none";
 
     [ObservableProperty]
+    private double _petScale = 1.0;
+
+    public string PetScalePercentText => $"{Math.Round(PetScale * 100)}%";
+
+    [ObservableProperty]
     private bool _autoRotatePreview = true;
 
     [ObservableProperty]
@@ -82,6 +87,7 @@ public sealed partial class OnboardingViewModel : ObservableObject
         SelectedExpressionId = profile.Appearance.ExpressionId;
         SelectedHeadAccessoryId = profile.Appearance.HeadAccessoryId;
         SelectedAuraEffectId = profile.Appearance.AuraEffectId;
+        PetScale = Math.Clamp(profile.PetScale <= 0 ? 1.0 : profile.PetScale, 0.65, 1.45);
         ValidationMessage = string.Empty;
 
         NotifyPreviewChanged();
@@ -103,6 +109,7 @@ public sealed partial class OnboardingViewModel : ObservableObject
     partial void OnSelectedExpressionIdChanged(string value) => NotifyPreviewChanged();
     partial void OnSelectedHeadAccessoryIdChanged(string value) => NotifyPreviewChanged();
     partial void OnSelectedAuraEffectIdChanged(string value) => NotifyPreviewChanged();
+    partial void OnPetScaleChanged(double value) => OnPropertyChanged(nameof(PetScalePercentText));
 
     private void NotifyPreviewChanged()
     {
@@ -129,6 +136,7 @@ public sealed partial class OnboardingViewModel : ObservableObject
         ValidationMessage = string.Empty;
         _profile.OwnerName = trimmedOwner;
         _profile.PetName = trimmedPet;
+        _profile.PetScale = Math.Clamp(PetScale, 0.65, 1.45);
         _profile.Appearance = BuildCurrentAppearance();
         _profile.IsOnboardingCompleted = true;
 

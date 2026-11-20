@@ -445,38 +445,71 @@
         <Setter Property="Template">
             <Setter.Value>
                 <ControlTemplate TargetType="MenuItem">
-                    <Border x:Name="ItemBg"
-                            Background="Transparent"
-                            CornerRadius="9"
-                            Padding="{TemplateBinding Padding}"
-                            Margin="0,1">
-                        <Grid>
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="20" />
-                                <ColumnDefinition Width="*" />
-                            </Grid.ColumnDefinitions>
-                            <Border x:Name="CheckDot"
-                                    Grid.Column="0"
-                                    Width="14"
-                                    Height="14"
-                                    CornerRadius="4"
-                                    Background="{StaticResource BrandPinkBrush}"
-                                    HorizontalAlignment="Left"
-                                    VerticalAlignment="Center"
-                                    Visibility="Collapsed">
-                                <Path Data="M 3,7 L 6,10 L 11,4"
-                                      Stroke="White"
-                                      StrokeThickness="1.8"
-                                      StrokeStartLineCap="Round"
-                                      StrokeEndLineCap="Round" />
+                    <Grid>
+                        <Border x:Name="ItemBg"
+                                Background="Transparent"
+                                CornerRadius="9"
+                                Padding="{TemplateBinding Padding}"
+                                Margin="0,1">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="20" />
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <Border x:Name="CheckDot"
+                                        Grid.Column="0"
+                                        Width="14"
+                                        Height="14"
+                                        CornerRadius="4"
+                                        Background="{StaticResource BrandPinkBrush}"
+                                        HorizontalAlignment="Left"
+                                        VerticalAlignment="Center"
+                                        Visibility="Collapsed">
+                                    <Path Data="M 3,7 L 6,10 L 11,4"
+                                          Stroke="White"
+                                          StrokeThickness="1.8"
+                                          StrokeStartLineCap="Round"
+                                          StrokeEndLineCap="Round" />
+                                </Border>
+                                <ContentPresenter Grid.Column="1"
+                                                  ContentSource="Header"
+                                                  VerticalAlignment="Center"
+                                                  RecognizesAccessKey="True" />
+                                <TextBlock x:Name="SubmenuArrow"
+                                           Grid.Column="2"
+                                           Text="▸"
+                                           FontSize="11"
+                                           Foreground="{StaticResource TextSecondaryBrush}"
+                                           Margin="12,0,0,0"
+                                           VerticalAlignment="Center"
+                                           Visibility="Collapsed" />
+                            </Grid>
+                        </Border>
+
+                        <!-- 서브메뉴 팝업 (🔍 크기 조절 등 하위 MenuItem 지원) -->
+                        <Popup x:Name="PART_Popup"
+                               AllowsTransparency="True"
+                               Focusable="False"
+                               HorizontalOffset="-4"
+                               IsOpen="{Binding IsSubmenuOpen, RelativeSource={RelativeSource TemplatedParent}}"
+                               Placement="Right"
+                               PopupAnimation="Fade">
+                            <Border Background="#FCFFFFFF"
+                                    BorderBrush="#FFE8ECF4"
+                                    BorderThickness="1"
+                                    CornerRadius="14"
+                                    Padding="6"
+                                    Margin="10"
+                                    Effect="{StaticResource MenuShadow}">
+                                <StackPanel IsItemsHost="True" KeyboardNavigation.DirectionalNavigation="Cycle" />
                             </Border>
-                            <ContentPresenter Grid.Column="1"
-                                              ContentSource="Header"
-                                              VerticalAlignment="Center"
-                                              RecognizesAccessKey="True" />
-                        </Grid>
-                    </Border>
+                        </Popup>
+                    </Grid>
                     <ControlTemplate.Triggers>
+                        <Trigger Property="HasItems" Value="True">
+                            <Setter TargetName="SubmenuArrow" Property="Visibility" Value="Visible" />
+                        </Trigger>
                         <Trigger Property="IsChecked" Value="True">
                             <Setter TargetName="CheckDot" Property="Visibility" Value="Visible" />
                         </Trigger>

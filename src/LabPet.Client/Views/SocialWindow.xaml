@@ -1,7 +1,7 @@
 <Window x:Class="LabPet.Client.Views.SocialWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="LabPet · LAN P2P 소셜"
+        Title="LabPet · 친구"
         Style="{StaticResource ModernDialogWindowStyle}"
         Width="790"
         Height="560"
@@ -30,7 +30,7 @@
                 <DockPanel LastChildFill="False">
                     <StackPanel DockPanel.Dock="Left" Orientation="Horizontal" VerticalAlignment="Center">
                         <Border Width="10" Height="10" CornerRadius="5" Background="{StaticResource BrandPinkBrush}" Margin="0,0,9,0" />
-                        <TextBlock Text="소셜 · LAN 친구" FontSize="14" FontWeight="Bold" Foreground="{StaticResource TextPrimaryBrush}" />
+                        <TextBlock Text="친구" FontSize="14" FontWeight="Bold" Foreground="{StaticResource TextPrimaryBrush}" />
                     </StackPanel>
                     <Button DockPanel.Dock="Right" Content="✕" Style="{StaticResource WindowCloseButtonStyle}" Click="CloseButton_Click" />
                 </DockPanel>
@@ -50,95 +50,8 @@
                            Foreground="{StaticResource TextSecondaryBrush}" />
             </Border>
 
-            <!-- 소셜 탭 -->
+            <!-- 친구 탭 (기본 화면: 이미 추가된 친구) -->
             <TabControl Grid.Row="2" Margin="20,0,20,20">
-                <TabItem Header="주변 펫 (LAN)">
-                    <Grid>
-                        <ListBox x:Name="NearbyPeersList"
-                                 ItemsSource="{Binding NearbyPeers}"
-                                 BorderThickness="0"
-                                 Background="Transparent"
-                                 ScrollViewer.CanContentScroll="False"
-                                 HorizontalContentAlignment="Stretch">
-                        <ListBox.ItemContainerStyle>
-                            <Style TargetType="ListBoxItem">
-                                <Setter Property="Padding" Value="0" />
-                                <Setter Property="Margin" Value="0,0,0,8" />
-                                <Setter Property="Background" Value="Transparent" />
-                                <Setter Property="Template">
-                                    <Setter.Value>
-                                        <ControlTemplate TargetType="ListBoxItem">
-                                            <ContentPresenter />
-                                        </ControlTemplate>
-                                    </Setter.Value>
-                                </Setter>
-                            </Style>
-                        </ListBox.ItemContainerStyle>
-                        <ListBox.ItemTemplate>
-                            <DataTemplate>
-                                <Border Background="#FFFAFBFD"
-                                        BorderBrush="{StaticResource BorderSubtleBrush}"
-                                        BorderThickness="1"
-                                        CornerRadius="14"
-                                        Padding="14,11">
-                                    <DockPanel LastChildFill="False">
-                                        <StackPanel DockPanel.Dock="Left" VerticalAlignment="Center">
-                                            <StackPanel Orientation="Horizontal">
-                                                <TextBlock Text="{Binding DisplayTitle}" FontSize="14" FontWeight="Bold" Foreground="{StaticResource TextPrimaryBrush}" />
-                                                <Border Background="#FFFFF3CD"
-                                                        BorderBrush="#FFF59E0B"
-                                                        BorderThickness="1"
-                                                        CornerRadius="7"
-                                                        Padding="7,2"
-                                                        Margin="8,0,0,0"
-                                                        ToolTip="{Binding UpdateTooltip}"
-                                                        Visibility="{Binding RequiresUpdate, Converter={StaticResource BoolToVis}}">
-                                                    <TextBlock Text="{Binding UpdateBadgeText}" FontSize="11" FontWeight="Bold" Foreground="#FFB45309" />
-                                                </Border>
-                                                <Border Background="#FFE0F2FE"
-                                                        CornerRadius="7"
-                                                        Padding="7,2"
-                                                        Margin="6,0,0,0"
-                                                        Visibility="{Binding IsMusicActive, Converter={StaticResource BoolToVis}}">
-                                                    <TextBlock Text="🎵 음악 반응 중" FontSize="11" FontWeight="SemiBold" Foreground="#FF0369A1" />
-                                                </Border>
-                                            </StackPanel>
-                                            <TextBlock Text="{Binding SubInfo}" FontSize="11.5" Foreground="{StaticResource TextSecondaryBrush}" Margin="0,3,0,0" />
-                                        </StackPanel>
-
-                                        <Button DockPanel.Dock="Right"
-                                                Content="친구 신청"
-                                                Style="{StaticResource PrimaryButtonStyle}"
-                                                Command="{Binding DataContext.SendFriendRequestCommand, RelativeSource={RelativeSource AncestorType=Window}}"
-                                                CommandParameter="{Binding}"
-                                                IsEnabled="{Binding CanSendFriendRequest}"
-                                                Padding="14,7"
-                                                VerticalAlignment="Center" />
-                                    </DockPanel>
-                                </Border>
-                            </DataTemplate>
-                        </ListBox.ItemTemplate>
-                    </ListBox>
-
-                        <!-- 주변 펫 Empty State -->
-                        <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" IsHitTestVisible="False">
-                            <StackPanel.Style>
-                                <Style TargetType="StackPanel">
-                                    <Setter Property="Visibility" Value="Collapsed" />
-                                    <Style.Triggers>
-                                        <DataTrigger Binding="{Binding NearbyPeers.Count}" Value="0">
-                                            <Setter Property="Visibility" Value="Visible" />
-                                        </DataTrigger>
-                                    </Style.Triggers>
-                                </Style>
-                            </StackPanel.Style>
-                            <TextBlock Text="📡" FontSize="34" HorizontalAlignment="Center" Margin="0,0,0,8" />
-                            <TextBlock Text="같은 Wi-Fi · LAN의 LabPet을 찾고 있어요" FontSize="14" FontWeight="Bold" Foreground="{StaticResource TextPrimaryBrush}" HorizontalAlignment="Center" />
-                            <TextBlock Text="다른 PC에서 LabPet을 실행하면 3초 내에 이곳에 자동으로 나타납니다." FontSize="12" Foreground="{StaticResource TextSecondaryBrush}" HorizontalAlignment="Center" Margin="0,4,0,0" />
-                        </StackPanel>
-                    </Grid>
-                </TabItem>
-
                 <TabItem Header="친구 &amp; 노래 따라하기">
                     <Grid>
                         <Grid.ColumnDefinitions>
@@ -153,46 +66,65 @@
                                 BorderThickness="1"
                                 CornerRadius="14"
                                 Padding="6">
-                            <ListBox ItemsSource="{Binding Friends}"
-                                     SelectedItem="{Binding SelectedFriend}"
-                                     BorderThickness="0"
-                                     Background="Transparent"
-                                     HorizontalContentAlignment="Stretch">
-                                <ListBox.ItemContainerStyle>
-                                    <Style TargetType="ListBoxItem">
-                                        <Setter Property="Margin" Value="0,0,0,4" />
-                                        <Setter Property="Cursor" Value="Hand" />
-                                        <Setter Property="Template">
-                                            <Setter.Value>
-                                                <ControlTemplate TargetType="ListBoxItem">
-                                                    <Border x:Name="FriendBg" Background="Transparent" CornerRadius="10" Padding="10,8">
-                                                        <ContentPresenter />
-                                                    </Border>
-                                                    <ControlTemplate.Triggers>
-                                                        <Trigger Property="IsSelected" Value="True">
-                                                            <Setter TargetName="FriendBg" Property="Background" Value="{StaticResource BrandPinkSoftBrush}" />
-                                                        </Trigger>
-                                                        <Trigger Property="IsMouseOver" Value="True">
-                                                            <Setter TargetName="FriendBg" Property="Background" Value="#FFF3F5FA" />
-                                                        </Trigger>
-                                                    </ControlTemplate.Triggers>
-                                                </ControlTemplate>
-                                            </Setter.Value>
-                                        </Setter>
-                                    </Style>
-                                </ListBox.ItemContainerStyle>
-                                <ListBox.ItemTemplate>
-                                    <DataTemplate>
-                                        <StackPanel>
-                                            <DockPanel>
-                                                <TextBlock Text="{Binding DisplayTitle}" FontWeight="Bold" FontSize="13.5" Foreground="{StaticResource TextPrimaryBrush}" />
-                                                <TextBlock Text="{Binding IntimacyText}" DockPanel.Dock="Right" FontSize="11" FontWeight="SemiBold" Foreground="{StaticResource BrandPinkBrush}" />
-                                            </DockPanel>
-                                            <TextBlock Text="{Binding StatusText}" FontSize="11.5" Foreground="{StaticResource TextSecondaryBrush}" Margin="0,2,0,0" />
-                                        </StackPanel>
-                                    </DataTemplate>
-                                </ListBox.ItemTemplate>
-                            </ListBox>
+                            <Grid>
+                                <ListBox ItemsSource="{Binding Friends}"
+                                         SelectedItem="{Binding SelectedFriend}"
+                                         BorderThickness="0"
+                                         Background="Transparent"
+                                         HorizontalContentAlignment="Stretch">
+                                    <ListBox.ItemContainerStyle>
+                                        <Style TargetType="ListBoxItem">
+                                            <Setter Property="Margin" Value="0,0,0,4" />
+                                            <Setter Property="Cursor" Value="Hand" />
+                                            <Setter Property="Template">
+                                                <Setter.Value>
+                                                    <ControlTemplate TargetType="ListBoxItem">
+                                                        <Border x:Name="FriendBg" Background="Transparent" CornerRadius="10" Padding="10,8">
+                                                            <ContentPresenter />
+                                                        </Border>
+                                                        <ControlTemplate.Triggers>
+                                                            <Trigger Property="IsSelected" Value="True">
+                                                                <Setter TargetName="FriendBg" Property="Background" Value="{StaticResource BrandPinkSoftBrush}" />
+                                                            </Trigger>
+                                                            <Trigger Property="IsMouseOver" Value="True">
+                                                                <Setter TargetName="FriendBg" Property="Background" Value="#FFF3F5FA" />
+                                                            </Trigger>
+                                                        </ControlTemplate.Triggers>
+                                                    </ControlTemplate>
+                                                </Setter.Value>
+                                            </Setter>
+                                        </Style>
+                                    </ListBox.ItemContainerStyle>
+                                    <ListBox.ItemTemplate>
+                                        <DataTemplate>
+                                            <StackPanel>
+                                                <DockPanel>
+                                                    <TextBlock Text="{Binding DisplayTitle}" FontWeight="Bold" FontSize="13.5" Foreground="{StaticResource TextPrimaryBrush}" />
+                                                    <TextBlock Text="{Binding IntimacyText}" DockPanel.Dock="Right" FontSize="11" FontWeight="SemiBold" Foreground="{StaticResource BrandPinkBrush}" />
+                                                </DockPanel>
+                                                <TextBlock Text="{Binding StatusText}" FontSize="11.5" Foreground="{StaticResource TextSecondaryBrush}" Margin="0,2,0,0" />
+                                            </StackPanel>
+                                        </DataTemplate>
+                                    </ListBox.ItemTemplate>
+                                </ListBox>
+
+                                <!-- 친구 0명일 때 Empty State -->
+                                <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" IsHitTestVisible="False" Margin="12">
+                                    <StackPanel.Style>
+                                        <Style TargetType="StackPanel">
+                                            <Setter Property="Visibility" Value="Collapsed" />
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding Friends.Count}" Value="0">
+                                                    <Setter Property="Visibility" Value="Visible" />
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </StackPanel.Style>
+                                    <TextBlock Text="🐾" FontSize="26" HorizontalAlignment="Center" Margin="0,0,0,6" />
+                                    <TextBlock Text="아직 추가된 친구가 없어요" FontSize="12.5" FontWeight="Bold" Foreground="{StaticResource TextPrimaryBrush}" HorizontalAlignment="Center" />
+                                    <TextBlock Text="'주변 펫 (LAN)' 탭에서 신청해 보세요" FontSize="11" Foreground="{StaticResource TextSecondaryBrush}" HorizontalAlignment="Center" TextWrapping="Wrap" TextAlignment="Center" Margin="0,3,0,0" />
+                                </StackPanel>
+                            </Grid>
                         </Border>
 
                         <Border Grid.Column="2"
@@ -238,6 +170,93 @@
                                           IsChecked="{Binding PreferLocalMusicWhenActive}" />
                             </StackPanel>
                         </Border>
+                    </Grid>
+                </TabItem>
+
+                <TabItem Header="주변 펫 (LAN)">
+                    <Grid>
+                        <ListBox x:Name="NearbyPeersList"
+                                 ItemsSource="{Binding NearbyPeers}"
+                                 BorderThickness="0"
+                                 Background="Transparent"
+                                 ScrollViewer.CanContentScroll="False"
+                                 HorizontalContentAlignment="Stretch">
+                            <ListBox.ItemContainerStyle>
+                                <Style TargetType="ListBoxItem">
+                                    <Setter Property="Padding" Value="0" />
+                                    <Setter Property="Margin" Value="0,0,0,8" />
+                                    <Setter Property="Background" Value="Transparent" />
+                                    <Setter Property="Template">
+                                        <Setter.Value>
+                                            <ControlTemplate TargetType="ListBoxItem">
+                                                <ContentPresenter />
+                                            </ControlTemplate>
+                                        </Setter.Value>
+                                    </Setter>
+                                </Style>
+                            </ListBox.ItemContainerStyle>
+                            <ListBox.ItemTemplate>
+                                <DataTemplate>
+                                    <Border Background="#FFFAFBFD"
+                                            BorderBrush="{StaticResource BorderSubtleBrush}"
+                                            BorderThickness="1"
+                                            CornerRadius="14"
+                                            Padding="14,11">
+                                        <DockPanel LastChildFill="False">
+                                            <StackPanel DockPanel.Dock="Left" VerticalAlignment="Center">
+                                                <StackPanel Orientation="Horizontal">
+                                                    <TextBlock Text="{Binding DisplayTitle}" FontSize="14" FontWeight="Bold" Foreground="{StaticResource TextPrimaryBrush}" />
+                                                    <Border Background="#FFFFF3CD"
+                                                            BorderBrush="#FFF59E0B"
+                                                            BorderThickness="1"
+                                                            CornerRadius="7"
+                                                            Padding="7,2"
+                                                            Margin="8,0,0,0"
+                                                            ToolTip="{Binding UpdateTooltip}"
+                                                            Visibility="{Binding RequiresUpdate, Converter={StaticResource BoolToVis}}">
+                                                        <TextBlock Text="{Binding UpdateBadgeText}" FontSize="11" FontWeight="Bold" Foreground="#FFB45309" />
+                                                    </Border>
+                                                    <Border Background="#FFE0F2FE"
+                                                            CornerRadius="7"
+                                                            Padding="7,2"
+                                                            Margin="6,0,0,0"
+                                                            Visibility="{Binding IsMusicActive, Converter={StaticResource BoolToVis}}">
+                                                        <TextBlock Text="🎵 음악 반응 중" FontSize="11" FontWeight="SemiBold" Foreground="#FF0369A1" />
+                                                    </Border>
+                                                </StackPanel>
+                                                <TextBlock Text="{Binding SubInfo}" FontSize="11.5" Foreground="{StaticResource TextSecondaryBrush}" Margin="0,3,0,0" />
+                                            </StackPanel>
+
+                                            <Button DockPanel.Dock="Right"
+                                                    Content="친구 신청"
+                                                    Style="{StaticResource PrimaryButtonStyle}"
+                                                    Command="{Binding DataContext.SendFriendRequestCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                    CommandParameter="{Binding}"
+                                                    IsEnabled="{Binding CanSendFriendRequest}"
+                                                    Padding="14,7"
+                                                    VerticalAlignment="Center" />
+                                        </DockPanel>
+                                    </Border>
+                                </DataTemplate>
+                            </ListBox.ItemTemplate>
+                        </ListBox>
+
+                        <!-- 미등록 주변 펫 0명일 때 Empty State -->
+                        <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" IsHitTestVisible="False">
+                            <StackPanel.Style>
+                                <Style TargetType="StackPanel">
+                                    <Setter Property="Visibility" Value="Collapsed" />
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding NearbyPeers.Count}" Value="0">
+                                            <Setter Property="Visibility" Value="Visible" />
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </StackPanel.Style>
+                            <TextBlock Text="📡" FontSize="34" HorizontalAlignment="Center" Margin="0,0,0,8" />
+                            <TextBlock Text="새로 추가할 주변 LabPet을 찾고 있어요" FontSize="14" FontWeight="Bold" Foreground="{StaticResource TextPrimaryBrush}" HorizontalAlignment="Center" />
+                            <TextBlock Text="이미 친구인 펫은 '친구 &amp; 노래 따라하기' 탭에 표시됩니다." FontSize="12" Foreground="{StaticResource TextSecondaryBrush}" HorizontalAlignment="Center" Margin="0,4,0,0" />
+                        </StackPanel>
                     </Grid>
                 </TabItem>
             </TabControl>

@@ -71,6 +71,7 @@ jobs:
             -v "${{ steps.version.outputs.version }}" `
             -p ./publish/win-x64 `
             -e LabPet.Client.exe `
+            -i ./src/LabPet.Client/Assets/app.ico `
             -o ./Releases
 
       - name: Upload and publish GitHub Release

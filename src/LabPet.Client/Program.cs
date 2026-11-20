@@ -13,6 +13,9 @@ public static class Program
         VelopackApp.Build()
             .OnAfterInstallFastCallback(_ =>
             {
+                // 기본값으로 Windows 시작 시 자동 실행 등록
+                new StartupRegistrationService().SetEnabled(true);
+
                 if (!FirewallRegistrationService.AreRulesRegistered())
                 {
                     FirewallRegistrationService.TryRegisterRulesElevated();
@@ -20,6 +23,7 @@ public static class Program
             })
             .OnBeforeUninstallFastCallback(_ =>
             {
+                new StartupRegistrationService().SetEnabled(false);
                 FirewallRegistrationService.TryRemoveRulesSilently();
             })
             .Run();

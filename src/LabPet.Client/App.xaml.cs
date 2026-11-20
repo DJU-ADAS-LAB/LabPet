@@ -24,6 +24,8 @@ public partial class App : Application
     private SoloHubWindow? _soloHubWindow;
     private SocialWindow? _socialWindow;
     private EnvironmentGuideWindow? _guideWindow;
+    private bool _isUpdatePromptOpen;
+    private string? _lastPromptedUpdateVersion;
 
     protected override async void OnStartup(StartupEventArgs e)
     {
@@ -71,27 +73,51 @@ public partial class App : Application
         var startupService = _serviceProvider.GetRequiredService<StartupRegistrationService>();
         var updateService = _serviceProvider.GetRequiredService<UpdateService>();
 
+        // 최초 실행(AutoStartEnabled == null) 시 Windows 시작 프로그램 자동 실행을 기본값(true)으로 등록
+        if (profile.AutoStartEnabled is null)
+        {
+            startupService.SetEnabled(true);
+            profile.AutoStartEnabled = true;
+            await store.SaveProfileAsync(profile);
+        }
+        else if (profile.AutoStartEnabled == true && !startupService.IsEnabled())
+        {
+            startupService.SetEnabled(true);
+        }
+
         var petVm = _serviceProvider.GetRequiredService<PetWindowViewModel>();
         petVm.InitializeStartupState(startupService.IsEnabled());
         petVm.OpenCustomizationRequested += OnOpenCustomizationRequested;
         petVm.OpenSoloHubRequested += OnOpenSoloHubRequested;
         petVm.OpenSocialRequested += OnOpenSocialRequested;
         petVm.OpenEnvironmentGuideRequested += OnOpenEnvironmentGuideRequested;
-        petVm.StartupAutoRunToggled += (_, enabled) =>
+        petVm.StartupAutoRunToggled += async (_, enabled) =>
         {
             var ok = startupService.SetEnabled(enabled);
+            if (ok)
+            {
+                petVm.CurrentProfile.AutoStartEnabled = enabled;
+                await store.SaveProfileAsync(petVm.CurrentProfile);
+            }
+
             petVm.ShowBubble(ok
                 ? (enabled ? "Windows 시작 시 자동 실행 등록됨" : "Windows 자동 실행 해제됨")
                 : "시작 프로그램 설정을 변경하지 못했습니다.", 2400);
         };
         petVm.CheckUpdatesRequested += async (_, _) =>
         {
+            // 수동 확인 시에는 이미 안내했던 버전이라도 다시 물어보도록 초기화
+            _lastPromptedUpdateVersion = null;
             petVm.ShowBubble("새 버전을 확인 중입니다...", 2000);
             await updateService.CheckAndDownloadUpdatesAsync(isManualCheck: true);
         };
         petVm.ApplyUpdateRestartRequested += (_, _) => updateService.ApplyUpdatesAndRestart();
 
-        updateService.UpdateReady += (_, version) => Dispatcher.BeginInvoke(() => petVm.NotifyUpdateReady(version));
+        updateService.UpdateReady += (_, version) => Dispatcher.BeginInvoke(() =>
+        {
+            petVm.NotifyUpdateReady(version);
+            ShowUpdatePromptIfNeeded(version, updateService);
+        });
         updateService.StatusMessage += (_, msg) => Dispatcher.BeginInvoke(() => petVm.ShowBubble(msg, 3600));
         updateService.StartPeriodicChecks();
 
@@ -193,6 +219,34 @@ public partial class App : Application
         };
         _guideWindow.Closed += (_, _) => _guideWindow = null;
         _guideWindow.Show();
+    }
+
+    private void ShowUpdatePromptIfNeeded(string version, UpdateService updateService)
+    {
+        if (_isUpdatePromptOpen || string.Equals(_lastPromptedUpdateVersion, version, StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        _isUpdatePromptOpen = true;
+        _lastPromptedUpdateVersion = version;
+        try
+        {
+            var prompt = new UpdatePromptWindow(version);
+            if (_petWindow is not null && _petWindow.IsVisible)
+            {
+                prompt.Owner = _petWindow;
+            }
+
+            if (prompt.ShowDialog() == true)
+            {
+                updateService.ApplyUpdatesAndRestart();
+            }
+        }
+        finally
+        {
+            _isUpdatePromptOpen = false;
+        }
     }
 
     protected override void OnExit(ExitEventArgs e)

@@ -39,6 +39,12 @@ public sealed class PetProfile
     /// <summary>마지막 창 위치 Y (null이면 기본 우하단 배치).</summary>
     public double? LastWindowTop { get; set; }
 
+    /// <summary>바탕화면 펫 표시 배율 (0.65 ~ 1.45, 기본값 1.0).</summary>
+    public double PetScale { get; set; } = 1.0;
+
+    /// <summary>Windows 시작 시 자동 실행 설정 (null이면 최초 실행 시 기본값 true로 자동 등록).</summary>
+    public bool? AutoStartEnabled { get; set; }
+
     public DateTimeOffset CreatedAtUtc { get; set; } = DateTimeOffset.UtcNow;
     public DateTimeOffset UpdatedAtUtc { get; set; } = DateTimeOffset.UtcNow;
 

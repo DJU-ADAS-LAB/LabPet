@@ -76,6 +76,18 @@ public sealed class UpdateService : IDisposable
                 return false;
             }
 
+            // 이미 다운로드된 업데이트가 있으면 수동 확인 시 즉시 적용 팝업 재요청
+            if (_pendingUpdate is not null)
+            {
+                var readyVersion = _pendingUpdate.TargetFullRelease.Version.ToString();
+                if (isManualCheck)
+                {
+                    UpdateReady?.Invoke(this, readyVersion);
+                }
+
+                return true;
+            }
+
             var updateInfo = await _manager.CheckForUpdatesAsync().ConfigureAwait(false);
             if (updateInfo is null)
             {

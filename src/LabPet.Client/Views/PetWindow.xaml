@@ -14,6 +14,38 @@
 
     <Window.Resources>
         <BooleanToVisibilityConverter x:Key="BoolToVis" />
+        <Style x:Key="MiniActionIconButton" TargetType="Button">
+            <Setter Property="Width" Value="26" />
+            <Setter Property="Height" Value="24" />
+            <Setter Property="Padding" Value="0" />
+            <Setter Property="FontSize" Value="11.5" />
+            <Setter Property="Background" Value="#FFF3F5FA" />
+            <Setter Property="BorderBrush" Value="#FFE5EAF2" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="Bg"
+                                Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}"
+                                CornerRadius="7">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Bg" Property="Background" Value="#FFFFEEF4" />
+                                <Setter TargetName="Bg" Property="BorderBrush" Value="#FFFF9EB5" />
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter TargetName="Bg" Property="Opacity" Value="0.32" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
     </Window.Resources>
 
     <Grid Background="Transparent">
@@ -35,9 +67,15 @@
                               FontWeight="Bold"
                               Foreground="#FFFF5D8F"
                               Visibility="{Binding IsUpdateReady, Converter={StaticResource BoolToVis}}" />
-                    <MenuItem Header="💬  소셜 · LAN 친구" Command="{Binding OpenSocialCommand}" />
+                    <MenuItem Header="💬  친구" Command="{Binding OpenSocialCommand}" />
                     <MenuItem Header="✨  성장 · 뽀모도로 · 3D 상점" Command="{Binding OpenSoloHubCommand}" />
                     <MenuItem Header="🎨  외형 · 이름 변경" Command="{Binding OpenCustomizationCommand}" />
+                    <MenuItem Header="🔍  크기 조절">
+                        <MenuItem Header="작게 (75%)" Command="{Binding SetPetScaleCommand}" CommandParameter="0.75" />
+                        <MenuItem Header="보통 (100%)" Command="{Binding SetPetScaleCommand}" CommandParameter="1.0" />
+                        <MenuItem Header="크게 (125%)" Command="{Binding SetPetScaleCommand}" CommandParameter="1.25" />
+                        <MenuItem Header="아주 크게 (145%)" Command="{Binding SetPetScaleCommand}" CommandParameter="1.45" />
+                    </MenuItem>
                     <Separator />
                     <MenuItem Header="클릭 투과 집중 모드"
                               IsCheckable="True"
@@ -96,19 +134,19 @@
             <!-- 일반 꼬리 말풍선 -->
             <StackPanel Visibility="{Binding IsBubbleVisible, Converter={StaticResource BoolToVis}}"
                         IsHitTestVisible="False">
-                <Border Padding="12,7"
+                <Border Padding="11,6"
                         CornerRadius="14"
                         Background="#FAFFFFFF"
                         BorderBrush="#FFFFC2D4"
                         BorderThickness="1.5"
                         Effect="{StaticResource SoftCardShadow}">
                     <TextBlock Text="{Binding BubbleText}"
-                               FontSize="11.5"
+                               FontSize="11"
                                FontWeight="SemiBold"
                                Foreground="#FF2E3440"
                                TextAlignment="Center"
                                TextWrapping="Wrap"
-                               MaxWidth="212" />
+                               MaxWidth="188" />
                 </Border>
                 <Polygon Points="0,0 10,0 5,6"
                          Fill="#FAFFFFFF"
@@ -123,6 +161,8 @@
         <Viewport3D x:Name="PetViewport"
                     Grid.Row="1"
                     ClipToBounds="False"
+                    MouseEnter="PetViewport_MouseEnter"
+                    MouseLeave="PetViewport_MouseLeave"
                     MouseLeftButtonDown="PetViewport_MouseLeftButtonDown"
                     MouseMove="PetViewport_MouseMove"
                     MouseLeftButtonUp="PetViewport_MouseLeftButtonUp">
@@ -133,9 +173,15 @@
                               FontWeight="Bold"
                               Foreground="#FFFF5D8F"
                               Visibility="{Binding IsUpdateReady, Converter={StaticResource BoolToVis}}" />
-                    <MenuItem Header="💬  소셜 · LAN 친구" Command="{Binding OpenSocialCommand}" />
+                    <MenuItem Header="💬  친구" Command="{Binding OpenSocialCommand}" />
                     <MenuItem Header="✨  성장 · 뽀모도로 · 3D 상점" Command="{Binding OpenSoloHubCommand}" />
                     <MenuItem Header="🎨  외형 · 이름 변경" Command="{Binding OpenCustomizationCommand}" />
+                    <MenuItem Header="🔍  크기 조절">
+                        <MenuItem Header="작게 (75%)" Command="{Binding SetPetScaleCommand}" CommandParameter="0.75" />
+                        <MenuItem Header="보통 (100%)" Command="{Binding SetPetScaleCommand}" CommandParameter="1.0" />
+                        <MenuItem Header="크게 (125%)" Command="{Binding SetPetScaleCommand}" CommandParameter="1.25" />
+                        <MenuItem Header="아주 크게 (145%)" Command="{Binding SetPetScaleCommand}" CommandParameter="1.45" />
+                    </MenuItem>
                     <Separator />
                     <MenuItem Header="클릭 투과 집중 모드"
                               IsCheckable="True"
@@ -150,7 +196,8 @@
             </Viewport3D.ContextMenu>
 
             <Viewport3D.Camera>
-                <PerspectiveCamera Position="0,0.34,5.95"
+                <PerspectiveCamera x:Name="PetCamera"
+                                   Position="0,0.34,5.95"
                                    LookDirection="0,-0.06,-1"
                                    UpDirection="0,1,0"
                                    FieldOfView="36" />
@@ -160,11 +207,138 @@
             <ModelVisual3D x:Name="PetVisual" />
         </Viewport3D>
 
+        <!-- 마우스 오버레이 미니멀 주변 친구 퀵 팝업 -->
+        <Popup x:Name="FriendOverlayPopup"
+               PlacementTarget="{Binding ElementName=PetViewport}"
+               Placement="Left"
+               HorizontalOffset="-4"
+               VerticalOffset="12"
+               AllowsTransparency="True"
+               StaysOpen="True"
+               PopupAnimation="Fade">
+            <Border x:Name="FriendOverlayCard"
+                    Width="232"
+                    Margin="8"
+                    Padding="10,9"
+                    CornerRadius="15"
+                    Background="#F5FFFFFF"
+                    BorderBrush="#FFE6EAF2"
+                    BorderThickness="1"
+                    Effect="{StaticResource MenuShadow}"
+                    MouseEnter="FriendOverlayCard_MouseEnter"
+                    MouseLeave="FriendOverlayCard_MouseLeave">
+                <StackPanel>
+                    <!-- 미니멀 헤더 -->
+                    <DockPanel Margin="2,0,2,6" LastChildFill="False">
+                        <TextBlock DockPanel.Dock="Left"
+                                   Text="{Binding QuickOverlayHeaderText}"
+                                   FontSize="11"
+                                   FontWeight="Bold"
+                                   Foreground="#FF4B5563"
+                                   VerticalAlignment="Center" />
+                        <Button DockPanel.Dock="Right"
+                                Content="열기"
+                                Command="{Binding OpenSocialCommand}"
+                                Padding="7,2"
+                                FontSize="10.5"
+                                Height="20" />
+                    </DockPanel>
+
+                    <!-- 온라인 친구 · 주변 피어 초미니 리스트 -->
+                    <ItemsControl ItemsSource="{Binding QuickOverlayEntries}">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                                <Border Background="#FFFAFBFD"
+                                        BorderBrush="#FFEEF1F7"
+                                        BorderThickness="1"
+                                        CornerRadius="9"
+                                        Padding="8,5"
+                                        Margin="0,0,0,4">
+                                    <DockPanel LastChildFill="False">
+                                        <StackPanel DockPanel.Dock="Left" Orientation="Horizontal" VerticalAlignment="Center" MaxWidth="112">
+                                            <Ellipse Width="6" Height="6" Fill="#FF34D399" Margin="0,0,5,0" VerticalAlignment="Center" />
+                                            <TextBlock Text="{Binding DisplayTitle}"
+                                                       FontSize="11.5"
+                                                       FontWeight="SemiBold"
+                                                       Foreground="#FF1F2430"
+                                                       TextTrimming="CharacterEllipsis" />
+                                        </StackPanel>
+
+                                        <!-- 친구인 경우: 메시지 / 쓰다듬기 / 노래 따라하기 -->
+                                        <StackPanel DockPanel.Dock="Right"
+                                                    Orientation="Horizontal"
+                                                    Visibility="{Binding IsFriend, Converter={StaticResource BoolToVis}}">
+                                            <Button Content="💬"
+                                                    ToolTip="빠른 메시지"
+                                                    Style="{StaticResource MiniActionIconButton}"
+                                                    Command="{Binding DataContext.OpenQuickMessageCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                    CommandParameter="{Binding}"
+                                                    Margin="0,0,3,0" />
+                                            <Button Content="👋"
+                                                    ToolTip="쓰다듬기"
+                                                    Style="{StaticResource MiniActionIconButton}"
+                                                    Command="{Binding DataContext.QuickPetFriendCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                    CommandParameter="{Binding}"
+                                                    Margin="0,0,3,0" />
+                                            <Button Content="🎵"
+                                                    ToolTip="{Binding MusicTooltip}"
+                                                    Style="{StaticResource MiniActionIconButton}"
+                                                    IsEnabled="{Binding CanFollowMusic}"
+                                                    Command="{Binding DataContext.QuickToggleMusicFollowCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                    CommandParameter="{Binding}" />
+                                        </StackPanel>
+
+                                        <!-- 주변 미등록 LAN 피어인 경우: + 신청 -->
+                                        <Button DockPanel.Dock="Right"
+                                                Content="+ 신청"
+                                                Padding="7,2"
+                                                FontSize="10.5"
+                                                Height="22"
+                                                Command="{Binding DataContext.QuickSendFriendRequestCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                CommandParameter="{Binding}"
+                                                Visibility="{Binding CanSendFriendRequest, Converter={StaticResource BoolToVis}}" />
+                                    </DockPanel>
+                                </Border>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+
+                    <!-- 주변/친구 없을 때 초미니 1줄 안내 -->
+                    <TextBlock Text="주변에 온라인 친구가 없어요"
+                               FontSize="11"
+                               Foreground="#FF9CA3AF"
+                               HorizontalAlignment="Center"
+                               Margin="0,4,0,2"
+                               Visibility="{Binding HasNoQuickOverlayEntries, Converter={StaticResource BoolToVis}}" />
+
+                    <!-- 빠른 메시지 1줄 입력창 (💬 클릭 시에만 펼쳐짐) -->
+                    <DockPanel Margin="0,5,0,0"
+                               Visibility="{Binding HasQuickMessageTarget, Converter={StaticResource BoolToVis}}">
+                        <Button DockPanel.Dock="Right"
+                                Content="전송"
+                                Style="{StaticResource PrimaryButtonStyle}"
+                                Command="{Binding SendQuickMessageCommand}"
+                                Padding="9,4"
+                                FontSize="11"
+                                Margin="5,0,0,0" />
+                        <TextBox x:Name="QuickMessageInput"
+                                 Text="{Binding QuickMessageText, UpdateSourceTrigger=PropertyChanged}"
+                                 ToolTip="{Binding QuickMessagePlaceholder}"
+                                 MaxLength="100"
+                                 Height="28"
+                                 FontSize="11.5"
+                                 Padding="7,3"
+                                 KeyDown="QuickMessageInput_KeyDown" />
+                    </DockPanel>
+                </StackPanel>
+            </Border>
+        </Popup>
+
         <!-- 펫 호버 시 부드럽게 나타나는 미니 글래스 이름표 -->
         <Border Grid.Row="2"
                 HorizontalAlignment="Center"
                 VerticalAlignment="Top"
-                Padding="10,3"
+                Padding="10,2"
                 CornerRadius="10"
                 Background="#DCFFFFFF"
                 BorderBrush="#FFE8ECF4"

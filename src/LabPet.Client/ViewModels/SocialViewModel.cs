@@ -120,14 +120,23 @@ public sealed partial class SocialViewModel : ObservableObject
         var peers = _social.DiscoveredPeers;
         var selectedPetId = SelectedFriend?.Entry.PetId;
 
+        var friends = _social.Friends;
+        var friendPetIds = new HashSet<string>(friends.Select(f => f.PetId), StringComparer.OrdinalIgnoreCase);
+
+        // 이미 친구로 추가된 펫은 주변 펫 목록에서 제외
         NearbyPeers.Clear();
         foreach (var peer in peers)
         {
+            if (peer.IsFriend || friendPetIds.Contains(peer.PetId))
+            {
+                continue;
+            }
+
             NearbyPeers.Add(new PeerListItemViewModel(peer));
         }
 
         Friends.Clear();
-        foreach (var friend in _social.Friends)
+        foreach (var friend in friends)
         {
             var live = peers.FirstOrDefault(p => string.Equals(p.PetId, friend.PetId, StringComparison.OrdinalIgnoreCase));
             var isFollowing = string.Equals(_social.FollowingHostPetId, friend.PetId, StringComparison.OrdinalIgnoreCase);

@@ -19,6 +19,9 @@ namespace LabPet.Client.Views;
 public partial class PetWindow : Window
 {
     private const double DragThresholdPixels = 5.0;
+    private const double BaseWindowWidth = 214.0;
+    private const double BaseWindowHeight = 274.0;
+    private const double BaseCameraDistanceZ = 5.95;
 
     private readonly PetWindowViewModel _viewModel;
     private readonly IPetMeshFactory _meshFactory;
@@ -32,10 +35,13 @@ public partial class PetWindow : Window
     private readonly DispatcherTimer _frameTimer;
     private readonly DispatcherTimer _activityFlushTimer;
     private readonly DispatcherTimer _uptimeTimer;
+    private readonly DispatcherTimer _overlayCloseTimer;
     private readonly Stopwatch _clock = Stopwatch.StartNew();
     private double _lastFrameSeconds;
     private double _lastMusicPublishSeconds;
     private bool _lastReportedMusicActive;
+    private bool _isMouseOverPet;
+    private bool _isMouseOverOverlay;
 
     // 마우스 클릭(<=5px) vs 창 드래그(>5px) vs 빠른 좌우 흔들기 판정 상태
     private bool _isPointerPressed;
@@ -73,6 +79,7 @@ public partial class PetWindow : Window
         LightsVisual.Content = _meshFactory.CreateStudioLights();
 
         _viewModel.ProfileUpdated += OnProfileUpdated;
+        _viewModel.PetScaleChanged += OnPetScaleChanged;
         _viewModel.ClickThroughChanged += OnClickThroughChanged;
         _viewModel.ResetPositionRequested += OnResetPositionRequested;
         _viewModel.ExitRequested += OnExitRequested;
@@ -80,9 +87,24 @@ public partial class PetWindow : Window
         _activityHook.KeyTyped += OnGlobalKeyTyped;
         _pomodoro.FocusCompleted += OnPomodoroFocusCompleted;
         _pomodoro.BreakCompleted += OnPomodoroBreakCompleted;
+        _social.StateChanged += OnSocialStateChanged;
         _social.FriendRequestArrived += OnSocialFriendRequestArrived;
         _social.SocialNotification += OnSocialNotification;
         _social.PetReactionTriggered += OnSocialPetReactionTriggered;
+
+        _overlayCloseTimer = new DispatcherTimer
+        {
+            Interval = TimeSpan.FromMilliseconds(360)
+        };
+        _overlayCloseTimer.Tick += (_, _) =>
+        {
+            _overlayCloseTimer.Stop();
+            if (!_isMouseOverPet && !_isMouseOverOverlay && !QuickMessageInput.IsKeyboardFocusWithin)
+            {
+                FriendOverlayPopup.IsOpen = false;
+                _viewModel.QuickMessageTarget = null;
+            }
+        };
 
         SourceInitialized += (_, _) =>
         {
@@ -119,10 +141,12 @@ public partial class PetWindow : Window
             _frameTimer.Stop();
             _activityFlushTimer.Stop();
             _uptimeTimer.Stop();
+            _overlayCloseTimer.Stop();
             _audioAnalyzer.Stop();
             _activityHook.Stop();
             TrayIcon.Dispose();
             _viewModel.ProfileUpdated -= OnProfileUpdated;
+            _viewModel.PetScaleChanged -= OnPetScaleChanged;
             _viewModel.ClickThroughChanged -= OnClickThroughChanged;
             _viewModel.ResetPositionRequested -= OnResetPositionRequested;
             _viewModel.ExitRequested -= OnExitRequested;
@@ -130,6 +154,7 @@ public partial class PetWindow : Window
             _activityHook.KeyTyped -= OnGlobalKeyTyped;
             _pomodoro.FocusCompleted -= OnPomodoroFocusCompleted;
             _pomodoro.BreakCompleted -= OnPomodoroBreakCompleted;
+            _social.StateChanged -= OnSocialStateChanged;
             _social.FriendRequestArrived -= OnSocialFriendRequestArrived;
             _social.SocialNotification -= OnSocialNotification;
             _social.PetReactionTriggered -= OnSocialPetReactionTriggered;
@@ -141,7 +166,7 @@ public partial class PetWindow : Window
         _viewModel.ApplyProfile(profile);
         RestoreOrPlaceDefaultPosition(profile);
         _ = _social.StartAsync(profile);
-        _viewModel.ShowBubble($"안녕! {profile.PetName}(이)야", 2600);
+        _viewModel.ShowBubble("안녕!", 2600);
     }
 
     private void OnProfileUpdated(object? sender, PetProfile profile)
@@ -152,9 +177,83 @@ public partial class PetWindow : Window
         _ = _social.UpdateLocalPresenceAsync(profile, _lastReportedMusicActive);
     }
 
+    private void OnPetScaleChanged(object? sender, double scale)
+    {
+        var clamped = Math.Clamp(scale, 0.65, 1.45);
+        var prevRight = Left + Width;
+        var prevBottom = Top + Height;
+
+        Width = Math.Max(180.0, Math.Round(BaseWindowWidth * clamped));
+        Height = Math.Max(220.0, Math.Round(BaseWindowHeight * clamped));
+        PetCamera.Position = new Point3D(0, 0.34, BaseCameraDistanceZ / Math.Sqrt(clamped));
+
+        // 크기 변경 시 우하단 기준점이 자연스럽게 유지되도록 보정
+        if (IsLoaded)
+        {
+            Left = prevRight - Width;
+            Top = prevBottom - Height;
+        }
+    }
+
+    private void OnSocialStateChanged(object? sender, EventArgs e)
+    {
+        Dispatcher.BeginInvoke(_viewModel.RefreshQuickOverlayEntries);
+    }
+
+    private void PetViewport_MouseEnter(object sender, MouseEventArgs e)
+    {
+        if (_viewModel.IsClickThroughEnabled || _isDraggingWindow)
+        {
+            return;
+        }
+
+        _isMouseOverPet = true;
+        _overlayCloseTimer.Stop();
+        _viewModel.RefreshQuickOverlayEntries();
+        FriendOverlayPopup.IsOpen = true;
+    }
+
+    private void PetViewport_MouseLeave(object sender, MouseEventArgs e)
+    {
+        _isMouseOverPet = false;
+        _overlayCloseTimer.Stop();
+        _overlayCloseTimer.Start();
+    }
+
+    private void FriendOverlayCard_MouseEnter(object sender, MouseEventArgs e)
+    {
+        _isMouseOverOverlay = true;
+        _overlayCloseTimer.Stop();
+    }
+
+    private void FriendOverlayCard_MouseLeave(object sender, MouseEventArgs e)
+    {
+        _isMouseOverOverlay = false;
+        _overlayCloseTimer.Stop();
+        _overlayCloseTimer.Start();
+    }
+
+    private void QuickMessageInput_KeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key == Key.Enter && _viewModel.SendQuickMessageCommand.CanExecute(null))
+        {
+            _viewModel.SendQuickMessageCommand.Execute(null);
+            e.Handled = true;
+        }
+        else if (e.Key == Key.Escape)
+        {
+            _viewModel.QuickMessageTarget = null;
+            e.Handled = true;
+        }
+    }
+
     private void OnClickThroughChanged(object? sender, bool enable)
     {
         Win32WindowHelper.SetClickThrough(this, enable);
+        if (enable)
+        {
+            FriendOverlayPopup.IsOpen = false;
+        }
     }
 
     private void OnResetPositionRequested(object? sender, EventArgs e)
@@ -359,6 +458,7 @@ public partial class PetWindow : Window
         if (!_isDraggingWindow && distance > DragThresholdPixels)
         {
             _isDraggingWindow = true;
+            FriendOverlayPopup.IsOpen = false;
         }
 
         if (_isDraggingWindow)
@@ -478,51 +578,14 @@ public partial class PetWindow : Window
 
     private static System.Drawing.Icon CreateTrayIcon()
     {
-        var visual = new DrawingVisual();
-        using (var dc = visual.RenderOpen())
+        var resourceUri = new Uri("pack://application:,,,/Assets/app.ico", UriKind.Absolute);
+        var streamInfo = Application.GetResourceStream(resourceUri);
+        if (streamInfo is not null)
         {
-            var bgBrush = new SolidColorBrush(Color.FromRgb(255, 114, 159));
-            var bodyBrush = new SolidColorBrush(Color.FromRgb(255, 248, 250));
-            var eyeBrush = new SolidColorBrush(Color.FromRgb(48, 42, 56));
-            var cheekBrush = new SolidColorBrush(Color.FromRgb(255, 166, 193));
-
-            dc.DrawEllipse(bgBrush, null, new Point(16, 16), 15, 15);
-            dc.DrawEllipse(bodyBrush, null, new Point(16, 17), 11, 9.5);
-            dc.DrawEllipse(eyeBrush, null, new Point(12.2, 16), 1.6, 1.8);
-            dc.DrawEllipse(eyeBrush, null, new Point(19.8, 16), 1.6, 1.8);
-            dc.DrawEllipse(cheekBrush, null, new Point(9.5, 18.8), 2.1, 1.3);
-            dc.DrawEllipse(cheekBrush, null, new Point(22.5, 18.8), 2.1, 1.3);
+            using var s = streamInfo.Stream;
+            return new System.Drawing.Icon(s);
         }
 
-        var renderBitmap = new RenderTargetBitmap(32, 32, 96, 96, PixelFormats.Pbgra32);
-        renderBitmap.Render(visual);
-
-        var encoder = new PngBitmapEncoder();
-        encoder.Frames.Add(BitmapFrame.Create(renderBitmap));
-
-        using var pngStream = new MemoryStream();
-        encoder.Save(pngStream);
-        var pngBytes = pngStream.ToArray();
-
-        // PNG-in-ICO(Windows 표준 32x32 32bpp ICO) 컨테이너로 감싸 System.Drawing.Icon 생성
-        using var icoStream = new MemoryStream(22 + pngBytes.Length);
-        using (var writer = new BinaryWriter(icoStream, System.Text.Encoding.UTF8, leaveOpen: true))
-        {
-            writer.Write((ushort)0);              // Reserved
-            writer.Write((ushort)1);              // Type: ICO
-            writer.Write((ushort)1);              // Image count: 1
-            writer.Write((byte)32);               // Width
-            writer.Write((byte)32);               // Height
-            writer.Write((byte)0);                // Color palette
-            writer.Write((byte)0);                // Reserved
-            writer.Write((ushort)1);              // Color planes
-            writer.Write((ushort)32);             // Bits per pixel
-            writer.Write((uint)pngBytes.Length);  // Image data size
-            writer.Write((uint)22);               // Offset to image data (6 + 16)
-            writer.Write(pngBytes);
-        }
-
-        icoStream.Position = 0;
-        return new System.Drawing.Icon(icoStream);
+        return System.Drawing.SystemIcons.Application;
     }
 }

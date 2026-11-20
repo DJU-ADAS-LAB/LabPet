@@ -323,6 +323,22 @@
                                         </DataTemplate>
                                     </ListBox.ItemTemplate>
                                 </ListBox>
+
+                                <DockPanel Margin="0,12,0,4">
+                                    <TextBlock Text="6. 바탕화면 펫 크기" Style="{StaticResource SectionTitleStyle}" Margin="0" />
+                                    <TextBlock Text="{Binding PetScalePercentText}"
+                                               DockPanel.Dock="Right"
+                                               FontSize="12"
+                                               FontWeight="Bold"
+                                               Foreground="{StaticResource BrandPinkBrush}"
+                                               VerticalAlignment="Center" />
+                                </DockPanel>
+                                <Slider Minimum="0.65"
+                                        Maximum="1.45"
+                                        Value="{Binding PetScale}"
+                                        TickFrequency="0.05"
+                                        IsSnapToTickEnabled="True"
+                                        Margin="0,2,0,8" />
                             </StackPanel>
                         </ScrollViewer>
 

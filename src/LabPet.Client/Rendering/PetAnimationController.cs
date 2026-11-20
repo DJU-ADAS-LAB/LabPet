@@ -174,7 +174,7 @@ public sealed class PetAnimationController
         double bodyRoll = 0.0;
         double headPitchExtra = 0.0;
         double headRollExtra = 0.0;
-        double emissiveStrength = bass * 0.24 + beat * 0.16;
+        double emissiveStrength = bass * 0.05 + beat * 0.05;
 
         switch (rig.SpeciesId)
         {
@@ -227,7 +227,7 @@ public sealed class PetAnimationController
                 scaleY = 1.0 + Math.Sin(_dancePhase * 2.0 - 0.4) * (0.035 + bass * 0.065) + beat * 0.06;
                 bodyRoll = sway * (3.0 + groove * 8.5);
                 headRollExtra = sway * (1.5 + groove * 3.5);
-                emissiveStrength += beat * 0.10;
+                emissiveStrength += beat * 0.03;
                 break;
             }
         }
@@ -255,7 +255,7 @@ public sealed class PetAnimationController
             scaleY += bounce * 0.20;
             offsetY += Math.Max(0, Math.Sin(t * Math.PI)) * 0.24;
             headRollExtra += Math.Sin(t * Math.PI * 3.0) * 9.0;
-            emissiveStrength = Math.Max(emissiveStrength, (1.0 - t) * 0.40);
+            emissiveStrength = Math.Max(emissiveStrength, (1.0 - t) * 0.16);
         }
 
         // 어지러움(빠른 흔들기) 반응
@@ -304,7 +304,8 @@ public sealed class PetAnimationController
             rig.AuraTranslate.OffsetY = Math.Sin(_elapsedSeconds * 1.2) * 0.035;
         }
 
-        emissiveStrength = Math.Clamp(emissiveStrength, 0.0, 0.52);
+        // 파스텔 바디 색감과 3D 음영이 하얗게 날아가지 않도록 발광 상한을 은은하게 제한
+        emissiveStrength = Math.Clamp(emissiveStrength, 0.0, 0.16);
         var r = (byte)(_emissiveAccentColor.R * emissiveStrength);
         var g = (byte)(_emissiveAccentColor.G * emissiveStrength);
         var b = (byte)(_emissiveAccentColor.B * emissiveStrength);
