@@ -1,3 +1,6 @@
+using System.Security.Cryptography;
+using System.Text.Json;
+
 namespace LabPet.Client.Games;
 
 public enum RpsMove
@@ -20,6 +23,30 @@ public enum RpsOutcome
 public static class RpsGameEngine
 {
     public const string GameTypeId = "rps";
+
+    internal static string CreateNonce() => Convert.ToHexString(RandomNumberGenerator.GetBytes(16));
+
+    internal static string Commit(string sessionId, string playerId, RpsMove move, string nonce)
+        => Convert.ToHexString(SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(
+            new[] { "LabPet-v3-RPS", sessionId, playerId.ToUpperInvariant(), ToToken(move), nonce })));
+
+    internal static bool IsCommitment(string? value)
+        => value is { Length: 64 } && value.All(Uri.IsHexDigit);
+
+    internal static bool TryValidateReveal(
+        string sessionId, string playerId, string commitment, string? reveal, out RpsMove move)
+    {
+        move = default;
+        if (!IsCommitment(commitment) || reveal is null)
+        {
+            return false;
+        }
+        var parts = reveal.Split(':', 2);
+        return parts.Length == 2 && parts[1].Length == 32 && parts[1].All(Uri.IsHexDigit)
+            && TryParseToken(parts[0], out move)
+            && CryptographicOperations.FixedTimeEquals(Convert.FromHexString(commitment),
+                Convert.FromHexString(Commit(sessionId, playerId, move, parts[1])));
+    }
 
     public static RpsOutcome Evaluate(RpsMove mine, RpsMove opponent)
     {

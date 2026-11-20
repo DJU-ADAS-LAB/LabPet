@@ -6,6 +6,33 @@ namespace LabPet.Tests;
 public sealed class CoinGamesTests
 {
     [Fact]
+    public void RpsReveal_OnlyMatchesTheCommittedMoveSessionAndPlayer()
+    {
+        var nonce = RpsGameEngine.CreateNonce();
+        var commitment = RpsGameEngine.Commit("round", "player", RpsMove.Rock, nonce);
+
+        Assert.True(RpsGameEngine.TryValidateReveal("round", "player", commitment, $"rock:{nonce}", out var move));
+        Assert.Equal(RpsMove.Rock, move);
+        Assert.False(RpsGameEngine.TryValidateReveal("round", "player", commitment, $"paper:{nonce}", out _));
+        Assert.False(RpsGameEngine.TryValidateReveal("other", "player", commitment, $"rock:{nonce}", out _));
+        Assert.False(RpsGameEngine.TryValidateReveal("round", "other", commitment, $"rock:{nonce}", out _));
+    }
+
+    [Fact]
+    public void TypingMatch_RecomputesScoreFromTheRoundPrompts()
+    {
+        string[] completed = [TypingSprintEngine.MatchPrompt("round", 0), TypingSprintEngine.MatchPrompt("round", 1)];
+        var prefix = TypingSprintEngine.MatchPrompt("round", 2)[..2];
+        var data = TypingSprintEngine.CreateTranscript(completed, prefix);
+
+        Assert.True(TypingSprintEngine.TryScoreTranscript("round", data, out var score));
+        Assert.Equal(completed.Sum(prompt => prompt.Length) + prefix.Length, score);
+        Assert.False(TypingSprintEngine.TryScoreTranscript("round", "9999", out _));
+        Assert.False(TypingSprintEngine.TryScoreTranscript("round",
+            TypingSprintEngine.CreateTranscript(completed, "다른 문장"), out _));
+    }
+
+    [Fact]
     public void CoinHiLowGame_TracksStreakMultiplierAndCashOut()
     {
         // 고정 시드 대신 결정적 동작 검증을 위해 여러 카드 시퀀스 테스트

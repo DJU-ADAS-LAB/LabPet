@@ -1,14 +1,17 @@
 using System.IO;
 using System.Net;
+using System.Text.Json;
 using System.Windows.Media;
 using System.Windows.Threading;
 using LabPet.Client.Network;
+using LabPet.Client.Games;
 using LabPet.Client.Social;
 using LabPet.Client.Solo;
 using LabPet.Client.Storage;
 using LabPet.Client.ViewModels;
 using LabPet.Shared.Models;
 using LabPet.Shared.Protocol;
+using LabPet.Shared.Transport;
 using Xunit;
 
 namespace LabPet.Tests;
@@ -67,6 +70,47 @@ public sealed class SocialCoordinatorTests : IAsyncLifetime
             PairSecretBase64 = sharedSecret
         };
         _guestTransport.UpdateKnownFriends([_hostAsFriend]);
+    }
+
+    [Fact]
+    public async Task LadderSettlement_UsesTheAgreedWagerAndPaysOnlyOnce()
+    {
+        using var games = new CoinGamesViewModel(_store, new SoloProgressionService(), _host);
+        _hostProfile.SoloProgress.Coins = 100;
+        games.BindProfile(_hostProfile);
+        var friend = Assert.Single(_host.Friends);
+        var session = Guid.NewGuid().ToString("N");
+        var room = new LadderRoomStateDto
+        {
+            SessionId = session, HostPetId = friend.PetId, WagerCoins = 10, SlotCount = 2,
+            Prizes = ["통과", "잭팟"],
+            Members =
+            [
+                new LadderMemberStateDto { PetId = friend.PetId, DisplayName = "친구", SelectedSlot = 0 },
+                new LadderMemberStateDto { PetId = _hostProfile.PetId, DisplayName = "나", SelectedSlot = 1 }
+            ]
+        };
+        Task Receive(string action, int wager, object data) => games.HandleGameEventAsync(new GameEventReceivedEventArgs(
+            friend.PetId, new GameEventPayload
+            {
+                GameType = LabLadderEngine.GameTypeId, SessionId = session, Action = action, WagerCoins = wager,
+                Data = JsonSerializer.Serialize(data, ProtocolJson.PacketOptions)
+            }));
+        await Receive("invite", 10, room);
+        await games.AcceptIncomingInviteAsync();
+        Assert.Equal(90, _hostProfile.SoloProgress.Coins);
+
+        var start = new LadderStartDto
+        {
+            SessionId = session, WagerCoins = 10, Participants = ["친구", "나"],
+            ParticipantPetIds = [friend.PetId, _hostProfile.PetId],
+            Prizes = ["잭팟", "통과"], Rungs = [new LadderRung(1, 0)]
+        };
+        await Receive("start", 50, start);
+        Assert.Equal(90, _hostProfile.SoloProgress.Coins);
+        await Receive("start", 10, start);
+        await Receive("start", 10, start);
+        Assert.Equal(110, (await _store.LoadProfileAsync()).SoloProgress.Coins);
     }
 
     [Fact]

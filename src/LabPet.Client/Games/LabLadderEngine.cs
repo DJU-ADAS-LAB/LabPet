@@ -29,6 +29,54 @@ public static class LabLadderEngine
     public const int MaxParticipants = 8;
     public const int DefaultLevels = 9;
 
+    internal static bool IsValidRoom(LadderRoomStateDto room, string sessionId, string hostId, int wager)
+    {
+        if (room.SessionId != sessionId || !string.Equals(room.HostPetId, hostId, StringComparison.OrdinalIgnoreCase)
+            || room.WagerCoins != wager || room.SlotCount is < MinParticipants or > MaxParticipants
+            || room.Members is not { Count: >= 1 and <= MaxParticipants }
+            || room.PendingInviteCount is < 0 or >= MaxParticipants
+            || room.Prizes is not { Count: >= MinParticipants and <= MaxParticipants }
+            || room.Prizes.Any(string.IsNullOrWhiteSpace)
+            || room.Prizes.Count(IsJackpot) > 1
+            || !room.Members.All(member => member is not null && !string.IsNullOrWhiteSpace(member.PetId)
+                && (member.SelectedSlot is null || member.SelectedSlot >= 0 && member.SelectedSlot < room.SlotCount)))
+        {
+            return false;
+        }
+        var uniqueIds = room.Members.Select(member => member.PetId).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var slots = room.Members.Where(member => member.SelectedSlot.HasValue).Select(member => member.SelectedSlot).ToArray();
+        return uniqueIds.Count == room.Members.Count && uniqueIds.Contains(hostId)
+            && slots.Distinct().Count() == slots.Length;
+    }
+
+    internal static bool IsValidStart(LadderStartDto start, LadderRoomStateDto room, string localPetId)
+    {
+        if (start.SessionId != room.SessionId || start.WagerCoins != room.WagerCoins
+            || start.ParticipantPetIds is not { Count: >= MinParticipants and <= MaxParticipants } ids
+            || start.Participants?.Count != ids.Count || start.Prizes?.Count != ids.Count
+            || start.Participants.Any(string.IsNullOrWhiteSpace) || start.Prizes.Any(string.IsNullOrWhiteSpace)
+            || start.Levels != DefaultLevels || start.Rungs is null || start.Rungs.Count > DefaultLevels * MaxParticipants)
+        {
+            return false;
+        }
+        var expected = room.Members.Where(member => member.SelectedSlot.HasValue)
+            .OrderBy(member => member.SelectedSlot).Select(member => member.PetId);
+        if (!ids.SequenceEqual(expected, StringComparer.OrdinalIgnoreCase)
+            || !ids.Contains(localPetId, StringComparer.OrdinalIgnoreCase)
+            || !start.Prizes.Order(StringComparer.Ordinal)
+                .SequenceEqual(room.Prizes.Take(ids.Count).Order(StringComparer.Ordinal), StringComparer.Ordinal))
+        {
+            return false;
+        }
+        var rungs = new HashSet<(int Level, int Column)>();
+        return start.Rungs.All(rung => rung is not null
+            && rung.Level > 0 && rung.Level < start.Levels && rung.LeftColumn >= 0 && rung.LeftColumn < ids.Count - 1
+            && !rungs.Contains((rung.Level, rung.LeftColumn - 1)) && !rungs.Contains((rung.Level, rung.LeftColumn + 1))
+            && rungs.Add((rung.Level, rung.LeftColumn)));
+    }
+
+    internal static bool IsJackpot(string prize) => prize.Contains("잭팟", StringComparison.OrdinalIgnoreCase);
+
     public static LadderBoard GenerateBoard(
         IReadOnlyList<string> participants,
         IReadOnlyList<string> prizes,

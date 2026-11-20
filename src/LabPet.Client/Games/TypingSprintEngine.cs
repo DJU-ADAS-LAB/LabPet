@@ -1,3 +1,8 @@
+using System.Buffers.Binary;
+using System.Security.Cryptography;
+using System.Text;
+using System.Text.Json;
+
 namespace LabPet.Client.Games;
 
 /// <summary>
@@ -7,6 +12,7 @@ public static class TypingSprintEngine
 {
     public const string GameTypeId = "typing";
     public const int SprintDurationSeconds = 10;
+    internal const int MaxCompletedPrompts = 64;
 
     public static IReadOnlyList<string> Prompts { get; } =
     [
@@ -23,6 +29,59 @@ public static class TypingSprintEngine
         "말랑한 데스크톱 펫",
         "퇴근 전 커밋 완료"
     ];
+
+    internal static int MaxMatchScore => (MaxCompletedPrompts + 1) * Prompts.Max(prompt => prompt.Length);
+
+    internal static string MatchPrompt(string sessionId, int promptIndex)
+    {
+        var digest = SHA256.HashData(Encoding.UTF8.GetBytes(FormattableString.Invariant(
+            $"LabPet-v3-Typing|{sessionId}|{promptIndex}")));
+        return Prompts[(int)(BinaryPrimitives.ReadUInt32BigEndian(digest) % Prompts.Count)];
+    }
+
+    internal static string CreateTranscript(IReadOnlyList<string> completed, string prefix)
+        => JsonSerializer.Serialize(new Transcript(completed.ToArray(), prefix));
+
+    internal static bool TryScoreTranscript(string sessionId, string? data, out int score)
+    {
+        score = 0;
+        if (data is null || data.Length > 8192)
+        {
+            return false;
+        }
+        Transcript? transcript;
+        try
+        {
+            transcript = JsonSerializer.Deserialize<Transcript>(data);
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+        if (transcript is not { Completed: { Length: <= MaxCompletedPrompts }, Prefix: not null })
+        {
+            return false;
+        }
+        var result = 0;
+        for (var i = 0; i < transcript.Completed.Length; i++)
+        {
+            var points = EvaluateCompletedPrompt(MatchPrompt(sessionId, i), transcript.Completed[i]);
+            if (points == 0)
+            {
+                return false;
+            }
+            result += points;
+        }
+        var partial = CountMatchedPrefixChars(MatchPrompt(sessionId, transcript.Completed.Length), transcript.Prefix);
+        if (partial != transcript.Prefix.Length)
+        {
+            return false;
+        }
+        score = result + partial;
+        return true;
+    }
+
+    private sealed record Transcript(string[] Completed, string Prefix);
 
     public static string PickPrompt(Random? rng = null, string? exclude = null)
     {
