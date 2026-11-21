@@ -12,6 +12,10 @@ public sealed class MusicParticleHandle
     public required ScaleTransform3D Scale { get; init; }
     public required TranslateTransform3D Translate { get; init; }
     public required AxisAngleRotation3D Rotation { get; init; }
+    public SolidColorBrush? TintBrush { get; init; }
+    public SolidColorBrush? EmissiveBrush { get; init; }
+    public Color BaseColor { get; set; } = Color.FromRgb(255, 194, 212);
+    public string ParticleKind { get; init; } = "note";
 }
 
 [Flags]
@@ -24,7 +28,7 @@ public enum PetRigEffects
 }
 
 /// <summary>
-/// 60fps UI 타이머가 Transform3D와 EmissiveMaterial만 저부하로 갱신하기 위해 보관하는 3D 리그 핸들.
+/// 60fps UI 타이머가 Transform3D와 Material 색상만 저부하로 갱신하기 위해 보관하는 3D 리그 핸들.
 /// </summary>
 public sealed class PetRigHandle
 {
@@ -32,6 +36,16 @@ public sealed class PetRigHandle
     public required Model3DGroup RootModel { get; init; }
     public required int TotalTriangleCount { get; init; }
     internal Point3D NameplateAnchor { get; init; }
+
+    /// <summary>색상을 제외한 구조 시그니처 (SpeciesId|ExpressionId|HeadAccessoryId|AuraEffectId).</summary>
+    public string AppearanceStructureSignature { get; init; } = string.Empty;
+
+    /// <summary>Blender 외부 에셋(.obj)에서 로드되었는지 여부 (폴백 시 false).</summary>
+    public bool IsExternalAsset { get; init; }
+
+    /// <summary>종별 좌·우 귀 기본 각도 (deg).</summary>
+    public double LeftEarBaseAngle { get; init; }
+    public double RightEarBaseAngle { get; init; }
 
     // 루트 바디 변환 (Squash & Stretch, 부유, 시선 추적, 흔들기)
     public required ScaleTransform3D BodyScale { get; init; }
@@ -65,7 +79,7 @@ public sealed class PetRigHandle
     public AxisAngleRotation3D? LeftArmPitch { get; init; }
     public AxisAngleRotation3D? RightArmPitch { get; init; }
 
-    // 3종 공통 댄스·음악 반응용 풀링 3D 음표/별 파티클
+    // 댄스·음악·반응 이펙트용 풀링 3D 음표/별 파티클
     public IReadOnlyList<MusicParticleHandle> MusicParticles { get; init; } = [];
 
     // 3D 오라 이펙트 변환
@@ -75,11 +89,60 @@ public sealed class PetRigHandle
     // 음악/상호작용 반응용 발광 브러시
     public required SolidColorBrush BodyEmissiveBrush { get; init; }
     public SolidColorBrush? AuraEmissiveBrush { get; init; }
+
+    // 메시 재생성 없이 색상 슬롯만 즉시 교체하기 위한 Diffuse 브러시 참조
+    public SolidColorBrush? BodyDiffuseBrush { get; init; }
+    public SolidColorBrush? BodyLightDiffuseBrush { get; init; }
+    public SolidColorBrush? BodyShadeDiffuseBrush { get; init; }
+    public SolidColorBrush? EarDarkDiffuseBrush { get; init; }
+    public SolidColorBrush? EarInnerDarkDiffuseBrush { get; init; }
+    public SolidColorBrush? AccentDiffuseBrush { get; init; }
+    public SolidColorBrush? AuraDiffuseBrush { get; init; }
+
+    public static string BuildStructureSignature(PetAppearance appearance)
+        => $"{appearance.SpeciesId}|{appearance.ExpressionId}|{appearance.HeadAccessoryId}|{appearance.AuraEffectId}";
+
+    /// <summary>
+    /// 메시를 다시 생성하지 않고 바디·포인트 색상 슬롯의 브러시만 즉시 갱신한다.
+    /// </summary>
+    public void UpdateColors(string bodyColorHex, string accentColorHex)
+    {
+        var bodyColor = ProceduralPetMeshFactory.ParseHexColor(bodyColorHex, Color.FromRgb(255, 245, 247));
+        var accentColor = ProceduralPetMeshFactory.ParseHexColor(accentColorHex, Color.FromRgb(255, 158, 181));
+
+        if (BodyDiffuseBrush is not null) BodyDiffuseBrush.Color = bodyColor;
+        if (BodyLightDiffuseBrush is not null) BodyLightDiffuseBrush.Color = ProceduralPetMeshFactory.Lighten(bodyColor, 0.42);
+        if (BodyShadeDiffuseBrush is not null) BodyShadeDiffuseBrush.Color = ProceduralPetMeshFactory.Darken(bodyColor, 0.06);
+        if (EarDarkDiffuseBrush is not null) EarDarkDiffuseBrush.Color = ProceduralPetMeshFactory.Darken(bodyColor, 0.23);
+        if (EarInnerDarkDiffuseBrush is not null) EarInnerDarkDiffuseBrush.Color = ProceduralPetMeshFactory.Darken(bodyColor, 0.32);
+        if (AccentDiffuseBrush is not null) AccentDiffuseBrush.Color = accentColor;
+
+        if (AuraEmissiveBrush is not null)
+        {
+            AuraEmissiveBrush.Color = Color.FromArgb(60, accentColor.R, accentColor.G, accentColor.B);
+        }
+
+        if (AuraDiffuseBrush is not null)
+        {
+            var softAura = ProceduralPetMeshFactory.Lighten(accentColor, 0.35);
+            AuraDiffuseBrush.Color = Color.FromArgb(AuraDiffuseBrush.Color.A, softAura.R, softAura.G, softAura.B);
+        }
+
+        var particleColor = ProceduralPetMeshFactory.Lighten(accentColor, 0.25);
+        foreach (var particle in MusicParticles)
+        {
+            particle.BaseColor = particleColor;
+            if (particle.TintBrush is not null)
+            {
+                particle.TintBrush.Color = Color.FromArgb(particle.TintBrush.Color.A, particleColor.R, particleColor.G, particleColor.B);
+            }
+        }
+    }
 }
 
 /// <summary>
 /// 3D 펫 메시 생성 추상화.
-/// 1차 구현은 절차적 MeshBuilder를 사용하며, 추후 외부 .obj 로더 구현체로 교체할 수 있다.
+/// 외부 Blender .obj 에셋 로더 또는 절차적 MeshBuilder 구현체를 통해 PetRigHandle을 조립한다.
 /// </summary>
 public interface IPetMeshFactory
 {

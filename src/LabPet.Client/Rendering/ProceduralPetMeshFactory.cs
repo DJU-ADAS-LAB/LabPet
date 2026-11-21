@@ -53,11 +53,19 @@ public sealed class ProceduralPetMeshFactory : IPetMeshFactory
         var bodyEmissiveBrush = new SolidColorBrush(Colors.Black);
         var auraEmissiveBrush = new SolidColorBrush(Color.FromArgb(60, accentColor.R, accentColor.G, accentColor.B));
 
-        // 부드러운 무광 소프트 클레이 재질
-        var bodyMaterial = CreateClayMaterial(bodyColor, bodyEmissiveBrush, specularPower: 16, specularAlpha: 68);
-        var softLightBodyMaterial = CreateClayMaterial(Lighten(bodyColor, 0.42), bodyEmissiveBrush, specularPower: 14, specularAlpha: 56);
-        var softShadeBodyMaterial = CreateClayMaterial(Darken(bodyColor, 0.06), bodyEmissiveBrush, specularPower: 14, specularAlpha: 50);
-        var accentMaterial = CreateClayMaterial(accentColor, bodyEmissiveBrush, specularPower: 15, specularAlpha: 66);
+        // 부드러운 무광 소프트 클레이 재질 (무재생성 색상 교체를 위해 Diffuse 브러시 보관)
+        var bodyDiffuseBrush = new SolidColorBrush(bodyColor);
+        var bodyLightDiffuseBrush = new SolidColorBrush(Lighten(bodyColor, 0.42));
+        var bodyShadeDiffuseBrush = new SolidColorBrush(Darken(bodyColor, 0.06));
+        var accentDiffuseBrush = new SolidColorBrush(accentColor);
+        SolidColorBrush? earDarkDiffuseBrush = null;
+        SolidColorBrush? earInnerDarkDiffuseBrush = null;
+        SolidColorBrush? auraDiffuseBrush = null;
+
+        var bodyMaterial = CreateClayMaterial(bodyDiffuseBrush, bodyEmissiveBrush, specularPower: 16, specularAlpha: 68);
+        var softLightBodyMaterial = CreateClayMaterial(bodyLightDiffuseBrush, bodyEmissiveBrush, specularPower: 14, specularAlpha: 56);
+        var softShadeBodyMaterial = CreateClayMaterial(bodyShadeDiffuseBrush, bodyEmissiveBrush, specularPower: 14, specularAlpha: 50);
+        var accentMaterial = CreateClayMaterial(accentDiffuseBrush, bodyEmissiveBrush, specularPower: 15, specularAlpha: 66);
         var darkEyeMaterial = CreateClayMaterial(Color.FromRgb(42, 36, 48), null, specularPower: 58, specularAlpha: 155);
         var whiteHighlightMaterial = CreateClayMaterial(Colors.White, new SolidColorBrush(Color.FromRgb(75, 75, 75)), specularPower: 64, specularAlpha: 170);
 
@@ -250,8 +258,10 @@ public sealed class ProceduralPetMeshFactory : IPetMeshFactory
                 faceZ = 0.77f;
                 headRadiusX = 0.72f;
 
-                var earMaterial = CreateClayMaterial(Darken(bodyColor, 0.23), bodyEmissiveBrush, specularPower: 14, specularAlpha: 52);
-                var innerEarMaterial = CreateClayMaterial(Darken(bodyColor, 0.32), null, specularPower: 12, specularAlpha: 42);
+                earDarkDiffuseBrush = new SolidColorBrush(Darken(bodyColor, 0.23));
+                earInnerDarkDiffuseBrush = new SolidColorBrush(Darken(bodyColor, 0.32));
+                var earMaterial = CreateClayMaterial(earDarkDiffuseBrush, bodyEmissiveBrush, specularPower: 14, specularAlpha: 52);
+                var innerEarMaterial = CreateClayMaterial(earInnerDarkDiffuseBrush, null, specularPower: 12, specularAlpha: 42);
                 var noseMaterial = CreateClayMaterial(Color.FromRgb(80, 50, 45), null, specularPower: 46, specularAlpha: 132);
 
                 // 3/4 각도로 비스듬히 선 긴 몸통 그룹 (얼굴은 정면 유지, 엉덩이·꼬리는 오른쪽 뒤로)
@@ -491,15 +501,16 @@ public sealed class ProceduralPetMeshFactory : IPetMeshFactory
             appearance.HeadAccessoryId,
             headSocketY,
             headRadiusX,
-            accentColor);
+            accentColor,
+            accentDiffuseBrush);
 
         bodyGroup.Children.Add(headGroup);
 
         (int keyboardTriangles, ScaleTransform3D? typingKeyboardScale) = effects.HasFlag(PetRigEffects.TypingKeyboard)
-            ? BuildTypingKeyboard(rootGroup, accentColor)
+            ? BuildTypingKeyboard(rootGroup, accentColor, accentDiffuseBrush)
             : (0, null);
         var (particleTriangles, musicParticles) = effects.HasFlag(PetRigEffects.MusicParticles)
-            ? BuildMusicParticles(rootGroup, accentColor, auraEmissiveBrush)
+            ? BuildMusicParticles(rootGroup, accentColor)
             : (0, Array.Empty<MusicParticleHandle>());
         triangleCount += keyboardTriangles + particleTriangles;
 
@@ -516,13 +527,32 @@ public sealed class ProceduralPetMeshFactory : IPetMeshFactory
             auraTransform.Children.Add(auraTrans);
 
             var auraGroup = new Model3DGroup { Transform = auraTransform };
-            triangleCount += BuildAuraEffect(auraGroup, appearance.AuraEffectId, accentColor, auraEmissiveBrush);
+            var auraResult = BuildAuraEffect(auraGroup, appearance.AuraEffectId, accentColor, auraEmissiveBrush);
+            triangleCount += auraResult.Triangles;
+            auraDiffuseBrush = auraResult.AuraDiffuseBrush;
             rootGroup.Children.Add(auraGroup);
         }
+
+        var leftEarBaseAngle = appearance.SpeciesId switch
+        {
+            PetSpeciesIds.ChibiCat => 15.0,
+            PetSpeciesIds.FluffyPuppy => -4.0,
+            _ => 0.0
+        };
+        var rightEarBaseAngle = appearance.SpeciesId switch
+        {
+            PetSpeciesIds.ChibiCat => -15.0,
+            PetSpeciesIds.FluffyPuppy => 4.0,
+            _ => 0.0
+        };
 
         return new PetRigHandle
         {
             SpeciesId = appearance.SpeciesId,
+            AppearanceStructureSignature = PetRigHandle.BuildStructureSignature(appearance),
+            IsExternalAsset = false,
+            LeftEarBaseAngle = leftEarBaseAngle,
+            RightEarBaseAngle = rightEarBaseAngle,
             RootModel = rootGroup,
             TotalTriangleCount = triangleCount,
             NameplateAnchor = new Point3D(0, bodyGroup.Bounds.Y, 0.35),
@@ -550,11 +580,21 @@ public sealed class ProceduralPetMeshFactory : IPetMeshFactory
             AuraRotation = auraRot,
             AuraTranslate = auraTrans,
             BodyEmissiveBrush = bodyEmissiveBrush,
-            AuraEmissiveBrush = auraEmissiveBrush
+            AuraEmissiveBrush = auraEmissiveBrush,
+            BodyDiffuseBrush = bodyDiffuseBrush,
+            BodyLightDiffuseBrush = bodyLightDiffuseBrush,
+            BodyShadeDiffuseBrush = bodyShadeDiffuseBrush,
+            EarDarkDiffuseBrush = earDarkDiffuseBrush,
+            EarInnerDarkDiffuseBrush = earInnerDarkDiffuseBrush,
+            AccentDiffuseBrush = accentDiffuseBrush,
+            AuraDiffuseBrush = auraDiffuseBrush
         };
     }
 
-    private (int Triangles, ScaleTransform3D Scale) BuildTypingKeyboard(Model3DGroup rootGroup, Color accentColor)
+    internal (int Triangles, ScaleTransform3D Scale) BuildTypingKeyboard(
+        Model3DGroup rootGroup,
+        Color accentColor,
+        SolidColorBrush? sharedAccentBrush = null)
     {
         const float centerY = -0.76f;
         const float centerZ = 0.82f;
@@ -581,29 +621,57 @@ public sealed class ProceduralPetMeshFactory : IPetMeshFactory
         var spacebar = new MeshBuilder(true, false);
         // 펫과 가까운 키보드 가장자리에 스페이스바를 둔다.
         spacebar.AddBox(new Vector3(0, centerY + 0.055f, centerZ - 0.16f), 0.44f, 0.04f, 0.07f);
-        triangles += AddGeometry(keyboard, spacebar, CreateClayMaterial(accentColor, null, 20, 75));
+        var spacebarMat = sharedAccentBrush is not null
+            ? CreateClayMaterial(sharedAccentBrush, null, 20, 75)
+            : CreateClayMaterial(accentColor, null, 20, 75);
+        triangles += AddGeometry(keyboard, spacebar, spacebarMat);
         rootGroup.Children.Add(keyboard);
         return (triangles, scale);
     }
 
-    private (int Triangles, MusicParticleHandle[] Particles) BuildMusicParticles(
-        Model3DGroup rootGroup, Color accentColor, SolidColorBrush auraEmissiveBrush)
+    internal (int Triangles, MusicParticleHandle[] Particles) BuildMusicParticles(
+        Model3DGroup rootGroup,
+        Color accentColor,
+        int particleCount = 6,
+        WpfMeshGeometry3D? externalNoteMesh = null,
+        WpfMeshGeometry3D? externalStarMesh = null)
     {
-        var material = CreateClayMaterial(Lighten(accentColor, 0.25), auraEmissiveBrush, 32, 110);
-        var note = new MeshBuilder(true, false);
-        note.AddEllipsoid(Vector3.Zero, 0.10f, 0.08f, 0.06f, 12, 8);
-        note.AddCylinder(new Vector3(0.08f, 0, 0), new Vector3(0.08f, 0.26f, 0), 0.022f, 8);
-        note.AddBox(new Vector3(0.14f, 0.23f, 0), 0.12f, 0.05f, 0.03f);
-        var noteMesh = GetSharedMesh(note.ToMesh());
+        var baseColor = Lighten(accentColor, 0.25);
 
-        var star = new MeshBuilder(true, false);
-        star.AddOctahedron(Vector3.Zero, Vector3.UnitY, Vector3.UnitZ, 0.12f, 0.12f);
-        var starMesh = GetSharedMesh(star.ToMesh());
+        WpfMeshGeometry3D noteMesh;
+        if (externalNoteMesh is not null)
+        {
+            noteMesh = externalNoteMesh;
+        }
+        else
+        {
+            var note = new MeshBuilder(true, false);
+            note.AddEllipsoid(Vector3.Zero, 0.10f, 0.08f, 0.06f, 12, 8);
+            note.AddCylinder(new Vector3(0.08f, 0, 0), new Vector3(0.08f, 0.26f, 0), 0.022f, 8);
+            note.AddBox(new Vector3(0.14f, 0.23f, 0), 0.12f, 0.05f, 0.03f);
+            noteMesh = GetSharedMesh(note.ToMesh());
+        }
+
+        WpfMeshGeometry3D starMesh;
+        if (externalStarMesh is not null)
+        {
+            starMesh = externalStarMesh;
+        }
+        else
+        {
+            var star = new MeshBuilder(true, false);
+            star.AddOctahedron(Vector3.Zero, Vector3.UnitY, Vector3.UnitZ, 0.12f, 0.12f);
+            starMesh = GetSharedMesh(star.ToMesh());
+        }
 
         var triangles = 0;
-        var particles = new MusicParticleHandle[6];
+        var particles = new MusicParticleHandle[particleCount];
         for (var i = 0; i < particles.Length; i++)
         {
+            var tintBrush = new SolidColorBrush(Color.FromArgb(0, baseColor.R, baseColor.G, baseColor.B));
+            var emissiveBrush = new SolidColorBrush(Color.FromArgb(0, baseColor.R, baseColor.G, baseColor.B));
+            var particleMaterial = CreateClayMaterial(tintBrush, emissiveBrush, 32, 110);
+
             var scale = new ScaleTransform3D(0, 0, 0);
             var rotation = new AxisAngleRotation3D(new Vector3D(0, 1, 0), 0);
             var translation = new TranslateTransform3D(0, 0, 0);
@@ -612,8 +680,18 @@ public sealed class ProceduralPetMeshFactory : IPetMeshFactory
             transform.Children.Add(new RotateTransform3D(rotation));
             transform.Children.Add(translation);
 
-            triangles += AddGeometry(rootGroup, i % 2 == 0 ? noteMesh : starMesh, material, transform);
-            particles[i] = new MusicParticleHandle { Scale = scale, Translate = translation, Rotation = rotation };
+            var isNote = i % 2 == 0;
+            triangles += AddGeometry(rootGroup, isNote ? noteMesh : starMesh, particleMaterial, transform);
+            particles[i] = new MusicParticleHandle
+            {
+                Scale = scale,
+                Translate = translation,
+                Rotation = rotation,
+                TintBrush = tintBrush,
+                EmissiveBrush = emissiveBrush,
+                BaseColor = baseColor,
+                ParticleKind = isNote ? "note" : "star"
+            };
         }
 
         return (triangles, particles);
@@ -743,14 +821,18 @@ public sealed class ProceduralPetMeshFactory : IPetMeshFactory
         return (tris, eyeBlinkScale);
     }
 
-    private int BuildHeadAccessory(
+    internal int BuildHeadAccessory(
         Model3DGroup parent,
         string accessoryId,
         float socketY,
         float headRadiusX,
-        Color accentColor)
+        Color accentColor,
+        SolidColorBrush? sharedAccentBrush = null)
     {
         var tris = 0;
+        var accentMat = sharedAccentBrush is not null
+            ? CreateClayMaterial(sharedAccentBrush, null, 22, 85)
+            : CreateClayMaterial(accentColor, null, 22, 85);
 
         switch (accessoryId)
         {
@@ -777,19 +859,20 @@ public sealed class ProceduralPetMeshFactory : IPetMeshFactory
 
             case "ribbon":
             {
-                var ribbonMat = CreateClayMaterial(accentColor, null, 22, 85);
                 var ribMb = new MeshBuilder(true, false);
                 ribMb.AddSphere(new Vector3(0, socketY + 0.05f, 0.12f), 0.11f, 16, 12);
                 ribMb.AddEllipsoid(new Vector3(-0.24f, socketY + 0.09f, 0.10f), 0.22f, 0.14f, 0.09f, 18, 12);
                 ribMb.AddEllipsoid(new Vector3(0.24f, socketY + 0.09f, 0.10f), 0.22f, 0.14f, 0.09f, 18, 12);
-                tris += AddGeometry(parent, ribMb, ribbonMat);
+                tris += AddGeometry(parent, ribMb, accentMat);
                 break;
             }
 
             case "headset":
             {
                 var bandMat = CreateClayMaterial(Color.FromRgb(56, 62, 78), null, 30, 100);
-                var cupMat = CreateClayMaterial(accentColor, null, 24, 90);
+                var cupMat = sharedAccentBrush is not null
+                    ? CreateClayMaterial(sharedAccentBrush, null, 24, 90)
+                    : CreateClayMaterial(accentColor, null, 24, 90);
 
                 var bandPoints = new List<Vector3>();
                 const int segs = 22;
@@ -832,7 +915,9 @@ public sealed class ProceduralPetMeshFactory : IPetMeshFactory
             case "crown":
             {
                 var goldMat = CreateClayMaterial(Color.FromRgb(255, 212, 82), new SolidColorBrush(Color.FromRgb(42, 32, 6)), 38, 130);
-                var gemMat = CreateClayMaterial(accentColor, null, 44, 140);
+                var gemMat = sharedAccentBrush is not null
+                    ? CreateClayMaterial(sharedAccentBrush, null, 44, 140)
+                    : CreateClayMaterial(accentColor, null, 44, 140);
 
                 var crownMb = new MeshBuilder(true, false);
                 AddRingTube(crownMb, new Vector3(0, socketY + 0.02f, 0), radius: 0.34f, tubeDiameter: 0.11f, segments: 24);
@@ -856,7 +941,7 @@ public sealed class ProceduralPetMeshFactory : IPetMeshFactory
         return tris;
     }
 
-    private int BuildAuraEffect(
+    internal (int Triangles, SolidColorBrush? AuraDiffuseBrush) BuildAuraEffect(
         Model3DGroup parent,
         string auraId,
         Color accentColor,
@@ -865,7 +950,9 @@ public sealed class ProceduralPetMeshFactory : IPetMeshFactory
         var tris = 0;
         var softColor = Lighten(accentColor, 0.35);
         // 캐릭터 얼굴을 가리지 않고 은은하게 어우러지는 반투명 파스텔 오라 재질
-        var auraMat = CreateTranslucentAuraMaterial(Color.FromArgb(135, softColor.R, softColor.G, softColor.B), auraEmissiveBrush);
+        var auraDiffuseBrush = new SolidColorBrush(Color.FromArgb(135, softColor.R, softColor.G, softColor.B));
+        var auraMat = CreateTranslucentAuraMaterial(auraDiffuseBrush, auraEmissiveBrush);
+        SolidColorBrush? trackableDiffuseBrush = null;
 
         switch (auraId)
         {
@@ -875,6 +962,7 @@ public sealed class ProceduralPetMeshFactory : IPetMeshFactory
                 var ringMb = new MeshBuilder(true, false);
                 AddRingTube(ringMb, new Vector3(0, -0.78f, 0), radius: 1.24f, tubeDiameter: 0.030f, segments: 42);
                 tris += AddGeometry(parent, ringMb, auraMat);
+                trackableDiffuseBrush = auraDiffuseBrush;
                 break;
             }
 
@@ -895,13 +983,14 @@ public sealed class ProceduralPetMeshFactory : IPetMeshFactory
                 }
 
                 tris += AddGeometry(parent, noteMb, auraMat);
+                trackableDiffuseBrush = auraDiffuseBrush;
                 break;
             }
 
             case "snowflakes":
             {
                 // 작고 차분한 반투명 눈결정 4개
-                var snowMat = CreateTranslucentAuraMaterial(Color.FromArgb(145, 224, 244, 255), auraEmissiveBrush);
+                var snowMat = CreateTranslucentAuraMaterial(new SolidColorBrush(Color.FromArgb(145, 224, 244, 255)), auraEmissiveBrush);
                 var snowMb = new MeshBuilder(true, false);
                 for (var i = 0; i < 4; i++)
                 {
@@ -917,13 +1006,13 @@ public sealed class ProceduralPetMeshFactory : IPetMeshFactory
             }
         }
 
-        return tris;
+        return (tris, trackableDiffuseBrush);
     }
 
-    private static MaterialGroup CreateTranslucentAuraMaterial(Color translucentColor, SolidColorBrush emissiveBrush)
+    internal static MaterialGroup CreateTranslucentAuraMaterial(SolidColorBrush diffuseBrush, SolidColorBrush emissiveBrush)
     {
         var group = new MaterialGroup();
-        group.Children.Add(new DiffuseMaterial(new SolidColorBrush(translucentColor)));
+        group.Children.Add(new DiffuseMaterial(diffuseBrush));
         group.Children.Add(new SpecularMaterial(new SolidColorBrush(Color.FromArgb(45, 255, 255, 255)), 18));
         group.Children.Add(new EmissiveMaterial(emissiveBrush));
         return group;
@@ -942,7 +1031,7 @@ public sealed class ProceduralPetMeshFactory : IPetMeshFactory
         mb.AddTube(pts, diameter: 0.052f, thetaDiv: 12, isTubeClosed: false);
     }
 
-    private static void AddRingTube(MeshBuilder mb, Vector3 center, float radius, float tubeDiameter, int segments)
+    internal static void AddRingTube(MeshBuilder mb, Vector3 center, float radius, float tubeDiameter, int segments)
     {
         var pts = new List<Vector3>(segments + 1);
         for (var i = 0; i <= segments; i++)
@@ -957,10 +1046,10 @@ public sealed class ProceduralPetMeshFactory : IPetMeshFactory
         mb.AddTube(pts, diameter: tubeDiameter, thetaDiv: 14, isTubeClosed: true);
     }
 
-    private int AddGeometry(Model3DGroup group, MeshBuilder builder, Material material, Transform3D? transform = null)
+    internal int AddGeometry(Model3DGroup group, MeshBuilder builder, Material material, Transform3D? transform = null)
         => AddGeometry(group, GetSharedMesh(builder.ToMesh()), material, transform);
 
-    private static int AddGeometry(Model3DGroup group, WpfMeshGeometry3D mesh, Material material, Transform3D? transform)
+    internal static int AddGeometry(Model3DGroup group, WpfMeshGeometry3D mesh, Material material, Transform3D? transform)
     {
         var model = new GeometryModel3D(mesh, material)
         {
@@ -976,7 +1065,7 @@ public sealed class ProceduralPetMeshFactory : IPetMeshFactory
         return mesh.TriangleIndices.Count / 3;
     }
 
-    private WpfMeshGeometry3D GetSharedMesh(HelixMeshGeometry3D source)
+    internal WpfMeshGeometry3D GetSharedMesh(HelixMeshGeometry3D source)
     {
         var hash = new HashCode();
         hash.Add(source.Positions.Count);
@@ -1101,10 +1190,13 @@ public sealed class ProceduralPetMeshFactory : IPetMeshFactory
         return wpfMesh;
     }
 
-    private static MaterialGroup CreateClayMaterial(Color baseColor, SolidColorBrush? emissiveBrush, double specularPower, byte specularAlpha = 90)
+    internal static MaterialGroup CreateClayMaterial(Color baseColor, SolidColorBrush? emissiveBrush, double specularPower, byte specularAlpha = 90)
+        => CreateClayMaterial(new SolidColorBrush(baseColor), emissiveBrush, specularPower, specularAlpha);
+
+    internal static MaterialGroup CreateClayMaterial(SolidColorBrush diffuseBrush, SolidColorBrush? emissiveBrush, double specularPower, byte specularAlpha = 90)
     {
         var group = new MaterialGroup();
-        group.Children.Add(new DiffuseMaterial(new SolidColorBrush(baseColor)));
+        group.Children.Add(new DiffuseMaterial(diffuseBrush));
         group.Children.Add(new SpecularMaterial(new SolidColorBrush(Color.FromArgb(specularAlpha, 255, 255, 255)), specularPower));
 
         if (emissiveBrush is not null)
@@ -1115,7 +1207,7 @@ public sealed class ProceduralPetMeshFactory : IPetMeshFactory
         return group;
     }
 
-    private static Color ParseHexColor(string? hex, Color fallback)
+    internal static Color ParseHexColor(string? hex, Color fallback)
     {
         if (string.IsNullOrWhiteSpace(hex))
         {
@@ -1136,7 +1228,7 @@ public sealed class ProceduralPetMeshFactory : IPetMeshFactory
         return fallback;
     }
 
-    private static Color Lighten(Color c, double factor)
+    internal static Color Lighten(Color c, double factor)
     {
         var r = (byte)Math.Clamp(c.R + (255 - c.R) * factor, 0, 255);
         var g = (byte)Math.Clamp(c.G + (255 - c.G) * factor, 0, 255);
@@ -1144,7 +1236,7 @@ public sealed class ProceduralPetMeshFactory : IPetMeshFactory
         return Color.FromRgb(r, g, b);
     }
 
-    private static Color Darken(Color c, double factor)
+    internal static Color Darken(Color c, double factor)
     {
         var r = (byte)Math.Clamp(c.R * (1.0 - factor), 0, 255);
         var g = (byte)Math.Clamp(c.G * (1.0 - factor), 0, 255);

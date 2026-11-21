@@ -15,6 +15,10 @@ public partial class OnboardingWindow : Window
     private readonly OnboardingViewModel _viewModel;
     private readonly IPetMeshFactory _meshFactory;
     private readonly PetAnimationController _previewAnimator = new();
+    private PetRigHandle? _currentRig;
+
+    private static readonly TimeSpan ActivePreviewInterval = TimeSpan.FromMilliseconds(16);
+    private static readonly TimeSpan IdlePreviewInterval = TimeSpan.FromMilliseconds(33);
 
     private readonly AxisAngleRotation3D _turntableYaw = new(new Vector3D(0, 1, 0), 0);
     private readonly AxisAngleRotation3D _turntablePitch = new(new Vector3D(1, 0, 0), 8);
@@ -57,6 +61,10 @@ public partial class OnboardingWindow : Window
         Closed += (_, _) =>
         {
             _renderTimer.Stop();
+            _previewAnimator.DetachRig();
+            PreviewPetVisual.Content = null;
+            PreviewLightsVisual.Content = null;
+            _currentRig = null;
             _viewModel.AppearancePreviewChanged -= OnAppearancePreviewChanged;
             _viewModel.ProfileSaved -= OnProfileSaved;
         };
@@ -78,13 +86,31 @@ public partial class OnboardingWindow : Window
 
     private void RebuildPreviewMesh(PetAppearance appearance)
     {
+        var structureSig = PetRigHandle.BuildStructureSignature(appearance);
+        if (_currentRig is not null &&
+            string.Equals(_currentRig.AppearanceStructureSignature, structureSig, StringComparison.Ordinal))
+        {
+            _currentRig.UpdateColors(appearance.BodyColorHex, appearance.AccentColorHex);
+            _previewAnimator.UpdateAccentColor(appearance.AccentColorHex);
+            return;
+        }
+
         var rig = _meshFactory.BuildPetRig(appearance);
+        _currentRig = rig;
         PreviewPetVisual.Content = rig.RootModel;
         _previewAnimator.AttachRig(rig, appearance.AccentColorHex);
     }
 
     private void OnRenderTick(object? sender, EventArgs e)
     {
+        var isActive = _isRotating || _viewModel.AutoRotatePreview || _viewModel.IsRhythmPreviewEnabled
+                       || _viewModel.IsTypingPreviewEnabled || _previewAnimator.HasInteractiveMotion;
+        var desiredInterval = isActive ? ActivePreviewInterval : IdlePreviewInterval;
+        if (_renderTimer.Interval != desiredInterval)
+        {
+            _renderTimer.Interval = desiredInterval;
+        }
+
         var now = _frameClock.Elapsed.TotalSeconds;
         var dt = now - _lastTimestamp;
         _lastTimestamp = now;

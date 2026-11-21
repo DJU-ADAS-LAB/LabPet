@@ -4,9 +4,10 @@ using LabPet.Shared.Models;
 namespace LabPet.Client.Rendering;
 
 /// <summary>
-/// 60fps UI 타이머에서 호출되어 3D 리그의 Transform3D와 EmissiveMaterial만 저부하 갱신하는 컨트롤러.
-/// 시선 추적(Look-At), 대기 호흡/부유, 쓰다듬기/어지러움 반응,
-/// 캐릭터별 부드러운 오디오 리듬 댄스 및 타이핑 앞발 모션을 담당한다.
+/// 60fps/유휴 UI 타이머에서 호출되어 3D 리그의 Transform3D와 Material 색상만 저부하 갱신하는 컨트롤러.
+/// - 8종 재사용 모션 클립 + 종별 움직임 프로파일 차별화
+/// - SmoothStep 클립 크로스페이드, 지수 감쇠 관성 보간(dt 독립), 비트 과장 억제 쿨다운
+/// - 시선 추적(Look-At), 자동 눈 깜빡임, 타이핑 앞발/날개 모션, 풀링 3D 이펙트 파티클 알파 페이드 제어
 /// </summary>
 public sealed class PetAnimationController
 {
@@ -14,29 +15,32 @@ public sealed class PetAnimationController
     {
         public bool Active;
         public double Age;
-        public double Lifetime = 1.1;
+        public double Lifetime = 1.15;
         public double StartX;
         public double StartY;
         public double StartZ;
         public double VelX;
         public double VelY;
         public double VelZ;
+        public double SwirlPhase;
+        public double MaxScale = 0.92;
     }
 
     private PetRigHandle? _rig;
+    private SpeciesMotionProfile _speciesProfile = SpeciesMotionProfile.Mochi;
     private double _elapsedSeconds;
 
-    // 위상 점프(떨림) 없이 속도가 부드럽게 변하도록 누적 위상 사용
+    // 누적 위상 (위상 점프 없이 부드럽게 속도 변화)
     private double _dancePhase;
     private double _tailPhase;
     private double _auraPhase;
 
-    // 자연스러운 자동 눈 깜빡임 상태
+    // 자연스러운 자동 눈 깜빡임
     private double _nextBlinkInSeconds = 2.6;
     private double _blinkProgress = -1.0;
     private readonly Random _rng = new();
 
-    // 보간된 시선 추적 값 (-1.0 ~ +1.0)
+    // 보간된 시선 추적 (-1.0 ~ +1.0)
     private double _currentLookX;
     private double _currentLookY;
 
@@ -44,7 +48,7 @@ public sealed class PetAnimationController
     private double _petReactionTime;
     private double _dizzyReactionTime;
 
-    // 비트 펄스 및 3종 캐릭터 키보드 타이핑 자세·타건 상태
+    // 비트 펄스 및 타이핑 자세/교대 타건 상태
     private double _beatPulse;
     private double _leftPawTapTime;
     private double _rightPawTapTime;
@@ -53,35 +57,62 @@ public sealed class PetAnimationController
     private int _nextPawParity;
     private int _pendingPawTaps;
 
-    // 스레드 안전 오디오 대역 목표값 + 부드러운 보간값
+    // 스레드 안전 오디오/네트워크 스냅샷 + 감쇠 보간
     private volatile float _targetBass;
     private volatile float _targetMid;
     private volatile float _targetTreble;
     private volatile bool _pendingBeat;
+    private long _lastSnapshotTimestampTicks;
     private double _smoothBass;
     private double _smoothMid;
     private double _smoothTreble;
+    private double _musicWeight;
 
-    // 솜구름 풀링 3D 음표/별 파티클 상태
+    // 모션 클립 전환 및 크로스페이드 상태
+    private PetMotionClipKind _currentClip = PetMotionClipKind.Idle;
+    private PetMotionClipKind _previousClip = PetMotionClipKind.Idle;
+    private double _clipBlend = 1.0;
+    private double _clipHoldSeconds;
+    private double _beatClipSwitchCooldown;
+    private int _clipCycleCursor;
+    private PetPose _smoothedPose = PetPose.Identity;
+
+    // 풀링 3D 음표/별 이펙트 파티클 상태 (할당 0 재사용)
     private ParticleState[] _particleStates = [];
     private int _particleSpawnCursor;
     private double _particleEmitCooldown;
 
     private Color _emissiveAccentColor = Color.FromRgb(255, 158, 181);
 
+    public PetMotionClipKind CurrentMotionClip => _currentClip;
+
     internal bool HasInteractiveMotion =>
         _petReactionTime > 0 || _dizzyReactionTime > 0 || _typingStanceHoldTime > 0
-        || _typingStanceWeight > 0.01 || Volatile.Read(ref _pendingPawTaps) > 0;
+        || _typingStanceWeight > 0.01 || Volatile.Read(ref _pendingPawTaps) > 0
+        || _musicWeight > 0.02 || HasActiveParticles();
 
     public void AttachRig(PetRigHandle rig, string accentHex)
     {
         _rig = rig;
+        _speciesProfile = SpeciesMotionProfile.ForSpecies(rig.SpeciesId);
+        _currentClip = PetMotionClipKind.Idle;
+        _previousClip = PetMotionClipKind.Idle;
+        _clipBlend = 1.0;
+        _clipHoldSeconds = 0.0;
+        _smoothedPose = PetPose.Identity;
+
         _particleStates = new ParticleState[rig.MusicParticles.Count];
         for (var i = 0; i < _particleStates.Length; i++)
         {
             _particleStates[i] = new ParticleState();
         }
 
+        UpdateAccentColor(accentHex);
+    }
+
+    /// <summary>리그를 재생성하지 않고 발광 포인트 색상만 즉시 갱신한다.</summary>
+    public void UpdateAccentColor(string accentHex)
+    {
         try
         {
             if (ColorConverter.ConvertFromString(accentHex) is Color c)
@@ -101,21 +132,26 @@ public sealed class PetAnimationController
         _particleStates = [];
     }
 
-    /// <summary>쓰다듬기 3D 반응(부피 보존형 점프 + 발광)을 트리거한다.</summary>
-    public void TriggerPetReaction() => _petReactionTime = 0.85;
+    /// <summary>쓰다듬기/기쁨 3D 반응(부피 보존형 점프 + 발광 + 별 파티클 버스트)을 트리거한다.</summary>
+    public void TriggerPetReaction()
+    {
+        _petReactionTime = 0.90;
+        EmitReactionStarBurst(count: 3);
+    }
 
     /// <summary>창을 빠르게 좌우로 흔들었을 때 어지러움 3D 반응을 트리거한다.</summary>
     public void TriggerDizzyReaction() => _dizzyReactionTime = 1.4;
 
-    /// <summary>키보드 타이핑 시 치비 고양이 앞발 두드리기 모션을 스레드 안전하게 요청한다.</summary>
+    /// <summary>키보드 타이핑 시 앞발/팔/날개 두드리기 모션을 스레드 안전하게 요청한다.</summary>
     public void TriggerTypingPawTap() => Interlocked.Increment(ref _pendingPawTaps);
 
-    /// <summary>오디오/네트워크 스냅샷을 갱신한다.</summary>
+    /// <summary>로컬 오디오/네트워크 수신 스냅샷을 갱신한다.</summary>
     public void UpdateAudioSnapshot(float bass, float mid, float treble, bool isBeat = false)
     {
         _targetBass = Math.Clamp(bass, 0f, 1f);
         _targetMid = Math.Clamp(mid, 0f, 1f);
         _targetTreble = Math.Clamp(treble, 0f, 1f);
+        Interlocked.Exchange(ref _lastSnapshotTimestampTicks, Environment.TickCount64);
         if (isBeat)
         {
             _pendingBeat = true;
@@ -130,32 +166,45 @@ public sealed class PetAnimationController
             return;
         }
 
-        deltaSeconds = Math.Clamp(deltaSeconds, 0.001, 0.05);
+        deltaSeconds = Math.Clamp(deltaSeconds, 0.001, 0.06);
         _elapsedSeconds += deltaSeconds;
 
-        // 부드러운 시선 추적 보간
-        var lookLerp = Math.Min(1.0, deltaSeconds * 7.5);
+        // 네트워크 패킷 지연·유실 방어: 350ms 이상 새 스냅샷이 안 오면 부드럽게 무음 목표치로 감쇠
+        var ageMs = Environment.TickCount64 - Interlocked.Read(ref _lastSnapshotTimestampTicks);
+        var rawBass = _targetBass;
+        var rawMid = _targetMid;
+        var rawTreble = _targetTreble;
+        if (ageMs > 350)
+        {
+            var staleFade = Math.Clamp(1.0 - (ageMs - 350) / 700.0, 0.0, 1.0);
+            rawBass *= (float)staleFade;
+            rawMid *= (float)staleFade;
+            rawTreble *= (float)staleFade;
+        }
+
+        // 시선 추적 지수 보간 (프레임 시간 독립)
+        var lookLerp = 1.0 - Math.Exp(-8.0 * deltaSeconds);
         _currentLookX += (Math.Clamp(targetLookX, -1.0, 1.0) - _currentLookX) * lookLerp;
         _currentLookY += (Math.Clamp(targetLookY, -1.0, 1.0) - _currentLookY) * lookLerp;
 
-        // 오디오 대역 부드러운 어택/릴리스 보간 (급격한 튐 방지)
-        var audioLerp = Math.Min(1.0, deltaSeconds * 9.5);
-        _smoothBass += (_targetBass - _smoothBass) * audioLerp;
-        _smoothMid += (_targetMid - _smoothMid) * audioLerp;
-        _smoothTreble += (_targetTreble - _smoothTreble) * audioLerp;
+        // 비대칭 어택(빠른 반응) / 릴리스(부드러운 여운) 오디오 보간
+        _smoothBass += (rawBass - _smoothBass) * (1.0 - Math.Exp(-(rawBass > _smoothBass ? 14.0 : 5.5) * deltaSeconds));
+        _smoothMid += (rawMid - _smoothMid) * (1.0 - Math.Exp(-(rawMid > _smoothMid ? 13.0 : 5.5) * deltaSeconds));
+        _smoothTreble += (rawTreble - _smoothTreble) * (1.0 - Math.Exp(-(rawTreble > _smoothTreble ? 15.0 : 6.0) * deltaSeconds));
 
-        // 비트 펄스 부드러운 감쇠
+        var beatTriggeredThisFrame = false;
         if (_pendingBeat)
         {
             _pendingBeat = false;
             _beatPulse = 1.0;
+            beatTriggeredThisFrame = true;
         }
         else
         {
-            _beatPulse = Math.Max(0.0, _beatPulse - deltaSeconds * 4.2);
+            _beatPulse = Math.Max(0.0, _beatPulse - deltaSeconds * 3.8);
         }
 
-        // 키보드 타이핑 요청 소비 (3종 캐릭터 공통 미니 키보드 자세 + 좌/우 교대 타건)
+        // 키보드 타이핑 자세 및 좌/우 교대 타건
         var taps = Interlocked.Exchange(ref _pendingPawTaps, 0);
         if (taps > 0)
         {
@@ -172,22 +221,20 @@ public sealed class PetAnimationController
 
         _typingStanceHoldTime = Math.Max(0, _typingStanceHoldTime - deltaSeconds);
         var stanceTarget = _typingStanceHoldTime > 0 ? 1.0 : 0.0;
-        var stanceSpeed = stanceTarget > _typingStanceWeight ? 14.0 : 5.5;
-        _typingStanceWeight += (stanceTarget - _typingStanceWeight) * Math.Min(1.0, deltaSeconds * stanceSpeed);
+        var stanceDamp = stanceTarget > _typingStanceWeight ? 14.0 : 5.5;
+        _typingStanceWeight += (stanceTarget - _typingStanceWeight) * (1.0 - Math.Exp(-stanceDamp * deltaSeconds));
         var stance = _typingStanceWeight;
 
         _leftPawTapTime = Math.Max(0, _leftPawTapTime - deltaSeconds);
         _rightPawTapTime = Math.Max(0, _rightPawTapTime - deltaSeconds);
 
-        // 타건 곡선: 살짝 들어 올렸다 키보드를 콕 내려찍는 실제 타자 모션
         var leftTapWave = _leftPawTapTime > 0 ? Math.Sin((_leftPawTapTime / 0.17) * Math.PI) : 0.0;
         var rightTapWave = _rightPawTapTime > 0 ? Math.Sin((_rightPawTapTime / 0.17) * Math.PI) : 0.0;
         var leftStrike = ComputeKeyStrikeOffset(_leftPawTapTime, 0.17);
         var rightStrike = ComputeKeyStrikeOffset(_rightPawTapTime, 0.17);
         var anyTapWave = Math.Max(leftTapWave, rightTapWave);
-        var signedTap = rightTapWave - leftTapWave; // 왼쪽 타자: -1, 오른쪽 타자: +1
+        var signedTap = rightTapWave - leftTapWave;
 
-        // 3D 미니 키보드 팝인/팝아웃
         if (rig.TypingKeyboardScale is not null)
         {
             var kbScale = stance < 0.01 ? 0.0 : stance;
@@ -200,138 +247,108 @@ public sealed class PetAnimationController
         var mid = _smoothMid;
         var treble = _smoothTreble;
         var beat = _beatPulse;
-        var groove = Math.Clamp((bass + mid) * 0.65, 0.0, 1.0);
+        var musicEnergy = Math.Clamp(bass * 0.45 + mid * 0.35 + treble * 0.20 + beat * 0.22, 0.0, 1.0);
 
-        // 누적 위상 갱신 (속도가 변해도 위상 점프 없이 매끄럽게 춤춤)
-        _dancePhase += deltaSeconds * (2.2 + groove * 2.4);
-        _tailPhase += deltaSeconds * (3.2 + groove * 2.8);
-        // 오라는 작업 중 시선을 방해하지 않도록 초당 12~22도로 차분하게 회전
-        _auraPhase = (_auraPhase + deltaSeconds * (12.0 + treble * 10.0)) % 360.0;
+        // 음악 시작/종료 부드러운 무게 전환
+        var musicTargetWeight = musicEnergy > 0.05 ? 1.0 : 0.0;
+        var musicFadeSpeed = musicTargetWeight > _musicWeight ? 5.2 : 2.1;
+        _musicWeight += (musicTargetWeight - _musicWeight) * (1.0 - Math.Exp(-musicFadeSpeed * deltaSeconds));
 
-        double scaleY = 1.0;
-        double offsetY = 0.0;
-        double bodyRoll = 0.0;
-        double headPitchExtra = 0.0;
-        double headRollExtra = 0.0;
-        double emissiveStrength = bass * 0.05 + beat * 0.05;
+        // 누적 위상 갱신
+        var grooveSpeed = 2.1 + musicEnergy * 2.5;
+        _dancePhase += deltaSeconds * grooveSpeed;
+        _tailPhase += deltaSeconds * (3.0 + musicEnergy * 2.8);
+        _auraPhase = (_auraPhase + deltaSeconds * (12.0 + treble * 10.0 + beat * 16.0)) % 360.0;
 
-        switch (rig.SpeciesId)
+        // 모션 클립 선택 및 크로스페이드 전환
+        UpdateMotionClipSelection(deltaSeconds, beatTriggeredThisFrame, musicEnergy, bass, mid, treble);
+
+        var idlePose = PetMotionClips.EvaluateClip(
+            PetMotionClipKind.Idle, _speciesProfile, _dancePhase, _tailPhase, _elapsedSeconds, 0, 0, 0, 0);
+
+        var currentMusicPose = _currentClip == PetMotionClipKind.Idle
+            ? idlePose
+            : PetMotionClips.EvaluateClip(_currentClip, _speciesProfile, _dancePhase, _tailPhase, _elapsedSeconds, bass, mid, treble, beat);
+
+        var blendedDancePose = currentMusicPose;
+        if (_clipBlend < 0.999)
         {
-            case PetSpeciesIds.FluffyCloud:
-            {
-                // 솜구름: 부드러운 사인파 공중 부유 + 타이핑 자세 시 키보드 쪽 집중 & 날개 타닥타닥
-                offsetY = Math.Sin(_elapsedSeconds * 2.1) * 0.14 * (1.0 - stance * 0.55) + bass * 0.15 + beat * 0.12 - stance * 0.06 + anyTapWave * 0.05;
-                scaleY = 1.0 + Math.Sin(_elapsedSeconds * 2.1 + 0.5) * 0.03 + bass * 0.08 + beat * 0.08 - anyTapWave * 0.035;
-                bodyRoll = Math.Sin(_elapsedSeconds * 1.3) * (3.5 + mid * 7.5) + signedTap * 5.5;
-                headPitchExtra = stance * 10.0 + anyTapWave * 4.5;
-                break;
-            }
-
-            case PetSpeciesIds.ChibiCat:
-            {
-                // 치비 고양이: 타이핑 시 미니 키보드 위에서 봉고캣처럼 양 앞발 교대 내려치기
-                var sway = Math.Sin(_dancePhase);
-                var bounce = Math.Abs(Math.Sin(_dancePhase));
-
-                offsetY = bounce * (0.04 + groove * 0.11) + beat * 0.07 + anyTapWave * 0.025;
-                scaleY = 1.0 + Math.Sin(_dancePhase * 2.0) * (0.02 + groove * 0.045) + beat * 0.045 - anyTapWave * 0.03;
-                bodyRoll = sway * (2.5 + groove * 7.5) + signedTap * 4.0;
-
-                headRollExtra = sway * (2.0 + groove * 5.0) + signedTap * 3.5;
-                headPitchExtra = Math.Sin(_dancePhase * 2.0) * (1.8 + groove * 4.5) + stance * 11.5 + anyTapWave * 5.5;
-
-                if (rig.LeftEarRotation is not null && rig.RightEarRotation is not null)
-                {
-                    var earTwitch = Math.Sin(_tailPhase * 1.2) * (2.5 + treble * 7.5) + beat * 6.5;
-                    rig.LeftEarRotation.Angle = 15.0 + earTwitch + leftTapWave * 8.0;
-                    rig.RightEarRotation.Angle = -15.0 - earTwitch - rightTapWave * 8.0;
-                }
-
-                if (rig.TailRotation is not null)
-                {
-                    rig.TailRotation.Angle = Math.Sin(_tailPhase) * (14.0 + groove * 16.0) + signedTap * 7.0;
-                }
-
-                UpdateFrontPaws(rig, groove, _dancePhase, stance, leftStrike, rightStrike,
-                    stanceLiftY: 0.08, stanceReachZ: 0.28, strikeHeight: 0.16);
-                break;
-            }
-
-            case PetSpeciesIds.FluffyPuppy:
-            {
-                // 솜뭉치 강아지: 살랑 바운스 + 신나게 빠른 꼬리 흔들기 + 처진 귀 펄럭임
-                // 타이핑 시 짧은 앞다리를 미니 키보드 위로 들어 올려 좌우 교대로 콕콕 두드림
-                var sway = Math.Sin(_dancePhase);
-                var bounce = Math.Abs(Math.Sin(_dancePhase));
-
-                offsetY = bounce * (0.03 + groove * 0.09) + beat * 0.06 + anyTapWave * 0.02;
-                scaleY = 1.0 + Math.Sin(_dancePhase * 2.0) * (0.015 + groove * 0.04) + beat * 0.04 - anyTapWave * 0.025;
-                bodyRoll = sway * (2.0 + groove * 6.0) + signedTap * 3.0;
-
-                headRollExtra = sway * (2.5 + groove * 5.0) + signedTap * 3.0;
-                headPitchExtra = Math.Sin(_dancePhase * 2.0) * (1.5 + groove * 4.0) + stance * 11.0 + anyTapWave * 5.0;
-
-                if (rig.LeftEarRotation is not null && rig.RightEarRotation is not null)
-                {
-                    // 처진 귀는 바깥쪽(왼쪽 귀 음수, 오른쪽 귀 양수)으로 펄럭임
-                    var earFlop = Math.Abs(Math.Sin(_tailPhase * 0.9)) * (2.0 + treble * 7.0) + beat * 6.0;
-                    rig.LeftEarRotation.Angle = -4.0 - earFlop - leftTapWave * 5.0;
-                    rig.RightEarRotation.Angle = 4.0 + earFlop + rightTapWave * 5.0;
-                }
-
-                if (rig.TailRotation is not null)
-                {
-                    rig.TailRotation.Angle = Math.Sin(_tailPhase * 2.2) * (18.0 + groove * 14.0) + signedTap * 6.0;
-                }
-
-                UpdateFrontPaws(rig, groove, _dancePhase, stance, leftStrike, rightStrike,
-                    stanceLiftY: 0.18, stanceReachZ: 0.30, strikeHeight: 0.12);
-                break;
-            }
-
-            default:
-            {
-                // 말랑 모찌 정령: 좌우 살랑 바운스 + 타이핑 자세 시 앞쪽 키보드 집중 & 양팔 교대 타건
-                var sway = Math.Sin(_dancePhase);
-                var bounce = Math.Abs(Math.Sin(_dancePhase));
-
-                offsetY = bounce * (0.04 + bass * 0.13) + beat * 0.10 + anyTapWave * 0.04;
-                scaleY = 1.0 + Math.Sin(_dancePhase * 2.0 - 0.4) * (0.035 + bass * 0.065) + beat * 0.06 - anyTapWave * 0.05;
-                bodyRoll = sway * (3.0 + groove * 8.5) + signedTap * 5.0;
-                headRollExtra = sway * (1.5 + groove * 3.5) + signedTap * 3.5;
-                headPitchExtra = stance * 10.5 + anyTapWave * 4.5;
-                emissiveStrength += beat * 0.03;
-                break;
-            }
+            _clipBlend = Math.Min(1.0, _clipBlend + deltaSeconds / 0.42);
+            var prevPose = PetMotionClips.EvaluateClip(
+                _previousClip, _speciesProfile, _dancePhase, _tailPhase, _elapsedSeconds, bass, mid, treble, beat);
+            blendedDancePose = PetPose.Lerp(in prevPose, in currentMusicPose, PetMotionClips.SmoothStep(_clipBlend));
         }
 
-        // 3종 캐릭터 공통: 댄스/음악 반응 시 3D 음표·별 파티클 방출
-        UpdateMusicParticles(rig, deltaSeconds, bass, treble, beat);
+        // 음악 비중(_musicWeight)에 따라 대기(Idle) <-> 댄스 블렌딩 후 관성 감쇠 적용
+        var targetPose = PetPose.Lerp(in idlePose, in blendedDancePose, _musicWeight);
+        var poseDamp = 1.0 - Math.Exp(-14.0 * deltaSeconds);
+        _smoothedPose = PetPose.Lerp(in _smoothedPose, in targetPose, poseDamp);
 
-        // 미니 팔/날개 살랑임 + 타이핑 시 앞쪽 키보드를 향해 교대로 타닥타닥 내려치기
+        var p = _smoothedPose;
+        var offsetX = p.BodyOffsetX * (1.0 - stance * 0.7);
+        var offsetY = p.BodyOffsetY + anyTapWave * 0.03;
+        var scaleY = p.BodyScaleY - anyTapWave * 0.035;
+        var bodyRoll = p.BodyRoll * (1.0 - stance * 0.5) + signedTap * 4.0;
+        var bodyYawExtra = p.BodyYaw * (1.0 - stance * 0.75);
+        var bodyPitchExtra = p.BodyPitch * (1.0 - stance * 0.7);
+        var headYawExtra = p.HeadYaw * (1.0 - stance * 0.8);
+        var headPitchExtra = p.HeadPitch + stance * 11.0 + anyTapWave * 5.0;
+        var headRollExtra = p.HeadRoll + signedTap * 3.2;
+        var emissiveStrength = p.EmissiveBoost + bass * 0.04 + beat * 0.045;
+
+        // 귀 적용 (rig.json / 종별 기본 각도 기반)
+        if (rig.LeftEarRotation is not null && rig.RightEarRotation is not null)
+        {
+            rig.LeftEarRotation.Angle = rig.LeftEarBaseAngle + p.LeftEarOffset + leftTapWave * (_speciesProfile.OutwardFlopEars ? -5.0 : 8.0);
+            rig.RightEarRotation.Angle = rig.RightEarBaseAngle + p.RightEarOffset + rightTapWave * (_speciesProfile.OutwardFlopEars ? 5.0 : -8.0);
+        }
+
+        // 꼬리 적용
+        if (rig.TailRotation is not null)
+        {
+            rig.TailRotation.Angle = p.TailAngle + signedTap * 6.5;
+        }
+
+        // 앞발 (모션 클립 춤 + 타이핑 교대 타건 블렌딩)
+        if (rig.LeftPawTranslate is not null && rig.RightPawTranslate is not null)
+        {
+            var proceduralStandingPuppy = rig.SpeciesId == PetSpeciesIds.FluffyPuppy && !rig.IsExternalAsset;
+            var liftY = proceduralStandingPuppy ? 0.18 : 0.08;
+            var reachZ = proceduralStandingPuppy ? 0.30 : 0.25;
+            var strikeHeight = proceduralStandingPuppy ? 0.12 : 0.14;
+
+            rig.LeftPawTranslate.OffsetY = stance * liftY + leftStrike * strikeHeight + p.LeftPawY * (1.0 - stance);
+            rig.LeftPawTranslate.OffsetZ = stance * reachZ + p.LeftPawZ * (1.0 - stance);
+            rig.RightPawTranslate.OffsetY = stance * liftY + rightStrike * strikeHeight + p.RightPawY * (1.0 - stance);
+            rig.RightPawTranslate.OffsetZ = stance * reachZ + p.RightPawZ * (1.0 - stance);
+        }
+
+        // 미니 팔/날개 (모션 클립 + 쓰다듬기 반응 + 타이핑 타건)
         if (rig.LeftArmRotation is not null && rig.RightArmRotation is not null)
         {
-            var armSwing = Math.Sin(_dancePhase * 1.4) * (8.0 + groove * 18.0) * (1.0 - stance * 0.7) + (_petReactionTime > 0 ? 18.0 : 0.0);
+            var reactionLift = _petReactionTime > 0 ? 18.0 * (_petReactionTime / 0.90) : 0.0;
             var stanceInward = stance * 28.0;
-            rig.LeftArmRotation.Angle = -armSwing + stanceInward - leftStrike * 26.0;
-            rig.RightArmRotation.Angle = armSwing - stanceInward + rightStrike * 26.0;
+            rig.LeftArmRotation.Angle = p.LeftArmRoll * (1.0 - stance * 0.7) + reactionLift + stanceInward - leftStrike * 26.0;
+            rig.RightArmRotation.Angle = p.RightArmRoll * (1.0 - stance * 0.7) - reactionLift - stanceInward + rightStrike * 26.0;
         }
 
         if (rig.LeftArmPitch is not null && rig.RightArmPitch is not null)
         {
-            // X축 회전으로 팔/날개가 앞쪽 아래 미니 키보드를 향해 콕콕 두드림
-            rig.LeftArmPitch.Angle = stance * 24.0 - leftStrike * 34.0;
-            rig.RightArmPitch.Angle = stance * 24.0 - rightStrike * 34.0;
+            rig.LeftArmPitch.Angle = p.LeftArmPitch * (1.0 - stance * 0.7) + stance * 24.0 - leftStrike * 34.0;
+            rig.RightArmPitch.Angle = p.RightArmPitch * (1.0 - stance * 0.7) + stance * 24.0 - rightStrike * 34.0;
         }
 
-        // 자연스러운 자동 눈 깜빡임 (2.4~5.2초 주기, 0.15초 지속)
+        // 풀링 3D 이펙트 파티클 갱신 (음표/별 알파 페이드 및 반응 버스트)
+        UpdateMusicParticles(rig, deltaSeconds, bass, treble, beat);
+
+        // 자연스러운 자동 눈 깜빡임
         UpdateAutoBlink(rig, deltaSeconds);
 
-        // 쓰다듬기 반응
+        // 쓰다듬기/기쁨 반응 오버레이
         if (_petReactionTime > 0)
         {
             _petReactionTime = Math.Max(0, _petReactionTime - deltaSeconds);
-            var t = 1.0 - (_petReactionTime / 0.85);
+            var t = 1.0 - (_petReactionTime / 0.90);
             var bounce = Math.Sin(t * Math.PI * 2.5) * Math.Exp(-t * 2.2);
             scaleY += bounce * 0.20;
             offsetY += Math.Max(0, Math.Sin(t * Math.PI)) * 0.24;
@@ -339,7 +356,7 @@ public sealed class PetAnimationController
             emissiveStrength = Math.Max(emissiveStrength, (1.0 - t) * 0.16);
         }
 
-        // 어지러움(빠른 흔들기) 반응
+        // 어지러움(빠른 흔들기) 반응 오버레이
         var dizzyYaw = 0.0;
         if (_dizzyReactionTime > 0)
         {
@@ -350,30 +367,32 @@ public sealed class PetAnimationController
             headRollExtra += Math.Cos(_elapsedSeconds * 22.0) * 14.0 * decay;
         }
 
-        // 부피 보존형 Squash & Stretch: X/Z는 Y의 역제곱근으로 반비례 팽창/수축 (과도한 찌그러짐 방지)
-        scaleY = Math.Clamp(scaleY, 0.82, 1.24);
+        // 부피 보존형 Squash & Stretch 및 안전 클램프 (급격한 튐·창 경계 이탈 방지)
+        scaleY = Math.Clamp(scaleY, 0.80, 1.24);
         var scaleXZ = 1.0 / Math.Sqrt(scaleY);
 
         rig.BodyScale.ScaleX = scaleXZ;
         rig.BodyScale.ScaleY = scaleY;
         rig.BodyScale.ScaleZ = scaleXZ;
 
-        rig.BodyTranslate.OffsetY = offsetY;
-        rig.BodyYaw.Angle = _currentLookX * 14.0 * (1.0 - stance * 0.65) + dizzyYaw;
-        rig.BodyPitch.Angle = _currentLookY * 8.0 * (1.0 - stance * 0.7) + stance * 4.5;
-        rig.BodyRoll.Angle = bodyRoll;
+        rig.BodyTranslate.OffsetX = Math.Clamp(offsetX, -0.25, 0.25);
+        rig.BodyTranslate.OffsetY = Math.Clamp(offsetY, -0.15, 0.45);
+        rig.BodyTranslate.OffsetZ = Math.Clamp(p.BodyOffsetZ, -0.15, 0.15);
 
-        // 바닥 접지 그림자: 펫이 높게 뜰수록 은은하게 작아져 공간감 강화
+        rig.BodyYaw.Angle = _currentLookX * 14.0 * (1.0 - stance * 0.65) + bodyYawExtra + dizzyYaw;
+        rig.BodyPitch.Angle = _currentLookY * 8.0 * (1.0 - stance * 0.7) + stance * 4.5 + bodyPitchExtra;
+        rig.BodyRoll.Angle = Math.Clamp(bodyRoll, -26.0, 26.0);
+
         if (rig.ShadowScale is not null)
         {
-            var shadowFactor = Math.Clamp(1.0 - offsetY * 0.42, 0.68, 1.08);
+            var shadowFactor = Math.Clamp(1.0 - rig.BodyTranslate.OffsetY * 0.42, 0.68, 1.08);
             rig.ShadowScale.ScaleX = shadowFactor;
             rig.ShadowScale.ScaleZ = shadowFactor;
         }
 
-        rig.HeadYaw.Angle = _currentLookX * 18.0;
+        rig.HeadYaw.Angle = _currentLookX * 18.0 + headYawExtra;
         rig.HeadPitch.Angle = _currentLookY * 12.0 + headPitchExtra;
-        rig.HeadRoll.Angle = headRollExtra;
+        rig.HeadRoll.Angle = Math.Clamp(headRollExtra, -22.0, 22.0);
 
         if (rig.AuraRotation is not null)
         {
@@ -382,15 +401,105 @@ public sealed class PetAnimationController
 
         if (rig.AuraTranslate is not null)
         {
-            rig.AuraTranslate.OffsetY = Math.Sin(_elapsedSeconds * 1.2) * 0.035;
+            rig.AuraTranslate.OffsetY = Math.Sin(_elapsedSeconds * 1.35) * (0.032 + beat * 0.02);
         }
 
-        // 파스텔 바디 색감과 3D 음영이 하얗게 날아가지 않도록 발광 상한을 은은하게 제한
         emissiveStrength = Math.Clamp(emissiveStrength, 0.0, 0.16);
         var r = (byte)(_emissiveAccentColor.R * emissiveStrength);
         var g = (byte)(_emissiveAccentColor.G * emissiveStrength);
         var b = (byte)(_emissiveAccentColor.B * emissiveStrength);
         rig.BodyEmissiveBrush.Color = Color.FromRgb(r, g, b);
+    }
+
+    private void UpdateMotionClipSelection(
+        double dt,
+        bool beatTriggered,
+        double musicEnergy,
+        double bass,
+        double mid,
+        double treble)
+    {
+        _clipHoldSeconds += dt;
+        _beatClipSwitchCooldown = Math.Max(0.0, _beatClipSwitchCooldown - dt);
+
+        if (_musicWeight < 0.12 && musicEnergy <= 0.05)
+        {
+            if (_currentClip != PetMotionClipKind.Idle)
+            {
+                SwitchClip(PetMotionClipKind.Idle);
+            }
+
+            return;
+        }
+
+        if (_currentClip == PetMotionClipKind.Idle && musicEnergy > 0.07)
+        {
+            var next = PickNextDanceClip(bass, mid, treble);
+            SwitchClip(next);
+            _beatClipSwitchCooldown = 1.4;
+            return;
+        }
+
+        // 최소 유지 시간(1.5초) 경과 후 강한 비트 또는 주기 만료(3.6초) 시 새 모션으로 자연스럽게 순환
+        var readyForSwitch = _clipHoldSeconds >= 1.5;
+        var periodicTurn = _clipHoldSeconds >= 3.6;
+        if (readyForSwitch && ((beatTriggered && _beatClipSwitchCooldown <= 0) || periodicTurn))
+        {
+            var next = PickNextDanceClip(bass, mid, treble);
+            if (next != _currentClip)
+            {
+                SwitchClip(next);
+            }
+
+            _beatClipSwitchCooldown = 1.4;
+        }
+    }
+
+    private PetMotionClipKind PickNextDanceClip(double bass, double mid, double treble)
+    {
+        var cycle = _speciesProfile.DanceCycle;
+        if (cycle.Length == 0)
+        {
+            return PetMotionClipKind.Groove;
+        }
+
+        // 주파수 지배 대역에 따라 가장 어울리는 클립을 우선하되 연속 반복 방지
+        PetMotionClipKind preferred;
+        if (bass > 0.68 && _currentClip != PetMotionClipKind.HappyJump && _clipCycleCursor % 3 == 0)
+        {
+            preferred = PetMotionClipKind.HappyJump;
+        }
+        else if (treble > mid + 0.12 && _speciesProfile.PawDanceScale > 0 && _currentClip != PetMotionClipKind.PawDance)
+        {
+            preferred = PetMotionClipKind.PawDance;
+        }
+        else if (mid > bass + 0.10 && _currentClip != PetMotionClipKind.Turn)
+        {
+            preferred = PetMotionClipKind.Turn;
+        }
+        else
+        {
+            preferred = cycle[_clipCycleCursor++ % cycle.Length];
+            if (preferred == _currentClip && cycle.Length > 1)
+            {
+                preferred = cycle[_clipCycleCursor++ % cycle.Length];
+            }
+        }
+
+        return preferred;
+    }
+
+    private void SwitchClip(PetMotionClipKind nextClip)
+    {
+        if (nextClip == _currentClip)
+        {
+            return;
+        }
+
+        _previousClip = _currentClip;
+        _currentClip = nextClip;
+        _clipBlend = 0.0;
+        _clipHoldSeconds = 0.0;
     }
 
     private void UpdateAutoBlink(PetRigHandle rig, double dt)
@@ -425,15 +534,11 @@ public sealed class PetAnimationController
         }
         else
         {
-            // 닫혔다 부드럽게 열림 (1.0 -> 0.08 -> 1.0)
             var closeFactor = Math.Sin(_blinkProgress * Math.PI);
             rig.EyeBlinkScale.ScaleY = 1.0 - closeFactor * 0.92;
         }
     }
 
-    /// <summary>
-    /// 키 타건 모션 곡선: 초반에 살짝 들어 올렸다가(+1.0) 후반에 키보드로 콕 내려찍음(-0.85).
-    /// </summary>
     private static double ComputeKeyStrikeOffset(double remainingTime, double duration)
     {
         if (remainingTime <= 0)
@@ -447,40 +552,52 @@ public sealed class PetAnimationController
             : Math.Cos(((progress - 0.45) / 0.55) * Math.PI) * 0.92;
     }
 
-    /// <summary>
-    /// 앞발(치비 고양이·솜뭉치 강아지) 공용 갱신: 리듬 들썩임 + 타이핑 자세에서 미니 키보드 위로 뻗어 교대 타건.
-    /// </summary>
-    /// <param name="stanceLiftY">타이핑 자세에서 앞발을 들어 올리는 높이.</param>
-    /// <param name="stanceReachZ">타이핑 자세에서 앞발을 앞으로 뻗는 거리.</param>
-    /// <param name="strikeHeight">타건 곡선 1.0당 앞발 상하 이동량.</param>
-    private static void UpdateFrontPaws(
-        PetRigHandle rig,
-        double groove,
-        double dancePhase,
-        double stance,
-        double leftStrike,
-        double rightStrike,
-        double stanceLiftY,
-        double stanceReachZ,
-        double strikeHeight)
+    private void EmitReactionStarBurst(int count)
     {
-        if (rig.LeftPawTranslate is null || rig.RightPawTranslate is null)
+        if (_particleStates.Length == 0 || _rig is null)
         {
             return;
         }
 
-        // 리듬 댄스 중 앞발도 좌우 교대로 귀엽게 살짝 들썩임
-        var leftDance = Math.Max(0.0, Math.Sin(dancePhase)) * groove * 0.08 * (1.0 - stance);
-        var rightDance = Math.Max(0.0, -Math.Sin(dancePhase)) * groove * 0.08 * (1.0 - stance);
+        var spawned = 0;
+        for (var attempt = 0; attempt < _particleStates.Length && spawned < count; attempt++)
+        {
+            var idx = (_particleSpawnCursor + attempt) % _particleStates.Length;
+            if (spawned == 0 && !string.Equals(_rig.MusicParticles[idx].ParticleKind, "star", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
 
-        // 타이핑 자세: 앞발을 미니 키보드 위로 앞으로 뻗고, 타건 시 위→아래로 타닥타닥 내려침
-        var baseY = stance * stanceLiftY;
-        var baseZ = stance * stanceReachZ;
+            var angle = (Math.PI * 2.0 * spawned / count) + _elapsedSeconds * 1.7;
+            var st = _particleStates[idx];
+            st.Active = true;
+            st.Age = 0;
+            st.Lifetime = 0.95;
+            st.StartX = Math.Cos(angle) * 0.85;
+            st.StartY = 0.45;
+            st.StartZ = Math.Sin(angle) * 0.50;
+            st.VelX = Math.Cos(angle) * 0.72;
+            st.VelY = 1.15;
+            st.VelZ = Math.Sin(angle) * 0.48;
+            st.SwirlPhase = angle;
+            st.MaxScale = 1.05;
+            spawned++;
+        }
 
-        rig.LeftPawTranslate.OffsetY = baseY + leftStrike * strikeHeight + leftDance;
-        rig.LeftPawTranslate.OffsetZ = baseZ + leftDance * 0.45;
-        rig.RightPawTranslate.OffsetY = baseY + rightStrike * strikeHeight + rightDance;
-        rig.RightPawTranslate.OffsetZ = baseZ + rightDance * 0.45;
+        _particleSpawnCursor = (_particleSpawnCursor + count) % _particleStates.Length;
+    }
+
+    private bool HasActiveParticles()
+    {
+        for (var i = 0; i < _particleStates.Length; i++)
+        {
+            if (_particleStates[i].Active)
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private void UpdateMusicParticles(PetRigHandle rig, double dt, double bass, double treble, double beat)
@@ -492,21 +609,25 @@ public sealed class PetAnimationController
 
         _particleEmitCooldown = Math.Max(0, _particleEmitCooldown - dt);
         var energy = (bass + treble) * 0.5;
-        if ((beat > 0.7 || energy > 0.24) && _particleEmitCooldown <= 0)
+        if ((beat > 0.68 || energy > 0.22) && _particleEmitCooldown <= 0)
         {
             var idx = _particleSpawnCursor++ % _particleStates.Length;
-            var angle = (_elapsedSeconds * 2.3 + idx * 1.1) % (Math.PI * 2.0);
+            var angle = (_elapsedSeconds * 2.1 + idx * 1.15) % (Math.PI * 2.0);
             var st = _particleStates[idx];
             st.Active = true;
             st.Age = 0;
-            st.Lifetime = 1.05;
-            st.StartX = Math.Cos(angle) * 0.65;
-            st.StartY = 0.25;
-            st.StartZ = Math.Sin(angle) * 0.45;
-            st.VelX = Math.Cos(angle) * 0.65;
-            st.VelY = 0.95 + energy * 0.55;
-            st.VelZ = Math.Sin(angle) * 0.45;
-            _particleEmitCooldown = 0.22;
+            st.Lifetime = 1.18;
+            // 캐릭터 외곽 반경 0.90~1.05에서 방출해 머리 액세서리와의 시각적 겹침 최소화
+            var radius = 0.92 + (idx % 3) * 0.08;
+            st.StartX = Math.Cos(angle) * radius;
+            st.StartY = 0.35 + (idx % 2) * 0.16;
+            st.StartZ = Math.Sin(angle) * (radius * 0.58);
+            st.VelX = Math.Cos(angle) * 0.55;
+            st.VelY = 0.88 + energy * 0.50;
+            st.VelZ = Math.Sin(angle) * 0.38;
+            st.SwirlPhase = idx * 1.3;
+            st.MaxScale = 0.82 + beat * 0.20;
+            _particleEmitCooldown = 0.24;
         }
 
         for (var i = 0; i < _particleStates.Length; i++)
@@ -515,9 +636,7 @@ public sealed class PetAnimationController
             var handle = rig.MusicParticles[i];
             if (!st.Active)
             {
-                handle.Scale.ScaleX = 0;
-                handle.Scale.ScaleY = 0;
-                handle.Scale.ScaleZ = 0;
+                HideParticle(handle);
                 continue;
             }
 
@@ -525,22 +644,67 @@ public sealed class PetAnimationController
             if (st.Age >= st.Lifetime)
             {
                 st.Active = false;
-                handle.Scale.ScaleX = 0;
-                handle.Scale.ScaleY = 0;
-                handle.Scale.ScaleZ = 0;
+                HideParticle(handle);
                 continue;
             }
 
             var progress = st.Age / st.Lifetime;
-            var scale = Math.Sin(progress * Math.PI) * 0.95;
+            // 빠른 pop-in, 부드러운 포물선 스케일/알파 감쇠
+            var scaleEnvelope = progress < 0.22
+                ? PetMotionClips.SmoothStep(progress / 0.22)
+                : Math.Cos(((progress - 0.22) / 0.78) * Math.PI * 0.5);
+            var scale = Math.Max(0.0, scaleEnvelope * st.MaxScale);
+
+            var alphaEnvelope = progress < 0.18
+                ? progress / 0.18
+                : Math.Clamp(1.0 - Math.Pow((progress - 0.18) / 0.82, 1.4), 0.0, 1.0);
+            var alphaByte = (byte)Math.Clamp(alphaEnvelope * 225.0, 0, 255);
+
             handle.Scale.ScaleX = scale;
             handle.Scale.ScaleY = scale;
             handle.Scale.ScaleZ = scale;
 
-            handle.Translate.OffsetX = st.StartX + st.VelX * st.Age;
-            handle.Translate.OffsetY = st.StartY + st.VelY * st.Age;
+            // 부드러운 상승 나선 + 중력 감속 궤적
+            var swirlX = Math.Sin(st.Age * 3.8 + st.SwirlPhase) * 0.09 * progress;
+            var arcY = st.VelY * st.Age - 0.18 * st.Age * st.Age;
+            handle.Translate.OffsetX = st.StartX + st.VelX * st.Age + swirlX;
+            handle.Translate.OffsetY = st.StartY + arcY;
             handle.Translate.OffsetZ = st.StartZ + st.VelZ * st.Age;
-            handle.Rotation.Angle = (st.Age * 180.0) % 360.0;
+            handle.Rotation.Angle = (st.Age * 145.0) % 360.0;
+
+            var c = handle.BaseColor;
+            if (handle.TintBrush is not null)
+            {
+                handle.TintBrush.Color = Color.FromArgb(alphaByte, c.R, c.G, c.B);
+            }
+
+            if (handle.EmissiveBrush is not null)
+            {
+                var glowAlpha = (byte)Math.Clamp(alphaEnvelope * 75.0, 0, 255);
+                handle.EmissiveBrush.Color = Color.FromArgb(glowAlpha, c.R, c.G, c.B);
+            }
+        }
+    }
+
+    private static void HideParticle(MusicParticleHandle handle)
+    {
+        if (handle.Scale.ScaleX != 0 || handle.Scale.ScaleY != 0 || handle.Scale.ScaleZ != 0)
+        {
+            handle.Scale.ScaleX = 0;
+            handle.Scale.ScaleY = 0;
+            handle.Scale.ScaleZ = 0;
+        }
+
+        if (handle.TintBrush is not null && handle.TintBrush.Color.A != 0)
+        {
+            var c = handle.BaseColor;
+            handle.TintBrush.Color = Color.FromArgb(0, c.R, c.G, c.B);
+        }
+
+        if (handle.EmissiveBrush is not null && handle.EmissiveBrush.Color.A != 0)
+        {
+            var c = handle.BaseColor;
+            handle.EmissiveBrush.Color = Color.FromArgb(0, c.R, c.G, c.B);
         }
     }
 }

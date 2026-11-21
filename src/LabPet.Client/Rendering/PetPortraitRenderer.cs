@@ -12,6 +12,13 @@ internal sealed class PetPortraitRenderer(IPetMeshFactory meshFactory)
     private const int PixelSize = 72;
     private const int MaxCachedPortraits = 8;
     private readonly Dictionary<PortraitAppearance, BitmapSource> _cache = [];
+    private readonly LinkedList<PortraitAppearance> _lruOrder = [];
+
+    public void ClearCache()
+    {
+        _cache.Clear();
+        _lruOrder.Clear();
+    }
 
     public BitmapSource GetPortrait(PetAppearance appearance)
     {
@@ -19,6 +26,8 @@ internal sealed class PetPortraitRenderer(IPetMeshFactory meshFactory)
             appearance.ExpressionId, appearance.HeadAccessoryId, appearance.AuraEffectId);
         if (_cache.TryGetValue(key, out var portrait))
         {
+            _lruOrder.Remove(key);
+            _lruOrder.AddLast(key);
             return portrait;
         }
 
@@ -43,12 +52,14 @@ internal sealed class PetPortraitRenderer(IPetMeshFactory meshFactory)
         bitmap.Render(viewport);
         bitmap.Freeze();
 
-        if (_cache.Count == MaxCachedPortraits)
+        if (_cache.Count >= MaxCachedPortraits && _lruOrder.First is { } oldest)
         {
-            _cache.Remove(_cache.Keys.First());
+            _lruOrder.RemoveFirst();
+            _cache.Remove(oldest.Value);
         }
 
         _cache.Add(key, bitmap);
+        _lruOrder.AddLast(key);
         return bitmap;
     }
 

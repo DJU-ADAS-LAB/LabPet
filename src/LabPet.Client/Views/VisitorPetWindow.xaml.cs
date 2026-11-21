@@ -19,7 +19,7 @@ namespace LabPet.Client.Views;
 public partial class VisitorPetWindow : Window
 {
     private static readonly TimeSpan ActiveInterval = TimeSpan.FromMilliseconds(16);
-    private static readonly TimeSpan IdleInterval = TimeSpan.FromMilliseconds(32);
+    private static readonly TimeSpan IdleInterval = TimeSpan.FromMilliseconds(45);
     private const double DragThresholdPixels = 5.0;
     private const double BaseWindowWidth = 176.0;
     private const double BaseViewportHeight = 168.0;
@@ -39,6 +39,7 @@ public partial class VisitorPetWindow : Window
 
     private FriendEntry _friend;
     private string _appliedAppearanceSignature = string.Empty;
+    private PetRigHandle? _currentRig;
 
     private bool _isPointerPressed;
     private bool _isDraggingWindow;
@@ -86,6 +87,9 @@ public partial class VisitorPetWindow : Window
             _dismissHideTimer.Stop();
             _social.StateChanged -= OnSocialStateChanged;
             _animator.DetachRig();
+            VisitorPetVisual.Content = null;
+            LightsVisual.Content = null;
+            _currentRig = null;
             _bubbleCts?.Cancel();
             _bubbleCts?.Dispose();
         };
@@ -177,7 +181,17 @@ public partial class VisitorPetWindow : Window
         }
 
         _appliedAppearanceSignature = sig;
+        var structureSig = PetRigHandle.BuildStructureSignature(appearance);
+        if (_currentRig is not null &&
+            string.Equals(_currentRig.AppearanceStructureSignature, structureSig, StringComparison.Ordinal))
+        {
+            _currentRig.UpdateColors(appearance.BodyColorHex, appearance.AccentColorHex);
+            _animator.UpdateAccentColor(appearance.AccentColorHex);
+            return;
+        }
+
         var rig = _meshFactory.BuildPetRig(appearance, PetRigEffects.MusicParticles);
+        _currentRig = rig;
         VisitorPetVisual.Content = rig.RootModel;
         _animator.AttachRig(rig, appearance.AccentColorHex);
     }

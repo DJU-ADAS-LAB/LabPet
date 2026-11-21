@@ -23,7 +23,8 @@ namespace LabPet.Client.Views;
 public partial class PetWindow : Window
 {
     private const double DragThresholdPixels = 5.0;
-    private const double IdleAnimationIntervalSeconds = 0.030;
+    private static readonly TimeSpan ActiveFrameInterval = TimeSpan.FromMilliseconds(16);
+    private static readonly TimeSpan IdleFrameInterval = TimeSpan.FromMilliseconds(40);
     private const double BaseWindowWidth = 214.0;
     private const double DefaultWindowHeight = 274.0;
     private const double LegacyMessageRowHeight = 78.0;
@@ -64,6 +65,7 @@ public partial class PetWindow : Window
     private bool _lastReportedMusicActive;
     private Point3D _nameplateAnchor;
     private FrameworkElement? _messageEditorToClose;
+    private PetRigHandle? _currentRig;
 
     // 마우스 클릭(<=5px) vs 창 드래그(>5px) vs 빠른 좌우 흔들기 판정 상태
     private bool _isPointerPressed;
@@ -185,6 +187,11 @@ public partial class PetWindow : Window
             _audioAnalyzer.Stop();
             _activityHook.Stop();
             TrayIcon.Dispose();
+            _animator.DetachRig();
+            PetVisual.Content = null;
+            LightsVisual.Content = null;
+            _portraitRenderer.ClearCache();
+            _currentRig = null;
             _viewModel.ProfileUpdated -= OnProfileUpdated;
             _viewModel.PetScaleChanged -= OnPetScaleChanged;
             _viewModel.ClickThroughChanged -= OnClickThroughChanged;
@@ -212,11 +219,23 @@ public partial class PetWindow : Window
 
     private void OnProfileUpdated(object? sender, PetProfile profile)
     {
-        var rig = _meshFactory.BuildPetRig(profile.Appearance);
-        PetVisual.Content = rig.RootModel;
-        _nameplateAnchor = rig.NameplateAnchor;
-        UpdateNameplatePosition();
-        _animator.AttachRig(rig, profile.Appearance.AccentColorHex);
+        var structureSig = PetRigHandle.BuildStructureSignature(profile.Appearance);
+        if (_currentRig is not null &&
+            string.Equals(_currentRig.AppearanceStructureSignature, structureSig, StringComparison.Ordinal))
+        {
+            _currentRig.UpdateColors(profile.Appearance.BodyColorHex, profile.Appearance.AccentColorHex);
+            _animator.UpdateAccentColor(profile.Appearance.AccentColorHex);
+        }
+        else
+        {
+            var rig = _meshFactory.BuildPetRig(profile.Appearance);
+            _currentRig = rig;
+            PetVisual.Content = rig.RootModel;
+            _nameplateAnchor = rig.NameplateAnchor;
+            UpdateNameplatePosition();
+            _animator.AttachRig(rig, profile.Appearance.AccentColorHex);
+        }
+
         _ = _social.UpdateLocalPresenceAsync(profile, _lastReportedMusicActive);
     }
 
@@ -609,12 +628,19 @@ public partial class PetWindow : Window
             _animator.UpdateAudioSnapshot(localAudio.Bass, localAudio.Mid, localAudio.Treble, localAudio.IsBeat);
         }
 
+        var isActive = IsVisible && (localAudio.IsMusicActive || isFollowing || PetViewport.IsMouseOver || _animator.HasInteractiveMotion);
+        var desiredInterval = isActive ? ActiveFrameInterval : IdleFrameInterval;
+        if (_frameTimer.Interval != desiredInterval)
+        {
+            _frameTimer.Interval = desiredInterval;
+        }
+
         var dt = now - _lastFrameSeconds;
-        if (!IsVisible || (!localAudio.IsMusicActive && !isFollowing && !PetViewport.IsMouseOver
-            && !_animator.HasInteractiveMotion && dt < IdleAnimationIntervalSeconds))
+        if (!IsVisible)
         {
             return;
         }
+
         _lastFrameSeconds = now;
         ComputeNormalizedLookDirection(out var lookX, out var lookY);
         _animator.UpdateFrame(dt, lookX, lookY);

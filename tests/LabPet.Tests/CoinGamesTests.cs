@@ -113,14 +113,59 @@ public sealed class CoinGamesTests
     }
 
     [Fact]
-    public void LabLadderEngine_MultiplayerLobby_PreventsDuplicateSlotAndAutoStartsWhenAllReady()
+    public void LabLadderEngine_PrizeParsingNormalizationAndSummary_SupportKindAndQuantity()
+    {
+        Assert.True(LabLadderEngine.TryParsePrizeInput("☕ 커피 x1, 과자 ×2, 통과 *2", out var prizes, out var error));
+        Assert.Equal(string.Empty, error);
+        Assert.Equal(["☕ 커피", "과자", "과자", "통과", "통과"], prizes);
+        Assert.Equal("☕ 커피 ×1, 과자 ×2, 통과 ×2", LabLadderEngine.FormatPrizeSummary(prizes));
+
+        // 2명 확정 시 더미("통과")가 먼저 줄어들고 실제 상품은 보존된다
+        var shrunk = LabLadderEngine.NormalizePrizesForCount(prizes, 2);
+        Assert.Equal(["☕ 커피", "과자"], shrunk);
+
+        // 부족한 인원 칸은 "통과"로 채워진다
+        var expanded = LabLadderEngine.NormalizePrizesForCount(["☕ 커피"], 3);
+        Assert.Equal(["☕ 커피", "통과", "통과"], expanded);
+
+        Assert.False(LabLadderEngine.TryParsePrizeInput("커피 x0", out _, out _));
+        Assert.False(LabLadderEngine.TryParsePrizeInput("커피 x9", out _, out _));
+        Assert.False(LabLadderEngine.TryParsePrizeInput("   ", out _, out _));
+    }
+
+    [Fact]
+    public void LabLadderEngine_FisherYatesShuffle_PreservesMultisetAndPermutesCleanly()
+    {
+        var items = new[] { "A", "B", "C", "D" };
+        // 항상 index 0을 고르는 순환 시프트 검증
+        var rotated = LabLadderEngine.ShuffleFisherYates(items, _ => 0);
+        Assert.Equal(["B", "C", "D", "A"], rotated);
+
+        // 암호학적 난수 기반 보드 생성 시 다중집합 보존 및 서로 다른 배치 생성 가능
+        var baseline = new[] { "당첨", "과자", "음료", "통과" };
+        var seenOrders = new HashSet<string>(StringComparer.Ordinal);
+        for (var i = 0; i < 24; i++)
+        {
+            var board = LabLadderEngine.GenerateRandomizedBoard(["P1", "P2", "P3", "P4"], baseline);
+            Assert.Equal(baseline.Order(StringComparer.Ordinal), board.Prizes.Order(StringComparer.Ordinal));
+            seenOrders.Add(string.Join("|", board.Prizes));
+        }
+
+        Assert.True(seenOrders.Count >= 2, "암호학적 무작위 셔플이 다양한 상품 배치를 만들어야 합니다.");
+    }
+
+    [Fact]
+    public void LabLadderEngine_PhaseTransitions_BlockPickBeforeConfirmPreventDuplicatesAndRequireAllSlots()
     {
         var room = new LadderRoomStateDto
         {
             SessionId = "room-1",
             HostPetId = "host",
+            Phase = LadderRoomPhase.WaitingInvites,
+            WagerCoins = 0,
             SlotCount = 3,
             PendingInviteCount = 1,
+            Prizes = ["커피", "통과", "통과"],
             Members =
             [
                 new LadderMemberStateDto { PetId = "host", DisplayName = "승민" },
@@ -128,24 +173,87 @@ public sealed class CoinGamesTests
             ]
         };
 
-        // 방장이 1번(인덱스 0) 선점
-        Assert.True(LabLadderEngine.TryPickSlot(room, "host", 0));
-        // 다른 참가자가 이미 선점된 1번을 고르면 차단
-        Assert.False(LabLadderEngine.TryPickSlot(room, "p2", 0));
-        // 2번(인덱스 1)은 성공
-        Assert.True(LabLadderEngine.TryPickSlot(room, "p2", 1));
+        // 참가자 확정 전(WaitingInvites)에는 위치를 선택할 수 없다
+        Assert.False(LabLadderEngine.TryPickSlot(room, "host", 0));
+        // 응답 대기 인원이 있으면 확정할 수 없다
+        Assert.False(LabLadderEngine.CanConfirmParticipants(room));
+        Assert.False(LabLadderEngine.TryConfirmParticipants(room, room.Prizes));
 
-        // 입장한 2명은 모두 골랐지만 응답 대기 1명이 남았으므로 자동 시작은 아직 false
-        Assert.True(LabLadderEngine.AreJoinedMembersReady(room));
-        Assert.False(LabLadderEngine.IsReadyToAutoStart(room));
-
-        // 대기 중이던 3번째 참가자가 입장
+        // 3번째 초대자 수락으로 응답 완료
         room.PendingInviteCount = 0;
         room.Members.Add(new LadderMemberStateDto { PetId = "p3", DisplayName = "민수" });
-        Assert.False(LabLadderEngine.IsReadyToAutoStart(room));
+        Assert.True(LabLadderEngine.CanConfirmParticipants(room));
+        Assert.True(LabLadderEngine.TryConfirmParticipants(room, room.Prizes));
+        Assert.Equal(LadderRoomPhase.PickingSlots, room.Phase);
 
-        // 3번째 참가자가 빈 3번(인덱스 2)을 고르는 순간 전원 선택 완료 -> 자동 시작 true
+        // 확정 후 위치 선택 가능 및 중복 선택 차단
+        Assert.True(LabLadderEngine.TryPickSlot(room, "host", 0));
+        Assert.False(LabLadderEngine.TryPickSlot(room, "p2", 0));
+        Assert.True(LabLadderEngine.TryPickSlot(room, "p2", 1));
+
+        // 3번째 참가자가 아직 고르지 않았으므로 시작 불가
+        Assert.False(LabLadderEngine.CanStartGame(room));
+
+        // 전원 중복 없이 선택 완료 -> 시작 가능
         Assert.True(LabLadderEngine.TryPickSlot(room, "p3", 2));
-        Assert.True(LabLadderEngine.IsReadyToAutoStart(room));
+        Assert.True(LabLadderEngine.CanStartGame(room));
+    }
+
+    [Fact]
+    public void LabLadderEngine_StartValidation_VerifiesConsistencyRungsAndImmutablePrizes()
+    {
+        var room = new LadderRoomStateDto
+        {
+            SessionId = "room-2",
+            HostPetId = "host",
+            Phase = LadderRoomPhase.PickingSlots,
+            WagerCoins = 0,
+            SlotCount = 3,
+            PendingInviteCount = 0,
+            Prizes = ["커피", "과자", "통과"],
+            Members =
+            [
+                new LadderMemberStateDto { PetId = "host", DisplayName = "승민", SelectedSlot = 1 },
+                new LadderMemberStateDto { PetId = "p2", DisplayName = "대현", SelectedSlot = 0 },
+                new LadderMemberStateDto { PetId = "p3", DisplayName = "민수", SelectedSlot = 2 }
+            ]
+        };
+
+        var ordered = room.Members.OrderBy(m => m.SelectedSlot!.Value).ToList();
+        var board = LabLadderEngine.GenerateBoard(ordered.Select(m => m.DisplayName).ToList(), ["과자", "통과", "커피"], rng: new Random(11));
+        var start = LabLadderEngine.CreateStartDto(room, board);
+
+        Assert.True(LabLadderEngine.TryValidateStart(start, room, "p2", out var verifiedBoard, out var traces));
+        Assert.NotNull(verifiedBoard);
+        Assert.Equal(3, traces.Count);
+        Assert.Equal(["대현", "승민", "민수"], verifiedBoard!.Participants);
+
+        // 1) Outcomes 변조 시 검증 실패
+        var tamperedOutcomes = LabLadderEngine.CreateStartDto(room, board);
+        tamperedOutcomes.Outcomes[0].Prize = "잭팟";
+        Assert.False(LabLadderEngine.TryValidateStart(tamperedOutcomes, room, "p2", out _, out _));
+
+        // 2) 상품 목록 변조 시 검증 실패
+        var tamperedPrizes = LabLadderEngine.CreateStartDto(room, board);
+        tamperedPrizes.Prizes = ["아이패드", "통과", "통과"];
+        Assert.False(LabLadderEngine.TryValidateStart(tamperedPrizes, room, "p2", out _, out _));
+
+        // 3) 인접 가로줄 충돌 사다리판 차단
+        var badRungStart = LabLadderEngine.CreateStartDto(room, board);
+        badRungStart.Rungs = [new LadderRung(1, 0), new LadderRung(1, 1)];
+        Assert.False(LabLadderEngine.TryValidateStart(badRungStart, room, "p2", out _, out _));
+
+        // 4) 단계 역행 전이 차단
+        var revertedRoom = new LadderRoomStateDto
+        {
+            SessionId = room.SessionId,
+            HostPetId = room.HostPetId,
+            Phase = LadderRoomPhase.WaitingInvites,
+            WagerCoins = room.WagerCoins,
+            SlotCount = 3,
+            Prizes = room.Prizes.ToList(),
+            Members = room.Members
+        };
+        Assert.False(LabLadderEngine.IsValidRoomTransition(room, room.Prizes, revertedRoom, "p2"));
     }
 }

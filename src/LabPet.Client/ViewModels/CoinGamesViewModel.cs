@@ -18,14 +18,20 @@ public sealed record OnlineFriendChoice(FriendEntry Friend, string DisplayName)
     public override string ToString() => DisplayName;
 }
 
+public sealed record LadderFeeChoice(int Coins, string Label)
+{
+    public override string ToString() => Label;
+}
+
 public sealed record LadderSlotOption(
     int ColumnIndex,
     string HeaderText,
     string OccupantText,
     bool IsOccupied,
-    bool IsMine)
+    bool IsMine,
+    bool IsSelectionEnabled = true)
 {
-    public bool CanPick => !IsOccupied || IsMine;
+    public bool CanPick => IsSelectionEnabled && !IsOccupied;
 }
 
 public sealed record IncomingGameInvite(
@@ -35,7 +41,8 @@ public sealed record IncomingGameInvite(
     string GameType,
     string SessionId,
     int WagerCoins,
-    string Data = "")
+    string Data = "",
+    string PrizeSummary = "")
 {
     public string GameDisplayName => GameType switch
     {
@@ -45,9 +52,23 @@ public sealed record IncomingGameInvite(
         _ => "코인 게임"
     };
 
-    public string SummaryText => WagerCoins > 0
-        ? $"{SenderName}의 {GameDisplayName} 초대! ({WagerCoins} 코인)"
-        : $"{SenderName}의 {GameDisplayName} 초대!";
+    public string SummaryText
+    {
+        get
+        {
+            if (GameType == LabLadderEngine.GameTypeId)
+            {
+                var feeText = WagerCoins > 0 ? $"{WagerCoins} 코인" : "무료 (0코인)";
+                return string.IsNullOrWhiteSpace(PrizeSummary)
+                    ? $"{SenderName}의 {GameDisplayName} 초대! ({feeText})"
+                    : $"{SenderName}의 {GameDisplayName} 초대! ({feeText} · 상품: {PrizeSummary})";
+            }
+
+            return WagerCoins > 0
+                ? $"{SenderName}의 {GameDisplayName} 초대! ({WagerCoins} 코인)"
+                : $"{SenderName}의 {GameDisplayName} 초대!";
+        }
+    }
 }
 
 /// <summary>
@@ -74,9 +95,17 @@ public sealed partial class CoinGamesViewModel : ObservableObject, IDisposable
     public event EventHandler<bool>? PetEmotionTriggered; // true: 승리/기쁨, false: 패배/어지러움
     public event EventHandler? OpenGameTabRequested;
     public event EventHandler<LadderBoard>? LadderBoardGenerated;
+    public event EventHandler? LadderAnimationCancelled;
 
     public IReadOnlyList<int> WagerOptions { get; } = [10, 30, 50, 100];
     public IReadOnlyList<int> LadderFeeOptions { get; } = [0, 10, 30, 50];
+    public IReadOnlyList<LadderFeeChoice> LadderFeeChoices { get; } =
+    [
+        new(0, "0코인 (무료)"),
+        new(10, "10코인"),
+        new(30, "30코인"),
+        new(50, "50코인")
+    ];
 
     public ObservableCollection<OnlineFriendChoice> OnlineFriends { get; } = [];
     public ObservableCollection<string> LadderResultLines { get; } = [];
@@ -154,26 +183,63 @@ public sealed partial class CoinGamesViewModel : ObservableObject, IDisposable
 
     // ── 4. 연구실 공동 사다리타기 ─────────────────────────────────────────
     [ObservableProperty] private string _ladderParticipantsText = "나, 친구1, 친구2";
-    [ObservableProperty] private string _ladderPrizesText = "커피 쏘기, 통과, 통과";
+    [ObservableProperty] private string _ladderPrizesText = "커피 쏘기 x1, 통과 x2";
     [ObservableProperty] private int _ladderEntryFee;
-    [ObservableProperty] private string _ladderStatusText = "참여자와 결과를 입력하거나, 친구 초대 방을 열어 위치를 고른 뒤 동시에 시작하세요!";
-    [ObservableProperty] private bool _isLadderRoomOpen;
+    [ObservableProperty] private string _ladderStatusText = "상품과 참가비를 설정한 뒤 혼자 돌리거나 친구 초대 방을 여세요!";
+    [ObservableProperty, NotifyPropertyChangedFor(nameof(CanEditLadderSetup), nameof(CanOpenLadderRoom))]
+    private bool _isLadderRoomOpen;
     [ObservableProperty] private bool _isLadderHost;
-    [ObservableProperty] private bool _canForceStartLadderRoom;
+    [ObservableProperty] private bool _isLadderWaitingInvites;
+    [ObservableProperty] private bool _isLadderPickingPhase;
+    [ObservableProperty] private bool _canConfirmLadderParticipants;
+    [ObservableProperty] private bool _showConfirmLadderButton;
+    [ObservableProperty] private bool _canStartLadderGame;
+    [ObservableProperty] private bool _showStartLadderButton;
+    [ObservableProperty, NotifyPropertyChangedFor(nameof(CanEditLadderSetup), nameof(CanOpenLadderRoom), nameof(CanShareLadderResult))]
+    private bool _isLadderAnimating;
     [ObservableProperty] private string _ladderLobbySummaryText = string.Empty;
+    [ObservableProperty] private string _ladderRoomPrizesText = string.Empty;
+    [ObservableProperty] private string _ladderRoomMembersText = string.Empty;
+    [ObservableProperty] private string _ladderBoardPrizesSummaryText = string.Empty;
+
+    public bool CanEditLadderSetup => !IsLadderRoomOpen && !IsLadderAnimating;
+    public bool CanOpenLadderRoom => HasOnlineFriends && !IsLadderRoomOpen && !IsLadderAnimating;
+    public bool CanShareLadderResult => !IsLadderAnimating && _lastLadderResults.Count > 0;
+    public LadderBoard? ActiveLadderBoard => _pendingLadderRun?.Board ?? _lastLadderBoard;
 
     private LadderBoard? _lastLadderBoard;
     private IReadOnlyList<LadderTraceResult> _lastLadderResults = [];
     private LadderRoomStateDto? _ladderRoom;
     private FriendEntry? _ladderHostFriend;
+    private readonly List<string> _ladderInitialPrizes = [];
     private readonly HashSet<string> _ladderPendingInviteeIds = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, FriendEntry> _ladderPendingInvitees = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, FriendEntry> _ladderJoinedFriends = new(StringComparer.OrdinalIgnoreCase);
+    private readonly HashSet<string> _startedLadderSessions = new(StringComparer.OrdinalIgnoreCase);
+    private readonly HashSet<string> _settledLadderSessions = new(StringComparer.OrdinalIgnoreCase);
+    private CancellationTokenSource? _ladderInviteTimeoutCts;
     private int _ladderActiveWager;
+    private int _ladderPaidCoins;
     private bool _ladderStarting;
+    private PendingLadderRun? _pendingLadderRun;
     private readonly Dictionary<(string Sender, string Session), DateTimeOffset> _seenInvitations = [];
     private const int RecentInvitationCapacity = 256;
 
     public bool HasOnlineFriends => OnlineFriends.Count > 0;
+
+    private sealed class PendingLadderRun
+    {
+        public required string SessionId { get; init; }
+        public required LadderBoard Board { get; init; }
+        public required IReadOnlyList<LadderTraceResult> Traces { get; init; }
+        public required int MyStartColumn { get; init; }
+        public required int WagerCoins { get; init; }
+        public required bool IsMultiplayer { get; init; }
+        public FriendEntry? HostFriend { get; init; }
+        public required int AbortRefundCoins { get; set; }
+        public required bool[] RevealedColumns { get; init; }
+        public bool IsCompleted { get; set; }
+    }
 
     public CoinGamesViewModel(
         IAppDataStore store,
@@ -207,6 +273,7 @@ public sealed partial class CoinGamesViewModel : ObservableObject, IDisposable
         _typingTimer.Tick -= OnTypingTimerTick;
         CancelRpsInviteTimeout();
         CancelTypingInviteTimeout();
+        CancelLadderInviteTimeout();
         _rpsSessionId = null;
         _typingSessionId = null;
     }
@@ -254,6 +321,7 @@ public sealed partial class CoinGamesViewModel : ObservableObject, IDisposable
             ?? OnlineFriends.FirstOrDefault();
 
         OnPropertyChanged(nameof(HasOnlineFriends));
+        OnPropertyChanged(nameof(CanOpenLadderRoom));
     }
 
     // ══════════════════════════════════════════════════════════════════════
@@ -488,25 +556,29 @@ public sealed partial class CoinGamesViewModel : ObservableObject, IDisposable
         if (invite is null ||
             (invite.GameType == RpsGameEngine.GameTypeId && (IsRpsInMatch || IsRpsWaitingResponse)) ||
             (invite.GameType == TypingSprintEngine.GameTypeId && (IsTypingRunning || IsTypingWaitingResponse || _typingSessionId is not null)) ||
-            (invite.GameType == LabLadderEngine.GameTypeId && IsLadderRoomOpen))
+            (invite.GameType == LabLadderEngine.GameTypeId && (IsLadderRoomOpen || IsLadderAnimating)))
         {
             return;
         }
         LadderRoomStateDto? initialRoom = null;
         if (invite.GameType == LabLadderEngine.GameTypeId
             && (!TryReadLadderPayload(invite.Data, out initialRoom) || initialRoom is null
+                || initialRoom.Phase != LadderRoomPhase.WaitingInvites
                 || !LabLadderEngine.IsValidRoom(initialRoom, invite.SessionId, invite.SenderPetId, invite.WagerCoins)))
         {
             await DeclineIncomingInviteAsync();
             return;
         }
 
-        var (ok, msg) = _progression.TrySpendCoins(_profile, invite.WagerCoins);
-        if (!ok)
+        if (invite.WagerCoins > 0)
         {
-            GameNotification?.Invoke(this, $"도전 수락 실패: {msg}");
-            await DeclineIncomingInviteAsync();
-            return;
+            var (ok, msg) = _progression.TrySpendCoins(_profile, invite.WagerCoins);
+            if (!ok)
+            {
+                GameNotification?.Invoke(this, $"도전 수락 실패: {msg}");
+                await DeclineIncomingInviteAsync();
+                return;
+            }
         }
 
         IncomingInvite = null;
@@ -526,11 +598,20 @@ public sealed partial class CoinGamesViewModel : ObservableObject, IDisposable
         {
             _ladderHostFriend = invite.Friend;
             _ladderActiveWager = invite.WagerCoins;
+            _ladderPaidCoins = invite.WagerCoins;
+            _ladderInitialPrizes.Clear();
+            _ladderInitialPrizes.AddRange(initialRoom.Prizes);
             _ladderRoom = initialRoom;
             IsLadderHost = false;
             IsLadderRoomOpen = true;
+            LadderResultLines.Clear();
+            RefreshLadderLobbyUi();
         }
-        await PersistProfileAsync();
+
+        if (invite.WagerCoins > 0)
+        {
+            await PersistProfileAsync();
+        }
 
         var sent = await _social.SendGameEventAsync(invite.Friend, new GameEventPayload
         {
@@ -563,10 +644,13 @@ public sealed partial class CoinGamesViewModel : ObservableObject, IDisposable
             {
                 return;
             }
-            CloseLadderRoomState("상대와 연결이 끊겨 배팅 코인을 반환했습니다.");
-            _progression.AddCoins(_profile, invite.WagerCoins);
-            await PersistProfileAsync();
-            GameNotification?.Invoke(this, "상대와 연결이 끊겨 배팅 코인을 반환했습니다.");
+
+            var refunded = await RefundLadderEntryFeeIfPaidAsync();
+            var disconnectMsg = refunded > 0
+                ? "상대와 연결이 끊겨 참가 코인을 반환했습니다."
+                : "상대와 연결이 끊겨 사다리방 입장에 실패했습니다.";
+            CloseLadderRoomState(disconnectMsg);
+            GameNotification?.Invoke(this, disconnectMsg);
             return;
         }
 
@@ -588,10 +672,11 @@ public sealed partial class CoinGamesViewModel : ObservableObject, IDisposable
         }
         else if (invite.GameType == LabLadderEngine.GameTypeId && _ladderRoom?.SessionId == invite.SessionId)
         {
-            CanForceStartLadderRoom = false;
             RefreshLadderLobbyUi();
-            LadderLobbySummaryText = $"{invite.SenderName}의 사다리방에 입장했습니다! 시작 위치를 고르세요.";
-            LadderStatusText = "다른 친구들이 들어와 위치를 고르면 동시에 시작됩니다.";
+            if (_ladderRoom.Phase == LadderRoomPhase.WaitingInvites)
+            {
+                LadderStatusText = $"{invite.SenderName}의 사다리방에 입장했습니다. 방장이 참가자를 확정한 뒤 위치를 선택할 수 있습니다.";
+            }
             SelectedGameIndex = 3;
             OpenGameTabRequested?.Invoke(this, EventArgs.Empty);
         }
@@ -633,18 +718,27 @@ public sealed partial class CoinGamesViewModel : ObservableObject, IDisposable
 
         if (p.Action == "invite")
         {
+            LadderRoomStateDto? ladderInviteRoom = null;
             var valid = p.GameType switch
             {
                 RpsGameEngine.GameTypeId => !IsRpsInMatch && !IsRpsWaitingResponse && WagerOptions.Contains(p.WagerCoins),
                 TypingSprintEngine.GameTypeId => !IsTypingRunning && !IsTypingWaitingResponse
                     && _typingSessionId is null && WagerOptions.Contains(p.WagerCoins),
-                LabLadderEngine.GameTypeId => !IsLadderRoomOpen && LadderFeeOptions.Contains(p.WagerCoins),
+                LabLadderEngine.GameTypeId => !IsLadderRoomOpen && !IsLadderAnimating && LadderFeeOptions.Contains(p.WagerCoins)
+                    && TryReadLadderPayload(p.Data, out ladderInviteRoom) && ladderInviteRoom is not null
+                    && ladderInviteRoom.Phase == LadderRoomPhase.WaitingInvites
+                    && LabLadderEngine.IsValidRoom(ladderInviteRoom, p.SessionId, e.SenderPetId, p.WagerCoins),
                 _ => false
             };
             if (!valid || IncomingInvite is not null || !TryRecordInvite(e.SenderPetId, p.SessionId))
             {
                 return;
             }
+
+            var prizeSummary = ladderInviteRoom is not null
+                ? LabLadderEngine.FormatPrizeSummary(ladderInviteRoom.Prizes)
+                : string.Empty;
+
             var invite = new IncomingGameInvite(
                 e.SenderPetId,
                 senderName,
@@ -652,7 +746,8 @@ public sealed partial class CoinGamesViewModel : ObservableObject, IDisposable
                 p.GameType,
                 p.SessionId,
                 p.WagerCoins,
-                p.Data ?? string.Empty);
+                p.Data ?? string.Empty,
+                prizeSummary);
             IncomingInvite = invite;
             return;
         }
@@ -751,10 +846,33 @@ public sealed partial class CoinGamesViewModel : ObservableObject, IDisposable
                     break;
             }
         }
-        else if (p.GameType == LabLadderEngine.GameTypeId && !_ladderStarting && _ladderRoom is not null
-            && p.SessionId == _ladderRoom.SessionId && p.WagerCoins == _ladderActiveWager)
+        else if (p.GameType == LabLadderEngine.GameTypeId)
         {
-            await HandleLadderEventAsync(e.SenderPetId, senderName, friend, p);
+            if (p.Action == "cancel"
+                && _pendingLadderRun is { IsCompleted: false, IsMultiplayer: true } activeRun
+                && activeRun.SessionId == p.SessionId
+                && p.WagerCoins == activeRun.WagerCoins
+                && string.Equals(activeRun.HostFriend?.PetId, e.SenderPetId, StringComparison.OrdinalIgnoreCase))
+            {
+                await AbortActiveLadderAnimationAsync($"{senderName}(이)가 사다리 시작 중 연결 오류로 게임을 취소했습니다.");
+            }
+            else if (IsLadderHost && p.Action == "accept"
+                && _ladderRoom is not null && p.SessionId == _ladderRoom.SessionId
+                && _ladderRoom.Phase != LadderRoomPhase.WaitingInvites)
+            {
+                _ = await _social.SendGameEventAsync(friend, new GameEventPayload
+                {
+                    GameType = LabLadderEngine.GameTypeId,
+                    SessionId = p.SessionId,
+                    Action = "cancel",
+                    WagerCoins = _ladderActiveWager
+                });
+            }
+            else if (_ladderRoom is not null && p.SessionId == _ladderRoom.SessionId && p.WagerCoins == _ladderActiveWager
+                && (!_ladderStarting || p.Action is "decline" or "cancel"))
+            {
+                await HandleLadderEventAsync(e.SenderPetId, senderName, friend, p);
+            }
         }
     }
 

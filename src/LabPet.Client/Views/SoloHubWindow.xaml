@@ -532,23 +532,23 @@
                                         <StackPanel Grid.Column="0">
                                             <DockPanel Margin="0,0,0,3" LastChildFill="False">
                                                 <TextBlock DockPanel.Dock="Left" Text="참여자 (혼자 돌릴 때, 2~8명)" FontSize="11" FontWeight="SemiBold" Foreground="{StaticResource TextSecondaryBrush}" VerticalAlignment="Center" />
-                                                <Button DockPanel.Dock="Right" Content="친구 불러오기" Command="{Binding Games.LoadOnlineFriendsToLadderCommand}" Padding="7,2" FontSize="10.5" Height="22" />
+                                                <Button DockPanel.Dock="Right" Content="친구 불러오기" Command="{Binding Games.LoadOnlineFriendsToLadderCommand}" IsEnabled="{Binding Games.CanEditLadderSetup}" Padding="7,2" FontSize="10.5" Height="22" />
                                             </DockPanel>
-                                            <TextBox Text="{Binding Games.LadderParticipantsText, UpdateSourceTrigger=PropertyChanged}" Height="28" FontSize="11.5" />
+                                            <TextBox Text="{Binding Games.LadderParticipantsText, UpdateSourceTrigger=PropertyChanged}" IsEnabled="{Binding Games.CanEditLadderSetup}" Height="28" FontSize="11.5" />
                                         </StackPanel>
                                         <StackPanel Grid.Column="2">
                                             <DockPanel Margin="0,0,0,3" LastChildFill="False">
-                                                <TextBlock DockPanel.Dock="Left" Text="결과 항목 (자동 셔플)" FontSize="11" FontWeight="SemiBold" Foreground="{StaticResource TextSecondaryBrush}" VerticalAlignment="Center" />
+                                                <TextBlock DockPanel.Dock="Left" Text="상품 종류·수량 (예: 커피 x1, 통과 x2)" FontSize="11" FontWeight="SemiBold" Foreground="{StaticResource TextSecondaryBrush}" VerticalAlignment="Center" />
                                                 <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
-                                                    <Button Content="☕ 커피" Command="{Binding Games.ApplyCoffeePresetCommand}" Padding="6,2" FontSize="10.5" Height="22" Margin="0,0,4,0" />
-                                                    <Button Content="💰 잭팟" Command="{Binding Games.ApplyCoinJackpotPresetCommand}" Padding="6,2" FontSize="10.5" Height="22" />
+                                                    <Button Content="☕ 커피" Command="{Binding Games.ApplyCoffeePresetCommand}" IsEnabled="{Binding Games.CanEditLadderSetup}" Padding="6,2" FontSize="10.5" Height="22" Margin="0,0,4,0" />
+                                                    <Button Content="💰 잭팟" Command="{Binding Games.ApplyCoinJackpotPresetCommand}" IsEnabled="{Binding Games.CanEditLadderSetup}" Padding="6,2" FontSize="10.5" Height="22" />
                                                 </StackPanel>
                                             </DockPanel>
-                                            <TextBox Text="{Binding Games.LadderPrizesText, UpdateSourceTrigger=PropertyChanged}" Height="28" FontSize="11.5" />
+                                            <TextBox Text="{Binding Games.LadderPrizesText, UpdateSourceTrigger=PropertyChanged}" IsEnabled="{Binding Games.CanEditLadderSetup}" Height="28" FontSize="11.5" />
                                         </StackPanel>
                                     </Grid>
 
-                                    <!-- LAN 공동 사다리방 대기실: 전원 입장 후 원하는 시작 번호를 고르면 동시 시작 -->
+                                    <!-- LAN 공동 사다리방 대기실: 1) 응답 대기 -> 방장 확정 -> 2) 중복 없는 위치 선택 -> 방장 시작 -->
                                     <Border Grid.Row="1"
                                             Visibility="{Binding Games.IsLadderRoomOpen, Converter={StaticResource BoolToVis}}"
                                             Background="#FFFFF5F8"
@@ -558,7 +558,7 @@
                                             Padding="10,7"
                                             Margin="0,0,0,6">
                                         <StackPanel>
-                                            <DockPanel LastChildFill="False" Margin="0,0,0,6">
+                                            <DockPanel LastChildFill="False" Margin="0,0,0,4">
                                                 <TextBlock DockPanel.Dock="Left"
                                                            Text="{Binding Games.LadderLobbySummaryText}"
                                                            FontSize="11.5"
@@ -566,11 +566,20 @@
                                                            Foreground="#FFE11D48"
                                                            VerticalAlignment="Center" />
                                                 <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
-                                                    <Button Content="▶ 지금 인원으로 시작"
+                                                    <Button Content="✔ 참가자 확정"
                                                             Style="{StaticResource PrimaryButtonStyle}"
-                                                            Command="{Binding Games.ForceStartLadderRoomCommand}"
-                                                            IsEnabled="{Binding Games.CanForceStartLadderRoom}"
-                                                            Visibility="{Binding Games.IsLadderHost, Converter={StaticResource BoolToVis}}"
+                                                            Command="{Binding Games.ConfirmLadderParticipantsCommand}"
+                                                            IsEnabled="{Binding Games.CanConfirmLadderParticipants}"
+                                                            Visibility="{Binding Games.ShowConfirmLadderButton, Converter={StaticResource BoolToVis}}"
+                                                            Padding="9,3"
+                                                            FontSize="10.5"
+                                                            Height="24"
+                                                            Margin="0,0,5,0" />
+                                                    <Button Content="▶ 게임 시작"
+                                                            Style="{StaticResource PrimaryButtonStyle}"
+                                                            Command="{Binding Games.StartLadderRoomCommand}"
+                                                            IsEnabled="{Binding Games.CanStartLadderGame}"
+                                                            Visibility="{Binding Games.ShowStartLadderButton, Converter={StaticResource BoolToVis}}"
                                                             Padding="9,3"
                                                             FontSize="10.5"
                                                             Height="24"
@@ -582,7 +591,21 @@
                                                             Height="24" />
                                                 </StackPanel>
                                             </DockPanel>
-                                            <ItemsControl ItemsSource="{Binding Games.LadderSlots}">
+                                            <TextBlock Text="{Binding Games.LadderRoomPrizesText}" FontSize="10.5" FontWeight="SemiBold" Foreground="{StaticResource TextPrimaryBrush}" TextTrimming="CharacterEllipsis" Margin="0,0,0,2" />
+                                            <TextBlock Text="{Binding Games.LadderRoomMembersText}" FontSize="10.5" Foreground="{StaticResource TextSecondaryBrush}" TextTrimming="CharacterEllipsis" Margin="0,0,0,5" />
+                                            <Border Visibility="{Binding Games.IsLadderWaitingInvites, Converter={StaticResource BoolToVis}}"
+                                                    Background="White"
+                                                    BorderBrush="#FFFFD6E4"
+                                                    BorderThickness="1"
+                                                    CornerRadius="8"
+                                                    Padding="8,6">
+                                                <TextBlock Text="친구들의 초대 응답이 완료된 뒤 방장이 참가자를 확정하면 시작 위치를 선택할 수 있습니다."
+                                                           FontSize="10.5"
+                                                           Foreground="{StaticResource TextSecondaryBrush}"
+                                                           TextAlignment="Center" />
+                                            </Border>
+                                            <ItemsControl ItemsSource="{Binding Games.LadderSlots}"
+                                                          Visibility="{Binding Games.IsLadderPickingPhase, Converter={StaticResource BoolToVis}}">
                                                 <ItemsControl.ItemsPanel>
                                                     <ItemsPanelTemplate>
                                                         <UniformGrid Rows="1" />
@@ -619,7 +642,8 @@
                                         <Border Grid.Column="2" Background="#FFFAFBFD" BorderBrush="{StaticResource BorderSubtleBrush}" BorderThickness="1" CornerRadius="14" Padding="10">
                                             <ScrollViewer VerticalScrollBarVisibility="Auto">
                                                 <StackPanel>
-                                                    <TextBlock Text="사다리 결과" FontSize="11.5" FontWeight="Bold" Foreground="{StaticResource TextPrimaryBrush}" Margin="0,0,0,6" />
+                                                    <TextBlock Text="사다리 결과" FontSize="11.5" FontWeight="Bold" Foreground="{StaticResource TextPrimaryBrush}" Margin="0,0,0,4" />
+                                                    <TextBlock Text="{Binding Games.LadderBoardPrizesSummaryText}" FontSize="10" FontWeight="SemiBold" Foreground="{StaticResource TextSecondaryBrush}" TextWrapping="Wrap" Margin="0,0,0,6" />
                                                     <ItemsControl ItemsSource="{Binding Games.LadderResultLines}">
                                                         <ItemsControl.ItemTemplate>
                                                             <DataTemplate>
@@ -636,17 +660,31 @@
 
                                     <DockPanel Grid.Row="3" Margin="0,8,0,0" LastChildFill="False">
                                         <StackPanel DockPanel.Dock="Left" Orientation="Horizontal" VerticalAlignment="Center">
-                                            <TextBlock Text="참가 코인" FontSize="11" Foreground="{StaticResource TextSecondaryBrush}" VerticalAlignment="Center" Margin="0,0,5,0" />
-                                            <ComboBox ItemsSource="{Binding Games.LadderFeeOptions}" SelectedItem="{Binding Games.LadderEntryFee}" Width="60" Height="28" Margin="0,0,8,0" />
-                                            <TextBlock Text="{Binding Games.LadderStatusText}" FontSize="11" FontWeight="SemiBold" Foreground="{StaticResource BrandPinkBrush}" VerticalAlignment="Center" MaxWidth="220" TextTrimming="CharacterEllipsis" />
+                                            <TextBlock Text="참가비" FontSize="11" Foreground="{StaticResource TextSecondaryBrush}" VerticalAlignment="Center" Margin="0,0,5,0" />
+                                            <ComboBox ItemsSource="{Binding Games.LadderFeeChoices}"
+                                                      DisplayMemberPath="Label"
+                                                      SelectedValuePath="Coins"
+                                                      SelectedValue="{Binding Games.LadderEntryFee, Mode=TwoWay}"
+                                                      IsEnabled="{Binding Games.CanEditLadderSetup}"
+                                                      Width="104"
+                                                      Height="28"
+                                                      Margin="0,0,8,0" />
+                                            <TextBlock Text="{Binding Games.LadderStatusText}"
+                                                       ToolTip="{Binding Games.LadderStatusText}"
+                                                       FontSize="11"
+                                                       FontWeight="SemiBold"
+                                                       Foreground="{StaticResource BrandPinkBrush}"
+                                                       VerticalAlignment="Center"
+                                                       MaxWidth="205"
+                                                       TextTrimming="CharacterEllipsis" />
                                         </StackPanel>
                                         <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
-                                            <Button Content="📢 공유" Command="{Binding Games.ShareLadderResultToFriendsCommand}" Padding="8,4" FontSize="11" Height="30" Margin="0,0,5,0" />
-                                            <Button Content="혼자 돌리기" Command="{Binding Games.RunLadderCommand}" Padding="9,4" FontSize="11" Height="30" Margin="0,0,5,0" />
+                                            <Button Content="📢 공유" Command="{Binding Games.ShareLadderResultToFriendsCommand}" IsEnabled="{Binding Games.CanShareLadderResult}" Padding="8,4" FontSize="11" Height="30" Margin="0,0,5,0" />
+                                            <Button Content="혼자 돌리기" Command="{Binding Games.RunLadderCommand}" IsEnabled="{Binding Games.CanEditLadderSetup}" Padding="9,4" FontSize="11" Height="30" Margin="0,0,5,0" />
                                             <Button Content="🪜 친구 초대 방 열기"
                                                     Style="{StaticResource PrimaryButtonStyle}"
                                                     Command="{Binding Games.OpenLadderRoomCommand}"
-                                                    IsEnabled="{Binding Games.HasOnlineFriends}"
+                                                    IsEnabled="{Binding Games.CanOpenLadderRoom}"
                                                     Padding="12,4"
                                                     FontSize="11.5"
                                                     Height="30" />

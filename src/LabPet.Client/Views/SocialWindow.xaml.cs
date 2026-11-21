@@ -25,6 +25,8 @@ public partial class SocialWindow : Window
     private bool _isRotating;
     private Point _lastDragPoint;
     private string _renderedSignature = string.Empty;
+    private string _renderedFriendPetId = string.Empty;
+    private PetRigHandle? _currentRig;
     private bool _previewUpdateQueued;
 
     public SocialWindow(SocialViewModel viewModel, IPetMeshFactory meshFactory)
@@ -56,6 +58,7 @@ public partial class SocialWindow : Window
             _viewModel.PropertyChanged -= OnViewModelPropertyChanged;
             _viewModel.Detach();
             ClearFriendPreviewMesh();
+            FriendPreviewLights.Content = null;
         };
 
         UpdateFriendPreviewMesh();
@@ -95,7 +98,19 @@ public partial class SocialWindow : Window
         }
 
         _renderedSignature = sig;
+        var structureSig = PetRigHandle.BuildStructureSignature(appearance);
+        if (_currentRig is not null &&
+            string.Equals(_renderedFriendPetId, selected.Entry.PetId, StringComparison.OrdinalIgnoreCase) &&
+            string.Equals(_currentRig.AppearanceStructureSignature, structureSig, StringComparison.Ordinal))
+        {
+            _currentRig.UpdateColors(appearance.BodyColorHex, appearance.AccentColorHex);
+            _previewAnimator.UpdateAccentColor(appearance.AccentColorHex);
+            return;
+        }
+
+        _renderedFriendPetId = selected.Entry.PetId;
         var rig = _meshFactory.BuildPetRig(appearance, PetRigEffects.None);
+        _currentRig = rig;
         FriendPreviewPet.Content = rig.RootModel;
         _previewAnimator.AttachRig(rig, appearance.AccentColorHex);
     }
@@ -104,6 +119,8 @@ public partial class SocialWindow : Window
     {
         FriendPreviewPet.Content = null;
         _renderedSignature = string.Empty;
+        _renderedFriendPetId = string.Empty;
+        _currentRig = null;
         _previewAnimator.DetachRig();
     }
 

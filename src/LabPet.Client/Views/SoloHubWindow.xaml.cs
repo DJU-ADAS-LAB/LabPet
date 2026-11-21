@@ -26,17 +26,24 @@ public partial class SoloHubWindow : Window
 
     private sealed class AnimatedLadderTrack
     {
+        public required int StartColumn { get; init; }
+        public required int EndColumn { get; init; }
+        public required string Prize { get; init; }
+        public required Color TrackColor { get; init; }
         public required Polyline Line { get; init; }
         public required Ellipse Marker { get; init; }
         public required List<Point> FullPoints { get; init; }
         public required double TotalLength { get; init; }
+        public bool Arrived { get; set; }
     }
 
     private readonly SoloHubViewModel _viewModel;
     private readonly DispatcherTimer _uiRefreshTimer;
     private readonly DispatcherTimer _ladderAnimTimer;
     private readonly List<AnimatedLadderTrack> _activeTracks = [];
-    private double _ladderAnimProgress;
+    private readonly List<TextBlock> _bottomPrizeLabels = [];
+    private double _ladderElapsedDist;
+    private double _ladderStepDist;
 
     public SoloHubWindow(SoloHubViewModel viewModel)
     {
@@ -45,6 +52,7 @@ public partial class SoloHubWindow : Window
         DataContext = _viewModel;
 
         _viewModel.Games.LadderBoardGenerated += OnLadderBoardGenerated;
+        _viewModel.Games.LadderAnimationCancelled += OnLadderAnimationCancelled;
         _viewModel.Games.PropertyChanged += OnGamesPropertyChanged;
 
         _uiRefreshTimer = new DispatcherTimer
@@ -64,12 +72,27 @@ public partial class SoloHubWindow : Window
         };
         _ladderAnimTimer.Tick += OnLadderAnimTick;
 
+        Loaded += (_, _) =>
+        {
+            if (_viewModel.Games.IsLadderAnimating
+                && _viewModel.Games.ActiveLadderBoard is { } pendingBoard
+                && _activeTracks.Count == 0)
+            {
+                DrawAndAnimateLadderBoard(pendingBoard);
+            }
+        };
+
         Closed += (_, _) =>
         {
             _uiRefreshTimer.Stop();
             _ladderAnimTimer.Stop();
             _viewModel.Games.LadderBoardGenerated -= OnLadderBoardGenerated;
+            _viewModel.Games.LadderAnimationCancelled -= OnLadderAnimationCancelled;
             _viewModel.Games.PropertyChanged -= OnGamesPropertyChanged;
+            if (_viewModel.Games.IsLadderAnimating)
+            {
+                _ = _viewModel.Games.CompleteLadderRevealAsync();
+            }
         };
     }
 
@@ -90,10 +113,22 @@ public partial class SoloHubWindow : Window
         Dispatcher.BeginInvoke(() => DrawAndAnimateLadderBoard(board));
     }
 
+    private void OnLadderAnimationCancelled(object? sender, EventArgs e)
+    {
+        Dispatcher.BeginInvoke(() =>
+        {
+            _ladderAnimTimer.Stop();
+            _activeTracks.Clear();
+            _bottomPrizeLabels.Clear();
+            LadderCanvas.Children.Clear();
+        });
+    }
+
     private void DrawAndAnimateLadderBoard(LadderBoard board)
     {
         _ladderAnimTimer.Stop();
         _activeTracks.Clear();
+        _bottomPrizeLabels.Clear();
         LadderCanvas.Children.Clear();
 
         var w = LadderCanvas.ActualWidth > 40 ? LadderCanvas.ActualWidth : 390;
@@ -111,7 +146,7 @@ public partial class SoloHubWindow : Window
 
         var railBrush = new SolidColorBrush(Color.FromRgb(209, 213, 219));
 
-        // 1. 기본 세로줄 & 상단 참여자 / 하단 결과 라벨
+        // 1. 기본 세로줄 & 상단 참여자 / 하단 숨김("?") 결과 라벨
         for (var col = 0; col < count; col++)
         {
             var x = ColX(col);
@@ -141,10 +176,10 @@ public partial class SoloHubWindow : Window
 
             var botLabel = new TextBlock
             {
-                Text = board.Prizes[col],
-                FontSize = 10,
-                FontWeight = FontWeights.SemiBold,
-                Foreground = new SolidColorBrush(Color.FromRgb(55, 65, 81)),
+                Text = "?",
+                FontSize = 10.5,
+                FontWeight = FontWeights.Bold,
+                Foreground = new SolidColorBrush(Color.FromRgb(107, 114, 128)),
                 Width = 72,
                 TextAlignment = TextAlignment.Center,
                 TextTrimming = TextTrimming.CharacterEllipsis
@@ -152,6 +187,7 @@ public partial class SoloHubWindow : Window
             Canvas.SetLeft(botLabel, x - 36);
             Canvas.SetTop(botLabel, bottomY + 4);
             LadderCanvas.Children.Add(botLabel);
+            _bottomPrizeLabels.Add(botLabel);
         }
 
         // 2. 가로줄(사다리 발판)
@@ -171,6 +207,7 @@ public partial class SoloHubWindow : Window
 
         // 3. 각 참여자별 동시 하강 경로 애니메이션 트랙 준비
         var traces = LabLadderEngine.TraceAll(board);
+        var maxLength = 1.0;
         for (var i = 0; i < traces.Count; i++)
         {
             var trace = traces[i];
@@ -180,6 +217,12 @@ public partial class SoloHubWindow : Window
             for (var seg = 1; seg < fullPoints.Count; seg++)
             {
                 totalLen += (fullPoints[seg] - fullPoints[seg - 1]).Length;
+            }
+
+            totalLen = Math.Max(1.0, totalLen);
+            if (totalLen > maxLength)
+            {
+                maxLength = totalLen;
             }
 
             var poly = new Polyline
@@ -202,25 +245,30 @@ public partial class SoloHubWindow : Window
 
             _activeTracks.Add(new AnimatedLadderTrack
             {
+                StartColumn = trace.StartColumn,
+                EndColumn = trace.EndColumn,
+                Prize = trace.Prize,
+                TrackColor = color,
                 Line = poly,
                 Marker = marker,
                 FullPoints = fullPoints,
-                TotalLength = Math.Max(1.0, totalLen)
+                TotalLength = totalLen
             });
         }
 
-        _ladderAnimProgress = 0.0;
+        _ladderElapsedDist = 0.0;
+        _ladderStepDist = maxLength / 100.0;
         _ladderAnimTimer.Start();
     }
 
     private void OnLadderAnimTick(object? sender, EventArgs e)
     {
-        // 약 1.6초 동안 위에서 아래로 동시 하강
-        _ladderAnimProgress = Math.Min(1.0, _ladderAnimProgress + 0.011);
+        _ladderElapsedDist += _ladderStepDist;
+        var allArrived = true;
 
         foreach (var track in _activeTracks)
         {
-            var targetDist = track.TotalLength * _ladderAnimProgress;
+            var targetDist = Math.Min(track.TotalLength, _ladderElapsedDist);
             var pts = new PointCollection { track.FullPoints[0] };
             var head = track.FullPoints[0];
             var accum = 0.0;
@@ -249,11 +297,31 @@ public partial class SoloHubWindow : Window
             track.Line.Points = pts;
             Canvas.SetLeft(track.Marker, head.X - 4);
             Canvas.SetTop(track.Marker, head.Y - 4);
+
+            if (!track.Arrived && _ladderElapsedDist >= track.TotalLength - 1e-6)
+            {
+                track.Arrived = true;
+                if (track.EndColumn >= 0 && track.EndColumn < _bottomPrizeLabels.Count)
+                {
+                    var botLabel = _bottomPrizeLabels[track.EndColumn];
+                    botLabel.Text = track.Prize;
+                    botLabel.Foreground = new SolidColorBrush(track.TrackColor);
+                    botLabel.FontWeight = FontWeights.Bold;
+                }
+
+                _viewModel.Games.RevealLadderParticipantResult(track.StartColumn);
+            }
+
+            if (!track.Arrived)
+            {
+                allArrived = false;
+            }
         }
 
-        if (_ladderAnimProgress >= 1.0)
+        if (allArrived)
         {
             _ladderAnimTimer.Stop();
+            _ = _viewModel.Games.CompleteLadderRevealAsync();
         }
     }
 

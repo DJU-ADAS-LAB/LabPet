@@ -338,7 +338,8 @@ public partial class App : Application
     {
         services.AddSingleton<IStateMigrator, StateMigrator>();
         services.AddSingleton<IAppDataStore, JsonAppDataStore>();
-        services.AddSingleton<IPetMeshFactory, ProceduralPetMeshFactory>();
+        services.AddSingleton<ProceduralPetMeshFactory>();
+        services.AddSingleton<IPetMeshFactory, BlenderAssetPetMeshFactory>();
         services.AddSingleton<PetAnimationController>();
         services.AddSingleton<IAudioAnalyzer, LoopbackAudioAnalyzer>();
         services.AddSingleton<SoloProgressionService>();

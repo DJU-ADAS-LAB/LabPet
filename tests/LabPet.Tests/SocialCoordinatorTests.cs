@@ -80,9 +80,44 @@ public sealed class SocialCoordinatorTests : IAsyncLifetime
         games.BindProfile(_hostProfile);
         var friend = Assert.Single(_host.Friends);
         var session = Guid.NewGuid().ToString("N");
-        var room = new LadderRoomStateDto
+
+        var initialRoom = new LadderRoomStateDto
         {
-            SessionId = session, HostPetId = friend.PetId, WagerCoins = 10, SlotCount = 2,
+            SessionId = session,
+            HostPetId = friend.PetId,
+            Phase = LadderRoomPhase.WaitingInvites,
+            WagerCoins = 10,
+            SlotCount = 2,
+            PendingInviteCount = 0,
+            Prizes = ["통과", "잭팟"],
+            Members =
+            [
+                new LadderMemberStateDto { PetId = friend.PetId, DisplayName = "친구", SelectedSlot = null }
+            ]
+        };
+
+        Task Receive(string action, int wager, object data) => games.HandleGameEventAsync(new GameEventReceivedEventArgs(
+            friend.PetId, new GameEventPayload
+            {
+                GameType = LabLadderEngine.GameTypeId, SessionId = session, Action = action, WagerCoins = wager,
+                Data = JsonSerializer.Serialize(data, ProtocolJson.PacketOptions)
+            }));
+
+        var notifications = new List<string>();
+        games.GameNotification += (_, msg) => notifications.Add(msg);
+
+        await Receive("invite", 10, initialRoom);
+        await games.AcceptIncomingInviteAsync();
+        Assert.Equal(90, _hostProfile.SoloProgress.Coins);
+
+        var pickingRoom = new LadderRoomStateDto
+        {
+            SessionId = session,
+            HostPetId = friend.PetId,
+            Phase = LadderRoomPhase.PickingSlots,
+            WagerCoins = 10,
+            SlotCount = 2,
+            PendingInviteCount = 0,
             Prizes = ["통과", "잭팟"],
             Members =
             [
@@ -90,27 +125,371 @@ public sealed class SocialCoordinatorTests : IAsyncLifetime
                 new LadderMemberStateDto { PetId = _hostProfile.PetId, DisplayName = "나", SelectedSlot = 1 }
             ]
         };
-        Task Receive(string action, int wager, object data) => games.HandleGameEventAsync(new GameEventReceivedEventArgs(
-            friend.PetId, new GameEventPayload
-            {
-                GameType = LabLadderEngine.GameTypeId, SessionId = session, Action = action, WagerCoins = wager,
-                Data = JsonSerializer.Serialize(data, ProtocolJson.PacketOptions)
-            }));
-        await Receive("invite", 10, room);
-        await games.AcceptIncomingInviteAsync();
-        Assert.Equal(90, _hostProfile.SoloProgress.Coins);
+        await Receive("state", 10, pickingRoom);
 
-        var start = new LadderStartDto
-        {
-            SessionId = session, WagerCoins = 10, Participants = ["친구", "나"],
-            ParticipantPetIds = [friend.PetId, _hostProfile.PetId],
-            Prizes = ["잭팟", "통과"], Rungs = [new LadderRung(1, 0)]
-        };
+        var board = new LadderBoard(["친구", "나"], ["잭팟", "통과"], LabLadderEngine.DefaultLevels, [new LadderRung(1, 0)]);
+        var start = LabLadderEngine.CreateStartDto(pickingRoom, board);
+
+        // 합의되지 않은 배팅 금액의 start는 차단
         await Receive("start", 50, start);
         Assert.Equal(90, _hostProfile.SoloProgress.Coins);
+
+        // 유효한 start 수신 시에는 하단 도착 전까지 결과가 숨겨지고 정산되지 않는다
         await Receive("start", 10, start);
+        Assert.True(games.IsLadderAnimating);
+        Assert.All(games.LadderResultLines, line => Assert.EndsWith("→  ?", line));
+        Assert.DoesNotContain("잭팟", games.LadderStatusText, StringComparison.Ordinal);
+        Assert.Empty(notifications);
+        Assert.Equal(90, _hostProfile.SoloProgress.Coins);
+
+        // 중복 start는 무시된다
         await Receive("start", 10, start);
+
+        // 경로 도착 후 결과 공개 및 1회 정산
+        Assert.True(games.RevealLadderParticipantResult(0));
+        Assert.True(games.RevealLadderParticipantResult(1));
+        await games.CompleteLadderRevealAsync();
+        await games.CompleteLadderRevealAsync();
+
+        Assert.False(games.IsLadderAnimating);
+        Assert.Single(notifications);
         Assert.Equal(110, (await _store.LoadProfileAsync()).SoloProgress.Coins);
+    }
+
+    [Fact]
+    public async Task LadderMultiplayer_FreeMode_RunsAllPhasesFairlyHidesUntilArrivalAndLeavesCoinsUnchanged()
+    {
+        await using var harness = await CreateLadderPairAsync("free", hostCoins: 120, guestCoins: 75);
+        var hostGames = harness.HostGames;
+        var guestGames = harness.GuestGames;
+
+        var guestNotifications = new List<string>();
+        guestGames.GameNotification += (_, msg) => guestNotifications.Add(msg);
+
+        var guestInvited = WaitUntilPropertyAsync(guestGames, nameof(CoinGamesViewModel.HasIncomingInvite), () => guestGames.HasIncomingInvite);
+        hostGames.LadderEntryFee = 0;
+        hostGames.LadderPrizesText = "☕ 커피 x1, 통과 x1";
+        await hostGames.OpenLadderRoomCommand.ExecuteAsync(null);
+        await guestInvited.WaitAsync(TimeSpan.FromSeconds(5));
+
+        // 1. 초대 시 무료 모드 및 전체 상품 공개 확인
+        Assert.NotNull(guestGames.IncomingInvite);
+        Assert.Equal(0, guestGames.IncomingInvite!.WagerCoins);
+        Assert.Contains("무료 (0코인)", guestGames.IncomingInviteText);
+        Assert.Contains("☕ 커피 ×1, 통과 ×1", guestGames.IncomingInviteText);
+
+        var hostJoined = WaitUntilPropertyAsync(hostGames, nameof(CoinGamesViewModel.CanConfirmLadderParticipants),
+            () => hostGames.CanConfirmLadderParticipants);
+        await guestGames.AcceptIncomingInviteCommand.ExecuteAsync(null);
+        await hostJoined.WaitAsync(TimeSpan.FromSeconds(5));
+
+        // 2. 확정 전에는 시작 위치를 선택할 수 없다
+        await hostGames.PickLadderSlotCommand.ExecuteAsync(0);
+        await guestGames.PickLadderSlotCommand.ExecuteAsync(1);
+        Assert.False(hostGames.IsLadderPickingPhase);
+        Assert.False(guestGames.IsLadderPickingPhase);
+        Assert.All(hostGames.LadderSlots, s => Assert.False(s.CanPick));
+
+        // 3. 방장이 참가자 확정 -> 양쪽 모두 2단계 위치 선택 진입
+        var guestPicking = WaitUntilPropertyAsync(guestGames, nameof(CoinGamesViewModel.IsLadderPickingPhase),
+            () => guestGames.IsLadderPickingPhase);
+        await hostGames.ConfirmLadderParticipantsCommand.ExecuteAsync(null);
+        await guestPicking.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.True(hostGames.IsLadderPickingPhase);
+
+        // 4. 중복 선택 차단 및 전원 선택 완료 전 게임 시작 불가
+        var guestSawHostSlot = WaitUntilPropertyAsync(guestGames, nameof(CoinGamesViewModel.LadderLobbySummaryText),
+            () => guestGames.LadderSlots.Any(s => s.ColumnIndex == 0 && s.IsOccupied));
+        await hostGames.PickLadderSlotCommand.ExecuteAsync(0);
+        await guestSawHostSlot.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.False(guestGames.LadderSlots[0].CanPick);
+        Assert.False(hostGames.CanStartLadderGame);
+
+        // 게스트가 이미 차지한 0번 선택 시도해도 무시되며, 1번 선택 후 시작 가능해짐
+        await guestGames.PickLadderSlotCommand.ExecuteAsync(0);
+        Assert.False(hostGames.CanStartLadderGame);
+
+        var hostReady = WaitUntilPropertyAsync(hostGames, nameof(CoinGamesViewModel.CanStartLadderGame),
+            () => hostGames.CanStartLadderGame);
+        await guestGames.PickLadderSlotCommand.ExecuteAsync(1);
+        await hostReady.WaitAsync(TimeSpan.FromSeconds(5));
+
+        // 5. 방장 게임 시작 -> 양쪽 동일한 사다리판 수신, 도착 전에는 결과 비노출
+        var guestBoardTcs = new TaskCompletionSource<LadderBoard>(TaskCreationOptions.RunContinuationsAsynchronously);
+        guestGames.LadderBoardGenerated += (_, board) => guestBoardTcs.TrySetResult(board);
+        LadderBoard? hostBoard = null;
+        hostGames.LadderBoardGenerated += (_, board) => hostBoard = board;
+
+        await hostGames.StartLadderRoomCommand.ExecuteAsync(null);
+        var guestBoard = await guestBoardTcs.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.NotNull(hostBoard);
+        Assert.Equal(hostBoard!.Participants, guestBoard.Participants);
+        Assert.Equal(hostBoard.Prizes, guestBoard.Prizes);
+        Assert.Equal(hostBoard.Rungs, guestBoard.Rungs);
+
+        Assert.True(hostGames.IsLadderAnimating);
+        Assert.True(guestGames.IsLadderAnimating);
+        Assert.All(hostGames.LadderResultLines, line => Assert.EndsWith("→  ?", line));
+        Assert.All(guestGames.LadderResultLines, line => Assert.EndsWith("→  ?", line));
+        Assert.DoesNotContain("☕ 커피", hostGames.LadderStatusText);
+        Assert.DoesNotContain("☕ 커피", guestGames.LadderStatusText);
+        Assert.Empty(guestNotifications);
+        Assert.Contains("☕ 커피 ×1, 통과 ×1", guestGames.LadderBoardPrizesSummaryText);
+
+        // 6. 개별 도착 시 해당 결과만 공개되고 무료 모드 코인은 변하지 않는다
+        var expectedTraces = LabLadderEngine.TraceAll(guestBoard);
+        Assert.True(guestGames.RevealLadderParticipantResult(0));
+        Assert.Contains(expectedTraces[0].Prize, guestGames.LadderResultLines[0]);
+        Assert.EndsWith("→  ?", guestGames.LadderResultLines[1]);
+
+        Assert.True(hostGames.RevealLadderParticipantResult(0));
+        Assert.True(hostGames.RevealLadderParticipantResult(1));
+        Assert.True(guestGames.RevealLadderParticipantResult(1));
+        await hostGames.CompleteLadderRevealAsync();
+        await guestGames.CompleteLadderRevealAsync();
+
+        Assert.False(hostGames.IsLadderAnimating);
+        Assert.False(guestGames.IsLadderAnimating);
+        Assert.Contains(expectedTraces[1].Prize, guestGames.LadderResultLines[1]);
+        Assert.Single(guestNotifications);
+        Assert.Equal(120, harness.HostProfile.SoloProgress.Coins);
+        Assert.Equal(75, harness.GuestProfile.SoloProgress.Coins);
+    }
+
+    [Fact]
+    public async Task LadderMultiplayer_LeaveOrDisconnect_CancelsGameAndRefundsPaidCoinsOnce()
+    {
+        await using var harness = await CreateLadderPairAsync("refund", hostCoins: 100, guestCoins: 100);
+        var hostGames = harness.HostGames;
+        var guestGames = harness.GuestGames;
+
+        // 시나리오 1: 유료(30코인) 확정 후 게스트 이탈 -> 양쪽 방 취소 및 각 1회 환불 (100코인 복구)
+        var invited = WaitUntilPropertyAsync(guestGames, nameof(CoinGamesViewModel.HasIncomingInvite), () => guestGames.HasIncomingInvite);
+        hostGames.LadderEntryFee = 30;
+        hostGames.LadderPrizesText = "💰 잭팟! x1, 통과 x1";
+        await hostGames.OpenLadderRoomCommand.ExecuteAsync(null);
+        await invited.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(70, harness.HostProfile.SoloProgress.Coins);
+
+        var joined = WaitUntilPropertyAsync(hostGames, nameof(CoinGamesViewModel.CanConfirmLadderParticipants), () => hostGames.CanConfirmLadderParticipants);
+        await guestGames.AcceptIncomingInviteCommand.ExecuteAsync(null);
+        await joined.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(70, harness.GuestProfile.SoloProgress.Coins);
+
+        var picking = WaitUntilPropertyAsync(guestGames, nameof(CoinGamesViewModel.IsLadderPickingPhase), () => guestGames.IsLadderPickingPhase);
+        await hostGames.ConfirmLadderParticipantsCommand.ExecuteAsync(null);
+        await picking.WaitAsync(TimeSpan.FromSeconds(5));
+
+        var hostClosed = WaitUntilPropertyAsync(hostGames, nameof(CoinGamesViewModel.IsLadderRoomOpen), () => !hostGames.IsLadderRoomOpen);
+        await guestGames.CancelLadderRoomCommand.ExecuteAsync(null);
+        await hostClosed.WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.Equal(100, harness.GuestProfile.SoloProgress.Coins);
+        Assert.Equal(100, (await harness.HostStore.LoadProfileAsync()).SoloProgress.Coins);
+
+        // 시나리오 2: 위치 선택 후 상대 연결이 끊긴 상태에서 시작 시도 -> 안전 취소 및 방장 1회 환불
+        var invited2 = WaitUntilPropertyAsync(guestGames, nameof(CoinGamesViewModel.HasIncomingInvite), () => guestGames.HasIncomingInvite);
+        await hostGames.OpenLadderRoomCommand.ExecuteAsync(null);
+        await invited2.WaitAsync(TimeSpan.FromSeconds(5));
+
+        var joined2 = WaitUntilPropertyAsync(hostGames, nameof(CoinGamesViewModel.CanConfirmLadderParticipants), () => hostGames.CanConfirmLadderParticipants);
+        await guestGames.AcceptIncomingInviteCommand.ExecuteAsync(null);
+        await joined2.WaitAsync(TimeSpan.FromSeconds(5));
+
+        var picking2 = WaitUntilPropertyAsync(guestGames, nameof(CoinGamesViewModel.IsLadderPickingPhase), () => guestGames.IsLadderPickingPhase);
+        await hostGames.ConfirmLadderParticipantsCommand.ExecuteAsync(null);
+        await picking2.WaitAsync(TimeSpan.FromSeconds(5));
+
+        var ready2 = WaitUntilPropertyAsync(hostGames, nameof(CoinGamesViewModel.CanStartLadderGame), () => hostGames.CanStartLadderGame);
+        await hostGames.PickLadderSlotCommand.ExecuteAsync(0);
+        await guestGames.PickLadderSlotCommand.ExecuteAsync(1);
+        await ready2.WaitAsync(TimeSpan.FromSeconds(5));
+
+        await harness.GuestTransport.DisposeAsync();
+        await hostGames.StartLadderRoomCommand.ExecuteAsync(null);
+
+        Assert.False(hostGames.IsLadderRoomOpen);
+        Assert.False(hostGames.IsLadderAnimating);
+        Assert.Equal(100, (await harness.HostStore.LoadProfileAsync()).SoloProgress.Coins);
+    }
+
+    private sealed class LadderPairHarness : IAsyncDisposable
+    {
+        public required JsonAppDataStore HostStore { get; init; }
+        public required JsonAppDataStore GuestStore { get; init; }
+        public required LanP2pTransport HostTransport { get; init; }
+        public required LanP2pTransport GuestTransport { get; init; }
+        public required SocialCoordinatorService HostSocial { get; init; }
+        public required SocialCoordinatorService GuestSocial { get; init; }
+        public required PetProfile HostProfile { get; init; }
+        public required PetProfile GuestProfile { get; init; }
+        public required CoinGamesViewModel HostGames { get; init; }
+        public required CoinGamesViewModel GuestGames { get; init; }
+
+        public async ValueTask DisposeAsync()
+        {
+            HostGames.Dispose();
+            GuestGames.Dispose();
+            await HostSocial.DisposeAsync();
+            await GuestSocial.DisposeAsync();
+            await HostTransport.DisposeAsync();
+            await GuestTransport.DisposeAsync();
+        }
+    }
+
+    private async Task<LadderPairHarness> CreateLadderPairAsync(string dirSuffix, int hostCoins, int guestCoins)
+    {
+        var hostStore = new JsonAppDataStore(new StateMigrator(), Path.Combine(_dataDirectory, $"host_{dirSuffix}"));
+        var guestStore = new JsonAppDataStore(new StateMigrator(), Path.Combine(_dataDirectory, $"guest_{dirSuffix}"));
+        var hostTransport = new LanP2pTransport(0, 0, 0);
+        var guestTransport = new LanP2pTransport(0, 0, 0);
+        var hostSocial = new SocialCoordinatorService(hostTransport, hostStore, new SoloProgressionService());
+        var guestSocial = new SocialCoordinatorService(guestTransport, guestStore, new SoloProgressionService());
+
+        var secret = PacketSigner.GeneratePairSecretBase64();
+        var hostProfile = new PetProfile { OwnerName = "방장", PetName = "모찌", SoloProgress = { Coins = hostCoins } };
+        var guestProfile = new PetProfile { OwnerName = "친구", PetName = "몽실", SoloProgress = { Coins = guestCoins } };
+
+        await hostStore.SaveProfileAsync(hostProfile);
+        await guestStore.SaveProfileAsync(guestProfile);
+        await hostTransport.StartAsync(hostProfile, []);
+        await guestTransport.StartAsync(guestProfile, []);
+
+        var guestAsFriend = new FriendEntry
+        {
+            PetId = guestProfile.PetId,
+            OwnerName = guestProfile.OwnerName,
+            PetName = guestProfile.PetName,
+            LastKnownIp = IPAddress.Loopback.ToString(),
+            LastKnownTcpPort = guestTransport.BoundTcpPort,
+            PairSecretBase64 = secret
+        };
+        var hostAsFriend = new FriendEntry
+        {
+            PetId = hostProfile.PetId,
+            OwnerName = hostProfile.OwnerName,
+            PetName = hostProfile.PetName,
+            LastKnownIp = IPAddress.Loopback.ToString(),
+            LastKnownTcpPort = hostTransport.BoundTcpPort,
+            PairSecretBase64 = secret
+        };
+
+        await hostStore.SaveFriendsAsync(new FriendsStore { Friends = [guestAsFriend] });
+        await guestStore.SaveFriendsAsync(new FriendsStore { Friends = [hostAsFriend] });
+        await hostSocial.StartAsync(hostProfile);
+        await guestSocial.StartAsync(guestProfile);
+        hostTransport.UpdateKnownFriends([guestAsFriend]);
+        guestTransport.UpdateKnownFriends([hostAsFriend]);
+
+        var peerDiscovered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        hostSocial.StateChanged += (_, _) =>
+        {
+            if (hostSocial.DiscoveredPeers.Any(p => p.PetId == guestProfile.PetId))
+            {
+                peerDiscovered.TrySetResult();
+            }
+        };
+        hostTransport.HandleDiscoveryHello(new DiscoveryHelloPacket
+        {
+            PetId = guestProfile.PetId,
+            OwnerName = guestProfile.OwnerName,
+            PetName = guestProfile.PetName,
+            TcpPort = guestTransport.BoundTcpPort,
+            AppVersion = "0.2.0"
+        }, IPAddress.Loopback.ToString(), CancellationToken.None);
+        await peerDiscovered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+        var hostGames = new CoinGamesViewModel(hostStore, new SoloProgressionService(), hostSocial);
+        var guestGames = new CoinGamesViewModel(guestStore, new SoloProgressionService(), guestSocial);
+        hostGames.BindProfile(hostProfile);
+        guestGames.BindProfile(guestProfile);
+
+        return new LadderPairHarness
+        {
+            HostStore = hostStore,
+            GuestStore = guestStore,
+            HostTransport = hostTransport,
+            GuestTransport = guestTransport,
+            HostSocial = hostSocial,
+            GuestSocial = guestSocial,
+            HostProfile = hostProfile,
+            GuestProfile = guestProfile,
+            HostGames = hostGames,
+            GuestGames = guestGames
+        };
+    }
+
+    [Fact]
+    public async Task LadderSolo_FreeAndPaid_HideResultsUntilArrivalAndSettleOnce()
+    {
+        var soloStore = new JsonAppDataStore(new StateMigrator(), Path.Combine(_dataDirectory, "solo"));
+        var soloProfile = new PetProfile { OwnerName = "솔로", PetName = "모찌", SoloProgress = { Coins = 100 } };
+        await soloStore.SaveProfileAsync(soloProfile);
+
+        using var games = new CoinGamesViewModel(soloStore, new SoloProgressionService(), _host);
+        games.BindProfile(soloProfile);
+
+        // 무료(0코인) 솔로 사다리: 도착 전 숨김, 완료 후 코인 변동 없음
+        games.LadderParticipantsText = "나, 친구";
+        games.LadderPrizesText = "커피 x1, 통과 x1";
+        games.LadderEntryFee = 0;
+        await games.RunLadderCommand.ExecuteAsync(null);
+
+        Assert.True(games.IsLadderAnimating);
+        Assert.All(games.LadderResultLines, line => Assert.EndsWith("→  ?", line));
+        Assert.Contains("커피 ×1, 통과 ×1", games.LadderBoardPrizesSummaryText);
+        Assert.DoesNotContain("커피", games.LadderStatusText);
+        Assert.Equal(100, soloProfile.SoloProgress.Coins);
+
+        Assert.True(games.RevealLadderParticipantResult(0));
+        Assert.DoesNotContain("→  ?", games.LadderResultLines[0]);
+        Assert.EndsWith("→  ?", games.LadderResultLines[1]);
+
+        await games.CompleteLadderRevealAsync();
+        Assert.False(games.IsLadderAnimating);
+        Assert.Equal(100, soloProfile.SoloProgress.Coins);
+
+        // 유료(30코인) 솔로 잭팟: 시작 시 30코인 차감(70), 도착 전 지급 없음, 완료 시 잭팟 결과에 따라 1회 정산
+        games.LadderPrizesText = "💰 잭팟! x1, 꽝 x1";
+        games.LadderEntryFee = 30;
+        await games.RunLadderCommand.ExecuteAsync(null);
+        Assert.Equal(70, soloProfile.SoloProgress.Coins);
+        Assert.All(games.LadderResultLines, line => Assert.EndsWith("→  ?", line));
+
+        var board = Assert.IsType<LadderBoard>(games.ActiveLadderBoard);
+        var myWon = LabLadderEngine.IsJackpot(LabLadderEngine.TracePath(board, 0).Prize);
+        await games.CompleteLadderRevealAsync();
+        await games.CompleteLadderRevealAsync();
+
+        var expectedCoins = myWon ? 70 + 30 * 2 : 70;
+        Assert.Equal(expectedCoins, soloProfile.SoloProgress.Coins);
+    }
+
+    private static Task WaitUntilPropertyAsync(CoinGamesViewModel vm, string propertyName, Func<bool> condition)
+    {
+        if (condition())
+        {
+            return Task.CompletedTask;
+        }
+
+        var tcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        void Handler(object? sender, System.ComponentModel.PropertyChangedEventArgs args)
+        {
+            if ((string.IsNullOrEmpty(args.PropertyName) || args.PropertyName == propertyName) && condition())
+            {
+                vm.PropertyChanged -= Handler;
+                tcs.TrySetResult();
+            }
+        }
+
+        vm.PropertyChanged += Handler;
+        if (condition())
+        {
+            vm.PropertyChanged -= Handler;
+            tcs.TrySetResult();
+        }
+
+        return tcs.Task;
     }
 
     [Fact]

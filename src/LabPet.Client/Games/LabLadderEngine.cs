@@ -1,4 +1,14 @@
+using System.Security.Cryptography;
+using System.Text.RegularExpressions;
+
 namespace LabPet.Client.Games;
+
+public enum LadderRoomPhase
+{
+    WaitingInvites = 0,
+    PickingSlots = 1,
+    Running = 2
+}
 
 public sealed record LadderRung(int Level, int LeftColumn);
 
@@ -20,62 +30,156 @@ public sealed record LadderBoard(
 /// <summary>
 /// 연구실 공동 사다리타기 엔진.
 /// 인접한 가로줄 충돌 없이 사다리 판을 생성하고, 각 참여자의 이동 경로와 최종 결과를 계산한다.
-/// 또한 LAN 멀티플레이어 대기실에서 참가자별 시작 위치 선점 및 전원 선택 완료 판정을 담당한다.
+/// 또한 LAN 멀티플레이어 대기실에서 초대 응답 -> 참가자 확정 -> 중복 없는 위치 선택 -> 불변 사다리판 검증 단계를 담당한다.
 /// </summary>
-public static class LabLadderEngine
+public static partial class LabLadderEngine
 {
     public const string GameTypeId = "ladder";
     public const int MinParticipants = 2;
     public const int MaxParticipants = 8;
     public const int DefaultLevels = 9;
 
-    internal static bool IsValidRoom(LadderRoomStateDto room, string sessionId, string hostId, int wager)
+    [GeneratedRegex(@"^(?<name>.+?)\s*[xX×*]\s*(?<count>\d+)$")]
+    private static partial Regex PrizeQuantityRegex();
+
+    public static bool TryParsePrizeInput(string? raw, out List<string> prizes, out string error)
     {
-        if (room.SessionId != sessionId || !string.Equals(room.HostPetId, hostId, StringComparison.OrdinalIgnoreCase)
-            || room.WagerCoins != wager || room.SlotCount is < MinParticipants or > MaxParticipants
-            || room.Members is not { Count: >= 1 and <= MaxParticipants }
-            || room.PendingInviteCount is < 0 or >= MaxParticipants
-            || room.Prizes is not { Count: >= MinParticipants and <= MaxParticipants }
-            || room.Prizes.Any(string.IsNullOrWhiteSpace)
-            || room.Prizes.Count(IsJackpot) > 1
-            || !room.Members.All(member => member is not null && !string.IsNullOrWhiteSpace(member.PetId)
-                && (member.SelectedSlot is null || member.SelectedSlot >= 0 && member.SelectedSlot < room.SlotCount)))
+        prizes = [];
+        error = string.Empty;
+
+        var tokens = (raw ?? string.Empty)
+            .Split([',', '\n', '\r'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+
+        foreach (var token in tokens)
         {
+            if (string.IsNullOrWhiteSpace(token))
+            {
+                continue;
+            }
+
+            var itemName = token;
+            var quantity = 1;
+            var match = PrizeQuantityRegex().Match(token);
+            if (match.Success)
+            {
+                itemName = match.Groups["name"].Value.Trim();
+                if (!int.TryParse(match.Groups["count"].Value, out quantity) || quantity < 1 || quantity > MaxParticipants)
+                {
+                    error = $"상품 수량은 1~{MaxParticipants}개 사이로 입력해 주세요. ({token})";
+                    prizes.Clear();
+                    return false;
+                }
+            }
+
+            if (string.IsNullOrWhiteSpace(itemName))
+            {
+                error = $"유효하지 않은 상품 형식입니다. ({token})";
+                prizes.Clear();
+                return false;
+            }
+
+            if (prizes.Count + quantity > MaxParticipants)
+            {
+                error = $"총 상품 수량은 최대 {MaxParticipants}개까지 입력할 수 있습니다.";
+                prizes.Clear();
+                return false;
+            }
+
+            for (var i = 0; i < quantity; i++)
+            {
+                prizes.Add(itemName);
+            }
+        }
+
+        if (prizes.Count == 0)
+        {
+            error = "상품을 1개 이상 입력해 주세요. (예: 커피 x1, 통과 x2)";
             return false;
         }
-        var uniqueIds = room.Members.Select(member => member.PetId).ToHashSet(StringComparer.OrdinalIgnoreCase);
-        var slots = room.Members.Where(member => member.SelectedSlot.HasValue).Select(member => member.SelectedSlot).ToArray();
-        return uniqueIds.Count == room.Members.Count && uniqueIds.Contains(hostId)
-            && slots.Distinct().Count() == slots.Length;
+
+        return true;
     }
 
-    internal static bool IsValidStart(LadderStartDto start, LadderRoomStateDto room, string localPetId)
+    public static List<string> NormalizePrizesForCount(IReadOnlyList<string> configuredPrizes, int targetCount)
     {
-        if (start.SessionId != room.SessionId || start.WagerCoins != room.WagerCoins
-            || start.ParticipantPetIds is not { Count: >= MinParticipants and <= MaxParticipants } ids
-            || start.Participants?.Count != ids.Count || start.Prizes?.Count != ids.Count
-            || start.Participants.Any(string.IsNullOrWhiteSpace) || start.Prizes.Any(string.IsNullOrWhiteSpace)
-            || start.Levels != DefaultLevels || start.Rungs is null || start.Rungs.Count > DefaultLevels * MaxParticipants)
+        var count = Math.Clamp(targetCount, MinParticipants, MaxParticipants);
+        var normalized = configuredPrizes
+            .Where(p => !string.IsNullOrWhiteSpace(p))
+            .Select(p => p.Trim())
+            .ToList();
+
+        while (normalized.Count < count)
         {
-            return false;
+            normalized.Add("통과");
         }
-        var expected = room.Members.Where(member => member.SelectedSlot.HasValue)
-            .OrderBy(member => member.SelectedSlot).Select(member => member.PetId);
-        if (!ids.SequenceEqual(expected, StringComparer.OrdinalIgnoreCase)
-            || !ids.Contains(localPetId, StringComparer.OrdinalIgnoreCase)
-            || !start.Prizes.Order(StringComparer.Ordinal)
-                .SequenceEqual(room.Prizes.Take(ids.Count).Order(StringComparer.Ordinal), StringComparer.Ordinal))
+
+        while (normalized.Count > count)
         {
-            return false;
+            var fillerIdx = normalized.FindLastIndex(IsFillerPrize);
+            normalized.RemoveAt(fillerIdx >= 0 ? fillerIdx : normalized.Count - 1);
         }
-        var rungs = new HashSet<(int Level, int Column)>();
-        return start.Rungs.All(rung => rung is not null
-            && rung.Level > 0 && rung.Level < start.Levels && rung.LeftColumn >= 0 && rung.LeftColumn < ids.Count - 1
-            && !rungs.Contains((rung.Level, rung.LeftColumn - 1)) && !rungs.Contains((rung.Level, rung.LeftColumn + 1))
-            && rungs.Add((rung.Level, rung.LeftColumn)));
+
+        return normalized;
     }
 
-    internal static bool IsJackpot(string prize) => prize.Contains("잭팟", StringComparison.OrdinalIgnoreCase);
+    public static string FormatPrizeSummary(IReadOnlyList<string> prizes)
+    {
+        if (prizes.Count == 0)
+        {
+            return string.Empty;
+        }
+
+        var ordered = new List<(string Name, int Count)>();
+        var indexByName = new Dictionary<string, int>(StringComparer.Ordinal);
+        foreach (var raw in prizes)
+        {
+            if (string.IsNullOrWhiteSpace(raw))
+            {
+                continue;
+            }
+
+            var name = raw.Trim();
+            if (indexByName.TryGetValue(name, out var idx))
+            {
+                ordered[idx] = (name, ordered[idx].Count + 1);
+            }
+            else
+            {
+                indexByName[name] = ordered.Count;
+                ordered.Add((name, 1));
+            }
+        }
+
+        return string.Join(", ", ordered.Select(x => $"{x.Name} ×{x.Count}"));
+    }
+
+    public static List<T> ShuffleFisherYates<T>(IReadOnlyList<T> items, Func<int, int>? nextInt = null)
+    {
+        var list = new List<T>(items);
+        for (var i = list.Count - 1; i > 0; i--)
+        {
+            var j = nextInt is null ? RandomNumberGenerator.GetInt32(i + 1) : nextInt(i + 1);
+            if (j < 0 || j > i)
+            {
+                throw new ArgumentOutOfRangeException(nameof(nextInt), "셔플 인덱스가 허용 범위를 벗어났습니다.");
+            }
+
+            (list[i], list[j]) = (list[j], list[i]);
+        }
+
+        return list;
+    }
+
+    public static LadderBoard GenerateRandomizedBoard(
+        IReadOnlyList<string> participants,
+        IReadOnlyList<string> prizes,
+        int levels = DefaultLevels)
+    {
+        var count = Math.Clamp(participants.Count, MinParticipants, MaxParticipants);
+        var normalizedPrizes = NormalizePrizesForCount(prizes, count);
+        var shuffledPrizes = ShuffleFisherYates(normalizedPrizes);
+        return GenerateBoard(participants, shuffledPrizes, levels, rng: null);
+    }
 
     public static LadderBoard GenerateBoard(
         IReadOnlyList<string> participants,
@@ -92,9 +196,11 @@ public static class LabLadderEngine
         var cleanParticipants = participants.Take(count).Select((p, idx) => string.IsNullOrWhiteSpace(p) ? $"참여자 {idx + 1}" : p.Trim()).ToList();
         var cleanPrizes = prizes.Take(count).Select((p, idx) => string.IsNullOrWhiteSpace(p) ? $"항목 {idx + 1}" : p.Trim()).ToList();
 
-        var r = rng ?? Random.Shared;
         var rungs = new List<LadderRung>();
         var usableLevels = Math.Max(4, levels);
+
+        bool ShouldPlaceRung() => rng is null ? RandomNumberGenerator.GetInt32(100) < 45 : rng.NextDouble() < 0.45;
+        int NextLevel() => rng is null ? RandomNumberGenerator.GetInt32(1, usableLevels) : rng.Next(1, usableLevels);
 
         for (var level = 1; level < usableLevels; level++)
         {
@@ -108,7 +214,7 @@ public static class LabLadderEngine
                 }
 
                 // 약 45% 확률로 가로줄 배치
-                if (r.NextDouble() < 0.45)
+                if (ShouldPlaceRung())
                 {
                     rungs.Add(new LadderRung(level, col));
                     prevHadRung = true;
@@ -126,7 +232,7 @@ public static class LabLadderEngine
 
             for (var attempt = 0; attempt < 20; attempt++)
             {
-                var level = r.Next(1, usableLevels);
+                var level = NextLevel();
                 var conflict = rungs.Any(x => x.Level == level && Math.Abs(x.LeftColumn - col) <= 1);
                 if (!conflict)
                 {
@@ -189,13 +295,70 @@ public static class LabLadderEngine
         return list;
     }
 
+    public static LadderStartDto CreateStartDto(LadderRoomStateDto room, LadderBoard board)
+    {
+        var orderedMembers = room.Members
+            .Where(m => m.SelectedSlot.HasValue)
+            .OrderBy(m => m.SelectedSlot!.Value)
+            .ToList();
+
+        var traces = TraceAll(board);
+        var outcomes = new List<LadderOutcomeDto>(orderedMembers.Count);
+        for (var i = 0; i < orderedMembers.Count; i++)
+        {
+            var trace = traces[i];
+            outcomes.Add(new LadderOutcomeDto
+            {
+                StartColumn = trace.StartColumn,
+                EndColumn = trace.EndColumn,
+                ParticipantPetId = orderedMembers[i].PetId,
+                Prize = trace.Prize
+            });
+        }
+
+        return new LadderStartDto
+        {
+            SessionId = room.SessionId,
+            WagerCoins = room.WagerCoins,
+            Levels = board.Levels,
+            ParticipantPetIds = orderedMembers.Select(m => m.PetId).ToList(),
+            Participants = board.Participants.ToList(),
+            Prizes = board.Prizes.ToList(),
+            Rungs = board.Rungs.ToList(),
+            Outcomes = outcomes
+        };
+    }
+
+    public static bool CanConfirmParticipants(LadderRoomStateDto room)
+        => room.Phase == LadderRoomPhase.WaitingInvites
+            && room.PendingInviteCount == 0
+            && room.Members.Count is >= MinParticipants and <= MaxParticipants;
+
+    public static bool TryConfirmParticipants(LadderRoomStateDto room, IReadOnlyList<string> configuredPrizes)
+    {
+        if (!CanConfirmParticipants(room))
+        {
+            return false;
+        }
+
+        room.Phase = LadderRoomPhase.PickingSlots;
+        room.SlotCount = room.Members.Count;
+        room.Prizes = NormalizePrizesForCount(configuredPrizes, room.SlotCount);
+        foreach (var member in room.Members)
+        {
+            member.SelectedSlot = null;
+        }
+
+        return true;
+    }
+
     /// <summary>
-    /// LAN 사다리 대기실에서 참가자가 원하는 시작 열(slotIndex)을 선점하거나 이동한다.
-    /// 이미 다른 참가자가 차지한 자리는 선택할 수 없다.
+    /// LAN 사다리 대기실에서 참가자가 원하는 시작 열(slotIndex)을 선점하거나 빈 자리로 이동한다.
+    /// 참가자 확정(PickingSlots) 전이거나 이미 다른 참가자가 차지한 자리는 선택할 수 없다.
     /// </summary>
     public static bool TryPickSlot(LadderRoomStateDto room, string petId, int slotIndex)
     {
-        if (slotIndex < 0 || slotIndex >= room.SlotCount)
+        if (room.Phase != LadderRoomPhase.PickingSlots || slotIndex < 0 || slotIndex >= room.SlotCount)
         {
             return false;
         }
@@ -219,31 +382,207 @@ public static class LabLadderEngine
     }
 
     /// <summary>
-    /// 방에 들어온 모든 참가자(최소 2명)가 서로 다른 시작 위치를 선택했고,
-    /// 대기 중인 초대자가 없는지(자동 시작 가능 여부) 판정한다.
+    /// 참가자가 확정되었고 모든 확정 참가자(최소 2명)가 서로 다른 시작 위치를 선택했을 때만 true를 반환한다.
     /// </summary>
-    public static bool IsReadyToAutoStart(LadderRoomStateDto room)
+    public static bool CanStartGame(LadderRoomStateDto room)
     {
-        if (room.PendingInviteCount > 0 || room.Members.Count < MinParticipants)
+        if (room.Phase != LadderRoomPhase.PickingSlots
+            || room.PendingInviteCount != 0
+            || room.Members.Count < MinParticipants
+            || room.Members.Count > MaxParticipants
+            || room.Members.Count != room.SlotCount)
         {
             return false;
         }
 
-        return AreJoinedMembersReady(room);
+        var slots = new HashSet<int>();
+        foreach (var m in room.Members)
+        {
+            if (m.SelectedSlot is not int s || s < 0 || s >= room.SlotCount || !slots.Add(s))
+            {
+                return false;
+            }
+        }
+
+        return slots.Count == room.SlotCount;
     }
 
-    /// <summary>
-    /// 현재 입장한 모든 참가자(최소 2명)가 시작 위치를 선택했는지 판정한다.
-    /// </summary>
-    public static bool AreJoinedMembersReady(LadderRoomStateDto room)
+    internal static bool IsValidRoom(LadderRoomStateDto room, string sessionId, string hostId, int wager)
     {
-        if (room.Members.Count < MinParticipants)
+        if (room.SessionId != sessionId
+            || !string.Equals(room.HostPetId, hostId, StringComparison.OrdinalIgnoreCase)
+            || wager < 0
+            || room.WagerCoins != wager
+            || room.SlotCount is < MinParticipants or > MaxParticipants
+            || room.Members is not { Count: >= 1 and <= MaxParticipants }
+            || room.PendingInviteCount is < 0 or >= MaxParticipants
+            || room.Prizes is null
+            || room.Prizes.Count != room.SlotCount
+            || room.Prizes.Any(string.IsNullOrWhiteSpace)
+            || (wager > 0 && room.Prizes.Count(IsJackpot) > 1)
+            || !room.Members.All(member => member is not null
+                && !string.IsNullOrWhiteSpace(member.PetId)
+                && (member.SelectedSlot is null || (member.SelectedSlot >= 0 && member.SelectedSlot < room.SlotCount))))
         {
             return false;
         }
 
-        return room.Members.All(m => m.SelectedSlot is int s && s >= 0 && s < room.SlotCount);
+        var uniqueIds = room.Members.Select(member => member.PetId).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        if (uniqueIds.Count != room.Members.Count || !uniqueIds.Contains(hostId))
+        {
+            return false;
+        }
+
+        var slots = room.Members.Where(member => member.SelectedSlot.HasValue).Select(member => member.SelectedSlot!.Value).ToArray();
+        if (slots.Distinct().Count() != slots.Length)
+        {
+            return false;
+        }
+
+        return room.Phase switch
+        {
+            LadderRoomPhase.WaitingInvites => slots.Length == 0,
+            LadderRoomPhase.PickingSlots => room.PendingInviteCount == 0 && room.Members.Count == room.SlotCount,
+            _ => false
+        };
     }
+
+    internal static bool IsValidRoomTransition(
+        LadderRoomStateDto currentRoom,
+        IReadOnlyList<string> initialPrizes,
+        LadderRoomStateDto nextRoom,
+        string localPetId)
+    {
+        if (!nextRoom.Members.Any(m => string.Equals(m.PetId, localPetId, StringComparison.OrdinalIgnoreCase)))
+        {
+            return false;
+        }
+
+        return (currentRoom.Phase, nextRoom.Phase) switch
+        {
+            (LadderRoomPhase.WaitingInvites, LadderRoomPhase.WaitingInvites) =>
+                nextRoom.Prizes.SequenceEqual(NormalizePrizesForCount(initialPrizes, nextRoom.SlotCount), StringComparer.Ordinal),
+
+            (LadderRoomPhase.WaitingInvites, LadderRoomPhase.PickingSlots) =>
+                nextRoom.Prizes.SequenceEqual(NormalizePrizesForCount(initialPrizes, nextRoom.SlotCount), StringComparer.Ordinal),
+
+            (LadderRoomPhase.PickingSlots, LadderRoomPhase.PickingSlots) =>
+                nextRoom.SlotCount == currentRoom.SlotCount
+                && nextRoom.Prizes.SequenceEqual(currentRoom.Prizes, StringComparer.Ordinal)
+                && currentRoom.Members.Select(m => m.PetId).ToHashSet(StringComparer.OrdinalIgnoreCase)
+                    .SetEquals(nextRoom.Members.Select(m => m.PetId)),
+
+            _ => false
+        };
+    }
+
+    internal static bool IsValidStart(LadderStartDto start, LadderRoomStateDto room, string localPetId)
+        => TryValidateStart(start, room, localPetId, out _, out _);
+
+    public static bool TryValidateStart(
+        LadderStartDto start,
+        LadderRoomStateDto room,
+        string localPetId,
+        out LadderBoard? board,
+        out IReadOnlyList<LadderTraceResult> traces)
+    {
+        board = null;
+        traces = [];
+
+        if (!CanStartGame(room)
+            || start.SessionId != room.SessionId
+            || start.WagerCoins != room.WagerCoins
+            || start.ParticipantPetIds is not { Count: >= MinParticipants and <= MaxParticipants } ids
+            || ids.Count != room.SlotCount
+            || start.Participants?.Count != ids.Count
+            || start.Prizes?.Count != ids.Count
+            || start.Participants.Any(string.IsNullOrWhiteSpace)
+            || start.Prizes.Any(string.IsNullOrWhiteSpace)
+            || start.Levels != DefaultLevels
+            || start.Rungs is null
+            || start.Rungs.Count > DefaultLevels * MaxParticipants
+            || !ids.Contains(localPetId, StringComparer.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        var orderedMembers = room.Members
+            .OrderBy(member => member.SelectedSlot!.Value)
+            .ToList();
+        if (!ids.SequenceEqual(orderedMembers.Select(m => m.PetId), StringComparer.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        for (var i = 0; i < orderedMembers.Count; i++)
+        {
+            var expectedName = string.IsNullOrWhiteSpace(orderedMembers[i].DisplayName)
+                ? $"참여자 {i + 1}"
+                : orderedMembers[i].DisplayName.Trim();
+            if (!string.Equals(start.Participants[i].Trim(), expectedName, StringComparison.Ordinal))
+            {
+                return false;
+            }
+        }
+
+        if (!start.Prizes.Order(StringComparer.Ordinal)
+            .SequenceEqual(room.Prizes.Order(StringComparer.Ordinal), StringComparer.Ordinal))
+        {
+            return false;
+        }
+
+        var rungs = new HashSet<(int Level, int Column)>();
+        var validRungs = start.Rungs.All(rung => rung is not null
+            && rung.Level > 0 && rung.Level < start.Levels && rung.LeftColumn >= 0 && rung.LeftColumn < ids.Count - 1
+            && !rungs.Contains((rung.Level, rung.LeftColumn - 1)) && !rungs.Contains((rung.Level, rung.LeftColumn + 1))
+            && rungs.Add((rung.Level, rung.LeftColumn)));
+        if (!validRungs)
+        {
+            return false;
+        }
+
+        var candidateBoard = new LadderBoard(
+            start.Participants.Select(p => p.Trim()).ToList(),
+            start.Prizes.Select(p => p.Trim()).ToList(),
+            start.Levels,
+            start.Rungs.ToList());
+
+        var computedTraces = TraceAll(candidateBoard);
+        if (computedTraces.Count != ids.Count
+            || computedTraces.Select(t => t.EndColumn).Distinct().Count() != ids.Count)
+        {
+            return false;
+        }
+
+        if (start.Outcomes is not { Count: > 0 } outcomes || outcomes.Count != ids.Count)
+        {
+            return false;
+        }
+
+        for (var i = 0; i < computedTraces.Count; i++)
+        {
+            var expected = computedTraces[i];
+            var actual = outcomes[i];
+            if (actual is null
+                || actual.StartColumn != expected.StartColumn
+                || actual.EndColumn != expected.EndColumn
+                || !string.Equals(actual.ParticipantPetId, ids[i], StringComparison.OrdinalIgnoreCase)
+                || !string.Equals(actual.Prize, expected.Prize, StringComparison.Ordinal))
+            {
+                return false;
+            }
+        }
+
+        board = candidateBoard;
+        traces = computedTraces;
+        return true;
+    }
+
+    internal static bool IsJackpot(string prize) => prize.Contains("잭팟", StringComparison.OrdinalIgnoreCase);
+
+    private static bool IsFillerPrize(string prize)
+        => string.Equals(prize.Trim(), "통과", StringComparison.Ordinal)
+            || string.Equals(prize.Trim(), "꽝", StringComparison.Ordinal);
 }
 
 public sealed class LadderMemberStateDto
@@ -257,11 +596,20 @@ public sealed class LadderRoomStateDto
 {
     public string SessionId { get; set; } = string.Empty;
     public string HostPetId { get; set; } = string.Empty;
+    public LadderRoomPhase Phase { get; set; } = LadderRoomPhase.WaitingInvites;
     public int WagerCoins { get; set; }
     public int SlotCount { get; set; }
     public int PendingInviteCount { get; set; }
     public List<string> Prizes { get; set; } = [];
     public List<LadderMemberStateDto> Members { get; set; } = [];
+}
+
+public sealed class LadderOutcomeDto
+{
+    public int StartColumn { get; set; }
+    public int EndColumn { get; set; }
+    public string ParticipantPetId { get; set; } = string.Empty;
+    public string Prize { get; set; } = string.Empty;
 }
 
 public sealed class LadderStartDto
@@ -273,4 +621,5 @@ public sealed class LadderStartDto
     public List<string> Participants { get; set; } = [];
     public List<string> Prizes { get; set; } = [];
     public List<LadderRung> Rungs { get; set; } = [];
+    public List<LadderOutcomeDto> Outcomes { get; set; } = [];
 }
