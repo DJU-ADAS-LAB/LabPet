@@ -9,18 +9,29 @@ namespace LabPet.Client.ViewModels;
 /// <summary>
 /// 개인 성장 현황 · 실시간 오디오 모니터 · 뽀모도로 타이머 · 코인 게임 허브 ViewModel.
 /// </summary>
-public sealed partial class SoloHubViewModel : ObservableObject
+public sealed partial class SoloHubViewModel : ObservableObject, IDisposable
 {
     private readonly PomodoroTimerService _pomodoro;
     private readonly IAudioAnalyzer _audioAnalyzer;
 
     private PetProfile _profile = new();
+    private bool _disposed;
 
     public event EventHandler<PetProfile>? ProfileChanged;
 
     public CoinGamesViewModel Games { get; }
 
-    [ObservableProperty] private int _selectedMainTabIndex;
+    [ObservableProperty, NotifyPropertyChangedFor(nameof(ActiveSection), nameof(IsGrowthSectionActive))]
+    private int _selectedMainTabIndex;
+
+    public SoloHubSection ActiveSection
+    {
+        get => (SoloHubSection)Math.Clamp(SelectedMainTabIndex, 0, 2);
+        set => SelectedMainTabIndex = (int)value;
+    }
+
+    public bool IsGrowthSectionActive => SelectedMainTabIndex == (int)SoloHubSection.GrowthAudio;
+
     [ObservableProperty] private string _petName = "모찌";
     [ObservableProperty] private int _level = 1;
     [ObservableProperty] private long _xp;
@@ -54,8 +65,20 @@ public sealed partial class SoloHubViewModel : ObservableObject
         _audioAnalyzer = audioAnalyzer;
         Games = games;
 
-        _pomodoro.Tick += (_, _) => RefreshPomodoroUi();
+        _pomodoro.Tick += OnPomodoroTick;
         Games.ProfileChanged += OnGamesProfileChanged;
+    }
+
+    public void Dispose()
+    {
+        if (_disposed)
+        {
+            return;
+        }
+
+        _disposed = true;
+        _pomodoro.Tick -= OnPomodoroTick;
+        Games.ProfileChanged -= OnGamesProfileChanged;
     }
 
     public void BindProfile(PetProfile profile)
@@ -67,7 +90,10 @@ public sealed partial class SoloHubViewModel : ObservableObject
         RefreshAudioUi();
     }
 
-    public void SelectGamesTab() => SelectedMainTabIndex = 2;
+    public void SelectGamesTab() => SelectedMainTabIndex = (int)SoloHubSection.Games;
+
+    [RelayCommand]
+    private void SelectSection(SoloHubSection section) => ActiveSection = section;
 
     public void RefreshProgressUi()
     {
@@ -91,7 +117,7 @@ public sealed partial class SoloHubViewModel : ObservableObject
         AudioStatusText = !snap.HasAudioDevice
             ? "재생 장치 없음 (안전 폴백)"
             : snap.IsMusicActive
-                ? (snap.IsBeat ? "비트 감지! (음악 반응 중)" : "음악 반응 중")
+                ? (snap.IsBeat ? "비트 감지 · 음악 반응 중" : "음악 반응 중")
                 : "대기 중 (무음)";
 
         BassPercent = Math.Round(snap.Bass * 100.0);
@@ -135,6 +161,8 @@ public sealed partial class SoloHubViewModel : ObservableObject
             RefreshPomodoroUi();
         }
     }
+
+    private void OnPomodoroTick(object? sender, EventArgs e) => RefreshPomodoroUi();
 
     private void OnGamesProfileChanged(object? sender, PetProfile updated)
     {

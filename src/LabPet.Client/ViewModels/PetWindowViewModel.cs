@@ -72,7 +72,6 @@ public sealed partial class PetWindowViewModel : ObservableObject
     public event EventHandler<double>? PetScaleChanged;
     public event EventHandler<double>? PetOpacityChanged;
     public event EventHandler<(PendingFriendRequest Request, bool Accept)>? FriendRequestResponded;
-    public event EventHandler<bool>? GameInviteResponded;
     public event EventHandler<(FriendEntry Friend, PetAppearance Appearance)>? ToggleVisitFriendRequested;
 
     public PetProfile CurrentProfile { get; private set; } = new();
@@ -103,8 +102,6 @@ public sealed partial class PetWindowViewModel : ObservableObject
     public ObservableCollection<BubbleLine> BubbleLines { get; } = [];
     [ObservableProperty, NotifyPropertyChangedFor(nameof(HasAnyBubble))]
     private PendingFriendRequest? _pendingFriendRequest;
-    [ObservableProperty, NotifyPropertyChangedFor(nameof(HasPendingGameInvite), nameof(PendingGameInviteText), nameof(HasAnyBubble))]
-    private IncomingGameInvite? _pendingGameInvite;
     [ObservableProperty] private string _trayTooltip = "LabPet";
     [ObservableProperty] private double _petScale = PetProfile.DefaultPetScale;
     [ObservableProperty] private double _petOpacity = 1.0;
@@ -117,8 +114,7 @@ public sealed partial class PetWindowViewModel : ObservableObject
     [ObservableProperty] private string _quickMessageText = string.Empty;
 
     public bool HasPendingFriendRequest => PendingFriendRequest is not null;
-    public bool HasPendingGameInvite => PendingGameInvite is not null;
-    public bool HasAnyBubble => IsUpdateBubbleVisible || HasPendingFriendRequest || HasPendingGameInvite || IsBubbleVisible;
+    public bool HasAnyBubble => IsUpdateBubbleVisible || HasPendingFriendRequest || IsBubbleVisible;
     public bool HasNoQuickOverlayEntries => QuickOverlayEntries.Count == 0;
     public string QuickOverlayHeaderText => $"주변 · 온라인 친구 ({QuickOverlayEntries.Count})";
     private int _quickMessageDraftRevision;
@@ -126,8 +122,6 @@ public sealed partial class PetWindowViewModel : ObservableObject
     public string PendingFriendRequestText => PendingFriendRequest is null
         ? string.Empty
         : $"{PendingFriendRequest.DisplayName} 친구 신청!";
-
-    public string PendingGameInviteText => PendingGameInvite?.SummaryText ?? string.Empty;
 
     public string CurrentVersionText { get; } = BuildCurrentVersionText();
 
@@ -555,22 +549,6 @@ public sealed partial class PetWindowViewModel : ObservableObject
         var req = PendingFriendRequest;
         PendingFriendRequest = null;
         FriendRequestResponded?.Invoke(this, (req, false));
-    }
-
-    [RelayCommand]
-    private void AcceptGameInvite()
-    {
-        if (PendingGameInvite is null) return;
-        PendingGameInvite = null;
-        GameInviteResponded?.Invoke(this, true);
-    }
-
-    [RelayCommand]
-    private void RejectGameInvite()
-    {
-        if (PendingGameInvite is null) return;
-        PendingGameInvite = null;
-        GameInviteResponded?.Invoke(this, false);
     }
 
     [RelayCommand]

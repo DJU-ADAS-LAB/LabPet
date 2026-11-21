@@ -12,6 +12,11 @@ public static partial class Win32WindowHelper
     private const int GwlExStyle = -20;
     private const int WsExTransparent = 0x00000020;
     private const int WsExToolWindow = 0x00000080;
+    private const int WsExNoActivate = 0x08000000;
+    private const uint SwpNoSize = 0x0001;
+    private const uint SwpNoActivate = 0x0010;
+    private const uint SwpNoOwnerZOrder = 0x0200;
+    private static readonly IntPtr HwndTopMost = new(-1);
 
     [StructLayout(LayoutKind.Sequential)]
     private struct NativePoint
@@ -74,6 +79,60 @@ public static partial class Win32WindowHelper
     [LibraryImport("user32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
     private static partial bool SetForegroundWindow(IntPtr hWnd);
+
+    [LibraryImport("user32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool GetWindowRect(IntPtr hWnd, out NativeRect lpRect);
+
+    [LibraryImport("user32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int x, int y, int cx, int cy, uint flags);
+
+    /// <summary>
+    /// 창을 Alt+Tab 목록에서 숨기고 포커스를 빼앗지 않는 Non-Activating ToolWindow 스타일을 적용한다.
+    /// WS_EX_TRANSPARENT는 부여하지 않으므로 펫 본체가 클릭 투과 중이어도 버튼 클릭을 수신한다.
+    /// </summary>
+    public static void ApplyNonActivatingToolWindowStyle(Window window)
+    {
+        var hwnd = new WindowInteropHelper(window).Handle;
+        if (hwnd == IntPtr.Zero)
+        {
+            return;
+        }
+
+        var exStyle = GetWindowLong(hwnd, GwlExStyle);
+        _ = SetWindowLong(hwnd, GwlExStyle, (exStyle | WsExToolWindow | WsExNoActivate) & ~WsExTransparent);
+    }
+
+    /// <summary>
+    /// 혼합 DPI 다중 모니터 환경에서도 왜곡 없이 창을 지정한 물리 픽셀 좌표로 이동한다.
+    /// </summary>
+    public static bool MoveWindowPhysical(Window window, int physicalX, int physicalY)
+    {
+        var hwnd = new WindowInteropHelper(window).Handle;
+        if (hwnd == IntPtr.Zero)
+        {
+            return false;
+        }
+
+        return SetWindowPos(hwnd, HwndTopMost, physicalX, physicalY, 0, 0, SwpNoSize | SwpNoActivate | SwpNoOwnerZOrder);
+    }
+
+    /// <summary>
+    /// 창의 현재 화면 물리 픽셀 경계를 조회한다.
+    /// </summary>
+    public static bool TryGetWindowPhysicalBounds(Window window, out Rect bounds)
+    {
+        bounds = Rect.Empty;
+        var hwnd = new WindowInteropHelper(window).Handle;
+        if (hwnd == IntPtr.Zero || !GetWindowRect(hwnd, out var rect))
+        {
+            return false;
+        }
+
+        bounds = new Rect(rect.Left, rect.Top, rect.Right - rect.Left, rect.Bottom - rect.Top);
+        return true;
+    }
 
     /// <summary>
     /// WPF Popup(WS_EX_NOACTIVATE) 내부 TextBox가 비활성 상태에서도 키보드 입력을 받을 수 있도록

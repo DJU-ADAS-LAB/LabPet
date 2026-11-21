@@ -22,6 +22,7 @@ public partial class App : Application
     private ServiceProvider? _serviceProvider;
     private PetWindow? _petWindow;
     private SoloHubWindow? _soloHubWindow;
+    private GameInviteCardWindow? _inviteCardWindow;
     private SocialWindow? _socialWindow;
     private EnvironmentGuideWindow? _guideWindow;
     private readonly Dictionary<string, VisitorPetWindow> _visitorWindows = new(StringComparer.OrdinalIgnoreCase);
@@ -127,27 +128,24 @@ public partial class App : Application
         var social = _serviceProvider.GetRequiredService<SocialCoordinatorService>();
         social.NewerAppVersionDetected += (_, _) => updateService.TriggerImmediateCheckFromPeerHint();
 
-        // 코인 게임 허브(LAN 가위바위보·타이핑 도전 수신 및 펫 반응 연결)
+        // 코인 게임 허브(초대 카드 · 말풍선 알림 · 수락 시 해당 게임 화면 직행)
         var gamesVm = _serviceProvider.GetRequiredService<CoinGamesViewModel>();
         gamesVm.BindProfile(profile);
         var animator = _serviceProvider.GetRequiredService<PetAnimationController>();
-        gamesVm.IncomingInviteChanged += (_, invite) => Dispatcher.BeginInvoke(() => petVm.PendingGameInvite = invite);
+        gamesVm.IncomingInviteChanged += (_, _) => Dispatcher.BeginInvoke(() => SyncInviteCardWindow(gamesVm));
         gamesVm.GameNotification += (_, msg) => Dispatcher.BeginInvoke(() => petVm.ShowBubble(msg, 3400));
         gamesVm.PetEmotionTriggered += (_, isHappy) => Dispatcher.BeginInvoke(() =>
         {
             if (isHappy) animator.TriggerPetReaction();
             else animator.TriggerDizzyReaction();
         });
-        gamesVm.OpenGameTabRequested += (_, _) => Dispatcher.BeginInvoke(() => OpenSoloHub(selectGamesTab: true));
+        gamesVm.OpenGameScreenRequested += (_, screen) => Dispatcher.BeginInvoke(() => OpenSoloHub(selectGamesTab: true, targetGameScreen: screen));
         gamesVm.ProfileChanged += (_, updated) => Dispatcher.BeginInvoke(() => petVm.ApplyProfile(updated));
-        petVm.GameInviteResponded += async (_, accept) =>
-        {
-            if (accept) await gamesVm.AcceptIncomingInviteAsync();
-            else await gamesVm.DeclineIncomingInviteAsync();
-        };
 
         _petWindow = _serviceProvider.GetRequiredService<PetWindow>();
         MainWindow = _petWindow;
+        _petWindow.LocationChanged += (_, _) => RepositionInviteCard();
+        _petWindow.SizeChanged += (_, _) => RepositionInviteCard();
         _petWindow.InitializeWithProfile(profile);
         _petWindow.Show();
     }
@@ -180,7 +178,7 @@ public partial class App : Application
     private void OnOpenSoloHubRequested(object? sender, EventArgs e)
         => OpenSoloHub(selectGamesTab: false);
 
-    private void OpenSoloHub(bool selectGamesTab)
+    private void OpenSoloHub(bool selectGamesTab, GameScreen? targetGameScreen = null)
     {
         if (_serviceProvider is null || _petWindow is null)
         {
@@ -189,11 +187,21 @@ public partial class App : Application
 
         if (_soloHubWindow is not null)
         {
+            if (_soloHubWindow.WindowState == WindowState.Minimized)
+            {
+                _soloHubWindow.WindowState = WindowState.Normal;
+            }
+
             if (selectGamesTab && _soloHubWindow.DataContext is SoloHubViewModel existingVm)
             {
                 existingVm.SelectGamesTab();
+                if (targetGameScreen is { } target)
+                {
+                    existingVm.Games.ActiveGameScreen = target;
+                }
             }
 
+            CloseInviteCardWindow();
             _soloHubWindow.Activate();
             return;
         }
@@ -204,6 +212,10 @@ public partial class App : Application
         if (selectGamesTab)
         {
             hubVm.SelectGamesTab();
+            if (targetGameScreen is { } target)
+            {
+                hubVm.Games.ActiveGameScreen = target;
+            }
         }
 
         hubVm.ProfileChanged += (_, updated) => petVm.ApplyProfile(updated);
@@ -212,8 +224,69 @@ public partial class App : Application
         {
             Owner = _petWindow
         };
-        _soloHubWindow.Closed += (_, _) => _soloHubWindow = null;
+        _soloHubWindow.StateChanged += (_, _) => SyncInviteCardWindow(hubVm.Games);
+        _soloHubWindow.Closed += (_, _) =>
+        {
+            _soloHubWindow = null;
+            SyncInviteCardWindow(hubVm.Games);
+        };
+
+        CloseInviteCardWindow();
         _soloHubWindow.Show();
+    }
+
+    private void SyncInviteCardWindow(CoinGamesViewModel gamesVm)
+    {
+        if (_petWindow is null)
+        {
+            return;
+        }
+
+        var soloHubVisible = _soloHubWindow is { IsVisible: true, WindowState: not WindowState.Minimized };
+        if (!gamesVm.HasIncomingInvite || soloHubVisible)
+        {
+            CloseInviteCardWindow();
+            return;
+        }
+
+        if (_inviteCardWindow is null)
+        {
+            _inviteCardWindow = new GameInviteCardWindow(gamesVm)
+            {
+                Owner = _petWindow
+            };
+            _inviteCardWindow.Closed += (_, _) => _inviteCardWindow = null;
+            _inviteCardWindow.Show();
+            _inviteCardWindow.PositionNearPet(_petWindow);
+        }
+        else
+        {
+            if (!_inviteCardWindow.IsVisible)
+            {
+                _inviteCardWindow.Show();
+            }
+
+            _inviteCardWindow.PositionNearPet(_petWindow);
+            _inviteCardWindow.ReplayEntrance();
+        }
+    }
+
+    private void RepositionInviteCard()
+    {
+        if (_petWindow is not null && _inviteCardWindow is { IsVisible: true })
+        {
+            _inviteCardWindow.PositionNearPet(_petWindow);
+        }
+    }
+
+    private void CloseInviteCardWindow()
+    {
+        if (_inviteCardWindow is not null)
+        {
+            var card = _inviteCardWindow;
+            _inviteCardWindow = null;
+            card.Close();
+        }
     }
 
     private void OnOpenSocialRequested(object? sender, EventArgs e)
@@ -313,6 +386,9 @@ public partial class App : Application
 
     protected override void OnExit(ExitEventArgs e)
     {
+        CloseInviteCardWindow();
+        _soloHubWindow?.Close();
+
         foreach (var visitor in _visitorWindows.Values.ToList())
         {
             visitor.Close();
@@ -340,6 +416,7 @@ public partial class App : Application
         services.AddSingleton<IAppDataStore, JsonAppDataStore>();
         services.AddSingleton<ProceduralPetMeshFactory>();
         services.AddSingleton<IPetMeshFactory, BlenderAssetPetMeshFactory>();
+        services.AddSingleton<PetPortraitRenderer>();
         services.AddSingleton<PetAnimationController>();
         services.AddSingleton<IAudioAnalyzer, LoopbackAudioAnalyzer>();
         services.AddSingleton<SoloProgressionService>();

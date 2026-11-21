@@ -43,6 +43,7 @@ dotnet run --project src/LabPet.Client/LabPet.Client.csproj
   - [04-1. 3D 캐릭터 및 투명 창 UX](docs/04_UI_UX_설계서/04-1_3D캐릭터_및_투명창_UX.md)
 - [05. 일자별 변경 이력 (2026-11-20)](docs/05_변경이력/2026-11-20.md)
 - [05. 일자별 변경 이력 (2026-11-21)](docs/05_변경이력/2026-11-21.md)
+- [05. 일자별 변경 이력 (2026-11-22)](docs/05_변경이력/2026-11-22.md)
 - [06. 배포 · 자동 업데이트 · 방화벽 및 SmartScreen 가이드](docs/06_배포_자동업데이트_및_방화벽가이드.md)
 - [07. 향후 LabPet.Server (GCP SignalR + Firestore) 확장 가이드](docs/07_GCP_클라우드_확장가이드.md)
 - [08-0. 기능명세서 개요 및 RTM](docs/08_기능명세서/08-0_기능명세서_개요.md)

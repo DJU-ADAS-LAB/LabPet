@@ -80,6 +80,7 @@ public partial class PetWindow : Window
     public PetWindow(
         PetWindowViewModel viewModel,
         IPetMeshFactory meshFactory,
+        PetPortraitRenderer portraitRenderer,
         PetAnimationController animator,
         IAudioAnalyzer audioAnalyzer,
         GlobalActivityHookService activityHook,
@@ -91,7 +92,7 @@ public partial class PetWindow : Window
 
         _viewModel = viewModel;
         _meshFactory = meshFactory;
-        _portraitRenderer = new PetPortraitRenderer(meshFactory);
+        _portraitRenderer = portraitRenderer;
         _animator = animator;
         _audioAnalyzer = audioAnalyzer;
         _activityHook = activityHook;

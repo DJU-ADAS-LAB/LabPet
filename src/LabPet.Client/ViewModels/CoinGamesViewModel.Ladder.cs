@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Windows.Media;
 using CommunityToolkit.Mvvm.Input;
 using LabPet.Client.Games;
 using LabPet.Shared.Models;
@@ -8,8 +9,20 @@ namespace LabPet.Client.ViewModels;
 
 public sealed partial class CoinGamesViewModel
 {
+    private static readonly string[] LadderTrackAccentHexes =
+    [
+        "#FFFF4D82",
+        "#FF4F46E5",
+        "#FF10B981",
+        "#FFF59E0B",
+        "#FF0EA5E9",
+        "#FFA855F7",
+        "#FFEF4444",
+        "#FF14B8A6"
+    ];
+
     // ══════════════════════════════════════════════════════════════════════
-    // 4. 연구실 공동 사다리타기 (초대 응답 -> 참가자 확정 -> 위치 선택 -> 공정 사다리 -> 도착 공개)
+    // 4. 연구실 공동 사다리타기 (설정 -> 대기실 -> 위치 선택 -> 진행 -> 결과)
     // ══════════════════════════════════════════════════════════════════════
 
     [RelayCommand]
@@ -22,7 +35,18 @@ public sealed partial class CoinGamesViewModel
 
         if (OnlineFriends.Count == 0)
         {
-            LadderStatusText = "초대할 온라인 친구가 없습니다. 혼자 바로 돌리기를 이용해 주세요.";
+            LadderStatusText = "초대할 온라인 친구가 없습니다. 혼자 돌리기를 이용해 주세요.";
+            return;
+        }
+
+        var invitees = LadderInviteCandidates
+            .Where(c => c.IsSelected)
+            .Select(c => new OnlineFriendChoice(c.Friend, c.DisplayName))
+            .Take(LabLadderEngine.MaxParticipants - 1)
+            .ToList();
+        if (invitees.Count == 0)
+        {
+            LadderStatusText = "초대할 친구를 1명 이상 선택해 주세요.";
             return;
         }
 
@@ -37,7 +61,6 @@ public sealed partial class CoinGamesViewModel
             return;
         }
 
-        var invitees = OnlineFriends.Take(LabLadderEngine.MaxParticipants - 1).ToList();
         var initialSlots = Math.Clamp(1 + invitees.Count, LabLadderEngine.MinParticipants, LabLadderEngine.MaxParticipants);
         var initialPrizes = LabLadderEngine.NormalizePrizesForCount(parsedPrizes, initialSlots);
         var wager = LadderEntryFee;
@@ -56,6 +79,8 @@ public sealed partial class CoinGamesViewModel
                 LadderStatusText = msg;
                 return;
             }
+
+            NotifyCoinsChanged();
         }
 
         var sessionId = Guid.NewGuid().ToString("N");
@@ -100,7 +125,10 @@ public sealed partial class CoinGamesViewModel
 
         IsLadderHost = true;
         IsLadderRoomOpen = true;
+        IsLadderMultiplayerMode = true;
+        LadderStage = LadderStage.Lobby;
         LadderResultLines.Clear();
+        LadderResultCards.Clear();
         LadderBoardPrizesSummaryText = $"공개 상품: {LabLadderEngine.FormatPrizeSummary(initialPrizes)}";
         RefreshLadderLobbyUi();
 
@@ -169,7 +197,7 @@ public sealed partial class CoinGamesViewModel
         if (_ladderRoom.PendingInviteCount > 0)
         {
             StartLadderInviteTimeout(sessionId);
-            LadderStatusText = $"친구 {sentCount}명에게 초대 발송! 응답 완료 후 '참가자 확정'을 눌러 주세요.";
+            LadderStatusText = $"친구 {sentCount}명에게 초대를 보냈습니다. 응답 완료 후 '참가자 확정'을 눌러 주세요.";
         }
         else
         {
@@ -368,6 +396,23 @@ public sealed partial class CoinGamesViewModel
                 WagerCoins = wager
             });
         }
+    }
+
+    [RelayCommand]
+    private void ResetLadderToSetup()
+    {
+        if (IsLadderRoomOpen || IsLadderAnimating)
+        {
+            return;
+        }
+
+        LadderStage = LadderStage.Setup;
+        LadderResultLines.Clear();
+        LadderResultCards.Clear();
+        LadderResultHeadline = string.Empty;
+        LadderResultSettlementText = string.Empty;
+        LadderMyResultPrizeText = string.Empty;
+        LadderStatusText = "상품과 참가비를 설정한 뒤 혼자 돌리거나 친구 초대 방을 여세요!";
     }
 
     private async Task HandleLadderEventAsync(string senderPetId, string senderName, FriendEntry friend, GameEventPayload p)
@@ -660,6 +705,7 @@ public sealed partial class CoinGamesViewModel
         run.IsCompleted = true;
         _pendingLadderRun = null;
         IsLadderAnimating = false;
+        LadderStage = LadderStage.Setup;
         LadderAnimationCancelled?.Invoke(this, EventArgs.Empty);
 
         if (run.AbortRefundCoins > 0)
@@ -667,6 +713,7 @@ public sealed partial class CoinGamesViewModel
             var refund = run.AbortRefundCoins;
             run.AbortRefundCoins = 0;
             _progression.AddCoins(_profile, refund);
+            NotifyCoinsChanged();
             await PersistProfileAsync();
             var fullMsg = $"{reasonMessage} ({refund} 코인 반환)";
             LadderStatusText = fullMsg;
@@ -679,6 +726,7 @@ public sealed partial class CoinGamesViewModel
         }
 
         LadderResultLines.Clear();
+        LadderResultCards.Clear();
     }
 
     private async Task<int> RefundLadderEntryFeeIfPaidAsync()
@@ -691,6 +739,7 @@ public sealed partial class CoinGamesViewModel
 
         _ladderPaidCoins = 0;
         _progression.AddCoins(_profile, refund);
+        NotifyCoinsChanged();
         await PersistProfileAsync();
         return refund;
     }
@@ -766,19 +815,24 @@ public sealed partial class CoinGamesViewModel
         {
             _startedLadderSessions.Clear();
         }
+
         _startedLadderSessions.Add(startDto.SessionId);
 
         var refundCoins = overrideRefundCoins >= 0 ? overrideRefundCoins : _ladderPaidCoins;
         _ladderPaidCoins = 0;
         var hostFriend = _ladderHostFriend;
-        var myCol = startDto.ParticipantPetIds.FindIndex(id => string.Equals(id, _profile.PetId, StringComparison.OrdinalIgnoreCase));
+        var participantIds = startDto.ParticipantPetIds.ToList();
+        var participantPortraits = participantIds.Select(ResolveMemberPortrait).ToList();
+        var myCol = participantIds.FindIndex(id => string.Equals(id, _profile.PetId, StringComparison.OrdinalIgnoreCase));
 
         var configuredPrizesSummary = LabLadderEngine.FormatPrizeSummary(room.Prizes);
-        CloseLadderRoomStateInternal();
+        CloseLadderRoomStateInternal(resetStageToSetup: false);
         BeginLadderReveal(
             startDto.SessionId,
             board,
             traces,
+            participantIds,
+            participantPortraits,
             myCol,
             startDto.WagerCoins,
             isMultiplayer: true,
@@ -791,6 +845,8 @@ public sealed partial class CoinGamesViewModel
         string sessionId,
         LadderBoard board,
         IReadOnlyList<LadderTraceResult> traces,
+        IReadOnlyList<string> participantPetIds,
+        IReadOnlyList<ImageSource?> participantPortraits,
         int myStartColumn,
         int wagerCoins,
         bool isMultiplayer,
@@ -805,34 +861,55 @@ public sealed partial class CoinGamesViewModel
             SessionId = sessionId,
             Board = board,
             Traces = traces,
+            ParticipantPetIds = participantPetIds,
+            ParticipantPortraits = participantPortraits,
             MyStartColumn = myStartColumn,
             WagerCoins = wagerCoins,
             IsMultiplayer = isMultiplayer,
             HostFriend = hostFriend,
             AbortRefundCoins = abortRefundCoins,
-            RevealedColumns = new bool[traces.Count]
+            RevealedColumns = new bool[traces.Count],
+            AnimationProgress = 0.0
         };
 
         LadderBoardPrizesSummaryText = string.IsNullOrWhiteSpace(configuredPrizesSummary)
             ? $"공개 상품: {LabLadderEngine.FormatPrizeSummary(board.Prizes)}"
             : $"공개 상품: {configuredPrizesSummary}";
         LadderResultLines.Clear();
+        LadderResultCards.Clear();
         foreach (var r in traces)
         {
             LadderResultLines.Add($"{r.Participant}  →  ?");
         }
 
-        LadderStatusText = "🪜 사다리 내려가는 중... (하단 도착 시 결과가 공개됩니다)";
+        LadderStatusText = "사다리 내려가는 중... (하단 도착 시 결과가 공개됩니다)";
         IsLadderAnimating = true;
+        LadderStage = LadderStage.Running;
         OnPropertyChanged(nameof(ActiveLadderBoard));
+        OnPropertyChanged(nameof(ActiveLadderAnimationProgress));
+        OnPropertyChanged(nameof(ActiveLadderRevealedColumns));
+        OnPropertyChanged(nameof(ActiveLadderParticipantPortraits));
 
         if (isMultiplayer && LadderBoardGenerated is null)
         {
             SelectedGameIndex = 3;
-            OpenGameTabRequested?.Invoke(this, EventArgs.Empty);
         }
 
         LadderBoardGenerated?.Invoke(this, board);
+    }
+
+    /// <summary>
+    /// 창을 닫았다가 다시 열 때도 이어서 재생할 수 있도록 현재 사다리 진행 비율만 보존한다.
+    /// 창 종료만으로 결과를 강제 공개하거나 코인을 정산하지 않는다.
+    /// </summary>
+    public void SaveLadderAnimationProgress(double progress)
+    {
+        if (_pendingLadderRun is { IsCompleted: false } run)
+        {
+            run.AnimationProgress = Math.Clamp(progress, 0.0, 0.999);
+            OnPropertyChanged(nameof(ActiveLadderAnimationProgress));
+            OnPropertyChanged(nameof(ActiveLadderRevealedColumns));
+        }
     }
 
     public bool RevealLadderParticipantResult(int startColumn)
@@ -856,7 +933,7 @@ public sealed partial class CoinGamesViewModel
             LadderResultLines[startColumn] = $"{result.Participant}  →  {result.Prize}";
         }
 
-        LadderStatusText = $"🪜 {result.Participant} 도착 → {result.Prize}";
+        LadderStatusText = $"{result.Participant} 도착 → {result.Prize}";
         return true;
     }
 
@@ -869,6 +946,7 @@ public sealed partial class CoinGamesViewModel
         }
 
         run.IsCompleted = true;
+        run.AnimationProgress = 1.0;
         run.AbortRefundCoins = 0;
 
         for (var i = 0; i < run.Traces.Count; i++)
@@ -886,10 +964,12 @@ public sealed partial class CoinGamesViewModel
 
         _lastLadderResults = run.Traces;
         IsLadderAnimating = false;
+        BuildLadderResultCards(run);
 
         var myResult = run.MyStartColumn >= 0 && run.MyStartColumn < run.Traces.Count
             ? run.Traces[run.MyStartColumn]
             : null;
+        LadderMyResultPrizeText = myResult?.Prize ?? string.Empty;
 
         if (run.WagerCoins > 0 && myResult is not null && LabLadderEngine.IsJackpot(myResult.Prize))
         {
@@ -904,18 +984,22 @@ public sealed partial class CoinGamesViewModel
             {
                 var jackpot = run.WagerCoins * run.Traces.Count;
                 _progression.AddCoins(_profile, jackpot);
+                NotifyCoinsChanged();
                 await PersistProfileAsync();
 
-                var prefix = run.IsMultiplayer ? "🎉 동시 사다리 당첨!" : "🎉 사다리 결과:";
+                var prefix = run.IsMultiplayer ? "동시 사다리 당첨!" : "사다리 잭팟!";
+                LadderResultHeadline = prefix;
+                LadderResultSettlementText = $"+{jackpot} 코인 획득 (참가 {run.WagerCoins} 코인 × {run.Traces.Count}명)";
                 LadderStatusText = $"{prefix} {myResult.Participant} → {myResult.Prize} (+{jackpot} 코인)";
+                LadderStage = LadderStage.Result;
                 PetEmotionTriggered?.Invoke(this, true);
                 if (run.IsMultiplayer)
                 {
-                    GameNotification?.Invoke(this, $"🪜 사다리 잭팟 당첨! (+{jackpot} 코인)");
+                    GameNotification?.Invoke(this, $"사다리 잭팟 당첨! (+{jackpot} 코인)");
                 }
-            }
 
-            return;
+                return;
+            }
         }
 
         if (myResult is not null)
@@ -923,23 +1007,76 @@ public sealed partial class CoinGamesViewModel
             if (run.IsMultiplayer)
             {
                 var modeLabel = run.WagerCoins > 0 ? "동시 사다리 결과" : "동시 사다리(무료) 결과";
-                LadderStatusText = $"🪜 {modeLabel}: {myResult.Participant} → {myResult.Prize}";
-                GameNotification?.Invoke(this, $"🪜 사다리 결과: {myResult.Prize}");
+                LadderResultHeadline = $"{myResult.Participant}의 결과: {myResult.Prize}";
+                LadderResultSettlementText = run.WagerCoins > 0
+                    ? $"참가비 {run.WagerCoins} 코인 정산 완료"
+                    : "무료 모드 · 코인 변동 없음";
+                LadderStatusText = $"{modeLabel}: {myResult.Participant} → {myResult.Prize}";
+                GameNotification?.Invoke(this, $"사다리 결과: {myResult.Prize}");
             }
             else
             {
-                LadderStatusText = $"🪜 사다리 완료! ({run.Traces.Count}명 참여)";
+                LadderResultHeadline = "사다리 추첨 완료!";
+                LadderResultSettlementText = run.WagerCoins > 0
+                    ? $"참가비 {run.WagerCoins} 코인 정산 완료"
+                    : "무료 모드 · 코인 변동 없음";
+                LadderStatusText = $"사다리 완료! ({run.Traces.Count}명 참여)";
             }
         }
         else
         {
-            LadderStatusText = $"🪜 사다리 완료! ({run.Traces.Count}명 참여)";
+            LadderResultHeadline = "사다리 추첨 완료!";
+            LadderResultSettlementText = run.WagerCoins > 0 ? $"참가비 {run.WagerCoins} 코인" : "무료 모드 · 코인 변동 없음";
+            LadderStatusText = $"사다리 완료! ({run.Traces.Count}명 참여)";
         }
+
+        LadderStage = LadderStage.Result;
+    }
+
+    private void BuildLadderResultCards(PendingLadderRun run)
+    {
+        LadderResultCards.Clear();
+        for (var i = 0; i < run.Traces.Count; i++)
+        {
+            var trace = run.Traces[i];
+            var petId = i < run.ParticipantPetIds.Count ? run.ParticipantPetIds[i] : string.Empty;
+            var portrait = i < run.ParticipantPortraits.Count ? run.ParticipantPortraits[i] : null;
+            var isMe = i == run.MyStartColumn && (run.IsMultiplayer || !string.IsNullOrEmpty(petId));
+            var badge = isMe ? "내 결과" : $"출발 {i + 1}번";
+            LadderResultCards.Add(new LadderParticipantCardItem(
+                petId,
+                trace.Participant,
+                portrait,
+                IsHost: false,
+                IsMe: isMe,
+                IsPending: false,
+                StatusBadge: badge,
+                SelectedSlot: trace.StartColumn,
+                PrizeText: trace.Prize,
+                AccentColorHex: LadderTrackAccentHexes[i % LadderTrackAccentHexes.Length]));
+        }
+    }
+
+    private ImageSource? ResolveMemberPortrait(string petId)
+    {
+        if (string.IsNullOrWhiteSpace(petId))
+        {
+            return null;
+        }
+
+        if (string.Equals(petId, _profile.PetId, StringComparison.OrdinalIgnoreCase))
+        {
+            return MyPetPortrait;
+        }
+
+        return TryGetPortrait(ResolveFriendAppearance(petId));
     }
 
     private void RefreshLadderLobbyUi()
     {
         LadderSlots.Clear();
+        LadderParticipantCards.Clear();
+
         if (_ladderRoom is null)
         {
             IsLadderWaitingInvites = false;
@@ -962,6 +1099,7 @@ public sealed partial class CoinGamesViewModel
         {
             var occupant = _ladderRoom.Members.FirstOrDefault(m => m.SelectedSlot == col);
             var isMine = occupant is not null && string.Equals(occupant.PetId, _profile.PetId, StringComparison.OrdinalIgnoreCase);
+            var occupantPortrait = occupant is null ? null : ResolveMemberPortrait(occupant.PetId);
             LadderSlots.Add(new LadderSlotOption(
                 col,
                 $"{col + 1}번",
@@ -970,7 +1108,48 @@ public sealed partial class CoinGamesViewModel
                     : (occupant is null ? "빈 자리" : (isMine ? $"{occupant.DisplayName} (나)" : occupant.DisplayName)),
                 occupant is not null,
                 isMine,
-                isPicking));
+                isPicking,
+                occupantPortrait));
+        }
+
+        for (var i = 0; i < _ladderRoom.Members.Count; i++)
+        {
+            var member = _ladderRoom.Members[i];
+            var isHost = string.Equals(member.PetId, _ladderRoom.HostPetId, StringComparison.OrdinalIgnoreCase);
+            var isMe = string.Equals(member.PetId, _profile.PetId, StringComparison.OrdinalIgnoreCase);
+            var status = !isPicking
+                ? "입장 완료"
+                : (member.SelectedSlot is int s ? $"{s + 1}번 선택" : "위치 선택 중");
+            LadderParticipantCards.Add(new LadderParticipantCardItem(
+                member.PetId,
+                member.DisplayName,
+                ResolveMemberPortrait(member.PetId),
+                isHost,
+                isMe,
+                IsPending: false,
+                StatusBadge: status,
+                SelectedSlot: member.SelectedSlot,
+                PrizeText: string.Empty,
+                AccentColorHex: LadderTrackAccentHexes[i % LadderTrackAccentHexes.Length]));
+        }
+
+        if (IsLadderHost && !isPicking)
+        {
+            foreach (var pendingFriend in _ladderPendingInvitees.Values)
+            {
+                var name = _social.GetFriendDisplayName(pendingFriend.PetId);
+                LadderParticipantCards.Add(new LadderParticipantCardItem(
+                    pendingFriend.PetId,
+                    name,
+                    TryGetPortrait(ResolveFriendAppearance(pendingFriend.PetId, pendingFriend)),
+                    IsHost: false,
+                    IsMe: false,
+                    IsPending: true,
+                    StatusBadge: "응답 대기",
+                    SelectedSlot: null,
+                    PrizeText: string.Empty,
+                    AccentColorHex: "#FF9CA3AF"));
+            }
         }
 
         var feeText = _ladderRoom.WagerCoins > 0 ? $"{_ladderRoom.WagerCoins}코인" : "무료 (0코인)";
@@ -986,25 +1165,26 @@ public sealed partial class CoinGamesViewModel
         ShowConfirmLadderButton = IsLadderHost && !isPicking;
         CanStartLadderGame = IsLadderHost && LabLadderEngine.CanStartGame(_ladderRoom);
         ShowStartLadderButton = IsLadderHost && isPicking;
+        LadderStage = isPicking ? LadderStage.Picking : LadderStage.Lobby;
 
         if (!isPicking)
         {
-            var pendingText = _ladderRoom.PendingInviteCount > 0 ? $" · 응답 대기 {_ladderRoom.PendingInviteCount}명" : " · 응답 완료";
-            LadderLobbySummaryText = $"1단계 초대 응답 ({joinedCount}명 입장{pendingText})";
+            var pendingText = _ladderRoom.PendingInviteCount > 0 ? $" · 응답 대기 {_ladderRoom.PendingInviteCount}명" : " · 전원 응답 완료";
+            LadderLobbySummaryText = $"참가자 대기 ({joinedCount}명 입장{pendingText})";
         }
         else
         {
-            LadderLobbySummaryText = $"2단계 위치 선택 ({pickedCount}/{joinedCount}명 완료)";
+            LadderLobbySummaryText = $"시작 위치 선택 ({pickedCount}/{joinedCount}명 완료)";
         }
     }
 
-    private void CloseLadderRoomState(string statusMessage)
+    private void CloseLadderRoomState(string statusMessage, bool resetStageToSetup = true)
     {
-        CloseLadderRoomStateInternal();
+        CloseLadderRoomStateInternal(resetStageToSetup);
         LadderStatusText = statusMessage;
     }
 
-    private void CloseLadderRoomStateInternal()
+    private void CloseLadderRoomStateInternal(bool resetStageToSetup = true)
     {
         CancelLadderInviteTimeout();
         _ladderRoom = null;
@@ -1028,6 +1208,11 @@ public sealed partial class CoinGamesViewModel
         LadderRoomPrizesText = string.Empty;
         LadderRoomMembersText = string.Empty;
         LadderSlots.Clear();
+        LadderParticipantCards.Clear();
+        if (resetStageToSetup && !IsLadderAnimating)
+        {
+            LadderStage = LadderStage.Setup;
+        }
     }
 
     [RelayCommand]
@@ -1060,19 +1245,23 @@ public sealed partial class CoinGamesViewModel
     [RelayCommand]
     private void ApplyCoffeePreset()
     {
-        var count = Math.Clamp(ParseTokens(LadderParticipantsText).Count, LabLadderEngine.MinParticipants, LabLadderEngine.MaxParticipants);
+        var count = IsLadderMultiplayerMode && OnlineFriends.Count > 0
+            ? Math.Clamp(1 + Math.Max(1, SelectedLadderInviteeCount), LabLadderEngine.MinParticipants, LabLadderEngine.MaxParticipants)
+            : Math.Clamp(ParseTokens(LadderParticipantsText).Count, LabLadderEngine.MinParticipants, LabLadderEngine.MaxParticipants);
         LadderPrizesText = count <= 2
-            ? "☕ 커피 쏘기 x1, 통과 x1"
-            : $"☕ 커피 쏘기 x1, 통과 x{count - 1}";
+            ? "커피 쏘기 x1, 통과 x1"
+            : $"커피 쏘기 x1, 통과 x{count - 1}";
     }
 
     [RelayCommand]
     private void ApplyCoinJackpotPreset()
     {
-        var count = Math.Clamp(ParseTokens(LadderParticipantsText).Count, LabLadderEngine.MinParticipants, LabLadderEngine.MaxParticipants);
+        var count = IsLadderMultiplayerMode && OnlineFriends.Count > 0
+            ? Math.Clamp(1 + Math.Max(1, SelectedLadderInviteeCount), LabLadderEngine.MinParticipants, LabLadderEngine.MaxParticipants)
+            : Math.Clamp(ParseTokens(LadderParticipantsText).Count, LabLadderEngine.MinParticipants, LabLadderEngine.MaxParticipants);
         LadderPrizesText = count <= 2
-            ? "💰 코인 잭팟! x1, 꽝 x1"
-            : $"💰 코인 잭팟! x1, 꽝 x{count - 1}";
+            ? "코인 잭팟! x1, 꽝 x1"
+            : $"코인 잭팟! x1, 꽝 x{count - 1}";
         if (LadderEntryFee == 0)
         {
             LadderEntryFee = 30;
@@ -1121,8 +1310,17 @@ public sealed partial class CoinGamesViewModel
                 return;
             }
 
+            NotifyCoinsChanged();
             await PersistProfileAsync();
         }
+
+        IsLadderMultiplayerMode = false;
+        var participantPetIds = Enumerable.Range(0, participants.Count)
+            .Select(i => i == 0 ? _profile.PetId : string.Empty)
+            .ToList();
+        var participantPortraits = Enumerable.Range(0, participants.Count)
+            .Select(i => i == 0 ? MyPetPortrait : null)
+            .ToList();
 
         var configuredPrizesSummary = LabLadderEngine.FormatPrizeSummary(prizes);
         var board = LabLadderEngine.GenerateRandomizedBoard(participants, prizes);
@@ -1131,6 +1329,8 @@ public sealed partial class CoinGamesViewModel
             Guid.NewGuid().ToString("N"),
             board,
             traces,
+            participantPetIds,
+            participantPortraits,
             myStartColumn: 0,
             LadderEntryFee,
             isMultiplayer: false,
@@ -1160,7 +1360,7 @@ public sealed partial class CoinGamesViewModel
             return;
         }
 
-        var summary = "🪜사다리: " + string.Join(" / ", _lastLadderResults.Select(r => $"{r.Participant}→{r.Prize}"));
+        var summary = "사다리 결과: " + string.Join(" / ", _lastLadderResults.Select(r => $"{r.Participant}→{r.Prize}"));
         if (summary.Length > ProtocolConstants.MaxBubbleMessageLength)
         {
             summary = summary[..(ProtocolConstants.MaxBubbleMessageLength - 1)] + "…";
@@ -1176,7 +1376,7 @@ public sealed partial class CoinGamesViewModel
         }
 
         LadderStatusText = sentCount > 0
-            ? $"📢 온라인 친구 {sentCount}명에게 사다리 결과를 공유했습니다!"
+            ? $"온라인 친구 {sentCount}명에게 사다리 결과를 공유했습니다."
             : "친구들에게 결과를 전송하지 못했습니다.";
     }
 

@@ -26,6 +26,15 @@ public sealed partial class CoinGamesViewModel
         IsRpsWaitingResponse = false;
         IsRpsInMatch = true;
         CanChooseRpsMove = true;
+        RpsPhase = RpsPhase.Choosing;
+        RpsMySelectedMove = null;
+        RpsRevealedOpponentMove = null;
+        RpsOpponentCommitted = false;
+        RpsLastOutcome = null;
+        RpsSettlementText = string.Empty;
+        RpsCurrentMatchWager = _rpsActiveWager;
+        RpsOpponentDisplayName = _rpsOpponent is null ? "상대 친구" : _social.GetFriendDisplayName(_rpsOpponent.PetId);
+        RpsOpponentPortrait = _rpsOpponent is null ? null : TryGetPortrait(ResolveFriendAppearance(_rpsOpponent.PetId, _rpsOpponent));
         RpsMyMoveText = "?";
         RpsOpponentMoveText = "?";
         _ = WaitForRpsDeadlineAsync(sessionId);
@@ -46,10 +55,22 @@ public sealed partial class CoinGamesViewModel
         {
             return;
         }
+
         IsRpsInMatch = false;
         CanChooseRpsMove = false;
         _rpsSessionId = null;
-        _progression.AddCoins(_profile, _rpsActiveWager);
+        RpsPhase = RpsPhase.Setup;
+        RpsMySelectedMove = null;
+        RpsRevealedOpponentMove = null;
+        RpsOpponentCommitted = false;
+        RpsLastOutcome = null;
+        RpsSettlementText = string.Empty;
+        if (_rpsActiveWager > 0)
+        {
+            _progression.AddCoins(_profile, _rpsActiveWager);
+            NotifyCoinsChanged();
+        }
+
         RpsStatusText = message;
         await PersistProfileAsync();
     }
@@ -62,11 +83,17 @@ public sealed partial class CoinGamesViewModel
         {
             return;
         }
+
         _rpsMyMove = move;
         _rpsNonce = RpsGameEngine.CreateNonce();
         CanChooseRpsMove = false;
+        RpsMySelectedMove = move;
+        RpsPhase = RpsPhase.WaitingOpponent;
         RpsMyMoveText = RpsGameEngine.FormatKorean(move);
-        RpsStatusText = "선택 완료! 상대의 선택을 기다리는 중...";
+        RpsStatusText = RpsOpponentCommitted
+            ? "선택 완료! 서로의 패를 검증하는 중..."
+            : "선택 완료! 상대가 패를 고를 때까지 기다리는 중...";
+
         var commitment = RpsGameEngine.Commit(sessionId, _profile.PetId, move, _rpsNonce);
         var delivered = await SendRpsRoundEventAsync(opponent, sessionId, "commit", commitment);
         if (IsRpsInMatch && _rpsSessionId == sessionId)
@@ -76,12 +103,34 @@ public sealed partial class CoinGamesViewModel
         }
     }
 
+    [RelayCommand]
+    private void ResetRpsToSetup()
+    {
+        if (IsRpsInMatch || IsRpsWaitingResponse)
+        {
+            return;
+        }
+
+        RpsPhase = RpsPhase.Setup;
+        RpsMySelectedMove = null;
+        RpsRevealedOpponentMove = null;
+        RpsOpponentCommitted = false;
+        RpsLastOutcome = null;
+        RpsSettlementText = string.Empty;
+        RpsMyMoveText = "?";
+        RpsOpponentMoveText = "?";
+        RpsStatusText = "온라인 친구를 선택해 가위바위보 코인 배틀을 신청해 보세요!";
+    }
+
     private async Task<bool> SendRpsRoundEventAsync(FriendEntry opponent, string sessionId, string action, string data)
     {
         var payload = new GameEventPayload
         {
-            GameType = RpsGameEngine.GameTypeId, SessionId = sessionId,
-            Action = action, WagerCoins = _rpsActiveWager, Data = data
+            GameType = RpsGameEngine.GameTypeId,
+            SessionId = sessionId,
+            Action = action,
+            WagerCoins = _rpsActiveWager,
+            Data = data
         };
         return await _social.SendGameEventAsync(opponent, payload)
             || (IsRpsInMatch && _rpsSessionId == sessionId && await _social.SendGameEventAsync(opponent, payload));
@@ -95,6 +144,7 @@ public sealed partial class CoinGamesViewModel
         {
             return;
         }
+
         _rpsSendingReveal = true;
         var delivered = await SendRpsRoundEventAsync(opponent, sessionId, "reveal", $"{RpsGameEngine.ToToken(move)}:{_rpsNonce}");
         if (IsRpsInMatch && _rpsSessionId == sessionId)
@@ -111,9 +161,17 @@ public sealed partial class CoinGamesViewModel
         {
             return;
         }
+
+        // 상대의 커밋 해시만 수신 기록하고, 실제 패는 양측 선택·공개 완료 시까지 절대 노출하지 않는다.
         if (payload.Action == "commit" && _rpsOpponentCommitment is null && RpsGameEngine.IsCommitment(payload.Data))
         {
             _rpsOpponentCommitment = payload.Data;
+            RpsOpponentCommitted = true;
+            if (RpsPhase == RpsPhase.Choosing)
+            {
+                RpsStatusText = "상대가 선택을 마쳤습니다! 가위 · 바위 · 보 중 선택하세요.";
+            }
+
             await TrySendRpsRevealAsync();
         }
         else if (payload.Action == "reveal" && _rpsMyMove is not null && _rpsOpponentMove is null
@@ -142,6 +200,9 @@ public sealed partial class CoinGamesViewModel
         var oppName = _rpsOpponent is null ? "상대" : _social.GetFriendDisplayName(_rpsOpponent.PetId);
 
         RpsOpponentMoveText = RpsGameEngine.FormatKorean(opp);
+        RpsRevealedOpponentMove = opp;
+        RpsLastOutcome = outcome;
+        RpsPhase = RpsPhase.Result;
         IsRpsInMatch = false;
         CanChooseRpsMove = false;
         _rpsSessionId = null;
@@ -151,25 +212,29 @@ public sealed partial class CoinGamesViewModel
             case RpsOutcome.Win:
                 var winPrize = _rpsActiveWager * 2;
                 _progression.AddCoins(_profile, winPrize);
+                NotifyCoinsChanged();
                 await PersistProfileAsync();
-                RpsStatusText = $"🎉 승리! {RpsGameEngine.FormatKorean(mine)} vs {RpsGameEngine.FormatKorean(opp)} (+{winPrize} 코인 획득)";
+                RpsSettlementText = $"+{winPrize} 코인 획득 (참가 {_rpsActiveWager} 코인)";
+                RpsStatusText = $"승리! {RpsGameEngine.FormatKorean(mine)} vs {RpsGameEngine.FormatKorean(opp)} (+{winPrize} 코인 획득)";
                 PetEmotionTriggered?.Invoke(this, true);
                 GameNotification?.Invoke(this, $"{oppName}에게 가위바위보 승리! (+{winPrize} 코인)");
                 break;
 
             case RpsOutcome.Draw:
                 _progression.AddCoins(_profile, _rpsActiveWager);
+                NotifyCoinsChanged();
                 await PersistProfileAsync();
-                RpsStatusText = $"🤝 무승부! {RpsGameEngine.FormatKorean(mine)} vs {RpsGameEngine.FormatKorean(opp)} (배팅 {_rpsActiveWager} 코인 반환)";
+                RpsSettlementText = $"배팅 {_rpsActiveWager} 코인 반환 (무승부)";
+                RpsStatusText = $"무승부! {RpsGameEngine.FormatKorean(mine)} vs {RpsGameEngine.FormatKorean(opp)} (배팅 {_rpsActiveWager} 코인 반환)";
                 GameNotification?.Invoke(this, $"{oppName}와 가위바위보 무승부!");
                 break;
 
             case RpsOutcome.Lose:
-                RpsStatusText = $"😢 패배! {RpsGameEngine.FormatKorean(mine)} vs {RpsGameEngine.FormatKorean(opp)} (-{_rpsActiveWager} 코인)";
+                RpsSettlementText = $"-{_rpsActiveWager} 코인 차감 (상대 승리)";
+                RpsStatusText = $"패배 · {RpsGameEngine.FormatKorean(mine)} vs {RpsGameEngine.FormatKorean(opp)} (-{_rpsActiveWager} 코인)";
                 PetEmotionTriggered?.Invoke(this, false);
                 GameNotification?.Invoke(this, $"{oppName}에게 가위바위보 패배...");
                 break;
         }
     }
-
 }

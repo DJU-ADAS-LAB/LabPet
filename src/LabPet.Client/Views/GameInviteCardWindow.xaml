@@ -1,0 +1,153 @@
+<Window x:Class="LabPet.Client.Views.GameInviteCardWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:games="clr-namespace:LabPet.Client.Views.Games"
+        Title="LabPet 게임 초대"
+        WindowStyle="None"
+        AllowsTransparency="True"
+        Background="Transparent"
+        Topmost="True"
+        ShowInTaskbar="False"
+        ShowActivated="False"
+        Focusable="False"
+        ResizeMode="NoResize"
+        SizeToContent="WidthAndHeight">
+
+    <Window.Resources>
+        <BooleanToVisibilityConverter x:Key="BoolToVis" />
+        <games:NullToVisibilityConverter x:Key="NullToVis" />
+    </Window.Resources>
+
+    <Border x:Name="InviteCardRoot"
+            Margin="12"
+            Width="292"
+            Background="#FCFFFFFF"
+            BorderBrush="{StaticResource GameDividerBrush}"
+            BorderThickness="1"
+            CornerRadius="18"
+            Padding="15,13"
+            Effect="{StaticResource GameElevatedShadow}"
+            RenderTransformOrigin="0.5,0.5"
+            Opacity="0">
+        <Border.RenderTransform>
+            <TranslateTransform x:Name="CardSlideTransform" Y="8" />
+        </Border.RenderTransform>
+
+        <StackPanel>
+            <!-- 상단: 친구 펫 초상 + 이름 + 게임 이름 + 남은 시간 -->
+            <DockPanel LastChildFill="False" Margin="0,0,0,10">
+                <StackPanel DockPanel.Dock="Left" Orientation="Horizontal" VerticalAlignment="Center">
+                    <Border Width="44"
+                            Height="44"
+                            CornerRadius="12"
+                            Background="{StaticResource GamePinkSoftBrush}"
+                            BorderBrush="{StaticResource GamePinkBorderBrush}"
+                            BorderThickness="1"
+                            Margin="0,0,10,0">
+                        <Image Source="{Binding IncomingInvitePortrait}" Margin="3" RenderOptions.BitmapScalingMode="HighQuality" />
+                    </Border>
+                    <StackPanel VerticalAlignment="Center" MaxWidth="144">
+                        <TextBlock Text="{Binding IncomingInvite.SenderName, FallbackValue=''}"
+                                   FontSize="13.5"
+                                   FontWeight="Bold"
+                                   Foreground="{StaticResource GameTextPrimaryBrush}"
+                                   TextTrimming="CharacterEllipsis" />
+                        <TextBlock Text="{Binding IncomingInvite.GameDisplayName, FallbackValue=''}"
+                                   FontSize="12"
+                                   FontWeight="SemiBold"
+                                   Foreground="{StaticResource GamePinkBrush}"
+                                   Margin="0,2,0,0" />
+                    </StackPanel>
+                </StackPanel>
+
+                <!-- 남은 수락 시간 배지 -->
+                <Border DockPanel.Dock="Right"
+                        VerticalAlignment="Top"
+                        Background="{StaticResource GameSubtleFillBrush}"
+                        CornerRadius="9"
+                        Padding="8,4">
+                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                        <Path Data="{StaticResource IconClockGeometry}"
+                              Width="12" Height="12"
+                              Stretch="Uniform"
+                              Stroke="{StaticResource GameTextSecondaryBrush}"
+                              StrokeThickness="1.9"
+                              Margin="0,0,4,0"
+                              VerticalAlignment="Center" />
+                        <TextBlock FontSize="11" FontWeight="Bold" Foreground="{StaticResource GameTextPrimaryBrush}">
+                            <Run Text="{Binding IncomingInviteRemainingSeconds, Mode=OneWay}" /><Run Text="초" />
+                        </TextBlock>
+                    </StackPanel>
+                </Border>
+            </DockPanel>
+
+            <!-- 참가비 및 사다리 상품 정보 -->
+            <StackPanel Margin="0,0,0,10">
+                <WrapPanel Orientation="Horizontal" Margin="0,0,0,4">
+                    <Border Background="{StaticResource GameSubtleFillBrush}" CornerRadius="8" Padding="8,4" Margin="0,0,6,0">
+                        <TextBlock Text="{Binding IncomingInvite.CostBadgeText, FallbackValue=''}"
+                                   FontSize="11.5"
+                                   FontWeight="Bold"
+                                   Foreground="{StaticResource GameTextPrimaryBrush}" />
+                    </Border>
+                </WrapPanel>
+
+                <Border Visibility="{Binding IncomingInvite.PrizeSummary, Converter={StaticResource NullToVis}, FallbackValue=Collapsed}"
+                        Background="{StaticResource GameSubtleFillBrush}"
+                        CornerRadius="9"
+                        Padding="9,6"
+                        Margin="0,4,0,0">
+                    <TextBlock FontSize="11.5"
+                               FontWeight="SemiBold"
+                               Foreground="{StaticResource GameTextSecondaryBrush}"
+                               TextWrapping="Wrap">
+                        <Run Text="상품: " Foreground="{StaticResource GameTextPrimaryBrush}" FontWeight="Bold" />
+                        <Run Text="{Binding IncomingInvite.PrizeSummary, Mode=OneWay, FallbackValue=''}" />
+                    </TextBlock>
+                </Border>
+            </StackPanel>
+
+            <!-- 남은 시간 진행 바 -->
+            <ProgressBar Value="{Binding IncomingInviteProgressRatio}"
+                         Maximum="1"
+                         Height="4"
+                         Foreground="{StaticResource GamePinkBrush}"
+                         Background="{StaticResource GameSubtleFillBrush}"
+                         Margin="0,0,0,11" />
+
+            <!-- 수락 / 거절 버튼 (클릭 투과 중에도 클릭 가능, 수락 중 중복 클릭 차단) -->
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="8" />
+                    <ColumnDefinition Width="1.35*" />
+                </Grid.ColumnDefinitions>
+
+                <Button Grid.Column="0"
+                        Style="{StaticResource GameSecondaryButtonStyle}"
+                        Command="{Binding DeclineIncomingInviteCommand}"
+                        IsEnabled="{Binding CanRespondToIncomingInvite}"
+                        Content="거절"
+                        Height="36"
+                        Focusable="False" />
+
+                <Button Grid.Column="2"
+                        Command="{Binding AcceptIncomingInviteCommand}"
+                        IsEnabled="{Binding CanRespondToIncomingInvite}"
+                        Height="36"
+                        Focusable="False">
+                    <Button.Style>
+                        <Style TargetType="Button" BasedOn="{StaticResource GamePrimaryButtonStyle}">
+                            <Setter Property="Content" Value="수락" />
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding IsAcceptingIncomingInvite}" Value="True">
+                                    <Setter Property="Content" Value="수락 중..." />
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </Button.Style>
+                </Button>
+            </Grid>
+        </StackPanel>
+    </Border>
+</Window>

@@ -7,7 +7,7 @@ using LabPet.Shared.Models;
 
 namespace LabPet.Client.Rendering;
 
-internal sealed class PetPortraitRenderer(IPetMeshFactory meshFactory)
+public sealed class PetPortraitRenderer(IPetMeshFactory meshFactory)
 {
     private const int PixelSize = 72;
     private const int MaxCachedPortraits = 8;
