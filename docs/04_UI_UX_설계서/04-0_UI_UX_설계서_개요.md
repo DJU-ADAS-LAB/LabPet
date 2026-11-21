@@ -1,8 +1,8 @@
 ---
 title: "UI/UX 설계서 개요"
 doc_id: SPEC-UI-00
-version: "0.2.1"
-baseline_commit: "1304f3f"
+version: "0.2.2"
+baseline_commit: "672f24a"
 updated: "2026-11-22"
 status: "활성"
 tags:
@@ -20,7 +20,7 @@ related:
 ## 기준선
 | 항목 | 내용 |
 | --- | --- |
-| 기준 릴리스 | `v0.2.1` (게임 UI/UX 및 초대 카드 전면 개편) |
+| 기준 릴리스 | `v0.2.2` (게임 UI/UX 및 초대 카드 전면 개편) |
 | 렌더링 기반 | WPF `Viewport3D` + `HelixToolkit.Wpf 3.1.2` (`AllowsTransparency="True"`) + `Views/Games/` 전용 게임 셸 |
 | 트레이 UI | `H.NotifyIcon.Wpf 2.3.0` |
 

@@ -8,7 +8,13 @@ namespace LabPet.Client.Solo;
 public sealed class SoloProgressionService
 {
     public const int KeystrokesPerReward = 40;
+    public const int KeystrokeRewardXp = 5;
+    public const int KeystrokeRewardCoins = 2;
     public const int MouseClicksPerReward = 25;
+    public const int MouseClickRewardXp = 5;
+    public const int MouseClickRewardCoins = 2;
+    public const int UptimeRewardXpPerMinute = 4;
+    public const int UptimeRewardCoinsPerMinute = 1;
     public const int PomodoroRewardXp = 100;
     public const int PomodoroRewardCoins = 50;
 
@@ -33,7 +39,7 @@ public sealed class SoloProgressionService
             return (false, profile.SoloProgress.Level);
         }
 
-        return GrantRewards(profile, xp: earnedBuckets * 5, coins: earnedBuckets * 2);
+        return GrantRewards(profile, xp: earnedBuckets * KeystrokeRewardXp, coins: earnedBuckets * KeystrokeRewardCoins);
     }
 
     public (bool LeveledUp, int NewLevel) RecordMouseClicks(PetProfile profile, long deltaClicks)
@@ -53,7 +59,7 @@ public sealed class SoloProgressionService
             return (false, profile.SoloProgress.Level);
         }
 
-        return GrantRewards(profile, xp: earnedBuckets * 5, coins: earnedBuckets * 2);
+        return GrantRewards(profile, xp: earnedBuckets * MouseClickRewardXp, coins: earnedBuckets * MouseClickRewardCoins);
     }
 
     public (bool LeveledUp, int NewLevel) RecordUptimeMinutes(PetProfile profile, int minutes)
@@ -64,7 +70,7 @@ public sealed class SoloProgressionService
         }
 
         profile.SoloProgress.TotalUptimeMinutes += minutes;
-        return GrantRewards(profile, xp: minutes * 4L, coins: minutes * 1L);
+        return GrantRewards(profile, xp: minutes * (long)UptimeRewardXpPerMinute, coins: minutes * (long)UptimeRewardCoinsPerMinute);
     }
 
     public (bool LeveledUp, int NewLevel) RecordPomodoroCompleted(PetProfile profile)

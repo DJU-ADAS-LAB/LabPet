@@ -7,10 +7,25 @@ using LabPet.Shared.Models;
 namespace LabPet.Client.ViewModels;
 
 /// <summary>
+/// 성장 화면에 표시되는 코인 획득 방법 안내 항목.
+/// </summary>
+public sealed record CoinEarningGuideItem(string Title, string ConditionText, string RewardBadge);
+
+/// <summary>
 /// 개인 성장 현황 · 실시간 오디오 모니터 · 뽀모도로 타이머 · 코인 게임 허브 ViewModel.
 /// </summary>
 public sealed partial class SoloHubViewModel : ObservableObject, IDisposable
 {
+    public IReadOnlyList<CoinEarningGuideItem> CoinEarningGuides { get; } =
+    [
+        new("키보드 입력", $"{SoloProgressionService.KeystrokesPerReward}타마다 자동 적립", $"+{SoloProgressionService.KeystrokeRewardCoins} 코인"),
+        new("마우스 클릭", $"{SoloProgressionService.MouseClicksPerReward}회마다 자동 적립", $"+{SoloProgressionService.MouseClickRewardCoins} 코인"),
+        new("함께한 시간", "PC 사용 1분마다 적립", $"+{SoloProgressionService.UptimeRewardCoinsPerMinute} 코인"),
+        new("뽀모도로 완료", "집중 세션 1회 완료 시", $"+{SoloProgressionService.PomodoroRewardCoins} 코인"),
+        new("친구와 교류", "메시지·쓰다듬기 / 빠른 반응", "+2 / +1 코인"),
+        new("미니게임", "하이로우·가위바위보·타이핑·사다리", "승리·정산 보상")
+    ];
+
     private readonly PomodoroTimerService _pomodoro;
     private readonly IAudioAnalyzer _audioAnalyzer;
 

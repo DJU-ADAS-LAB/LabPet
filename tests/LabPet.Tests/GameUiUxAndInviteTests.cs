@@ -671,6 +671,56 @@ public sealed class GameUiUxAndInviteTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task SoloHubWindow_SectionSwitching_HidesGamesHubWhenGrowthOrPomodoroSelected()
+    {
+        await WpfTestHost.RunAsync(async () =>
+        {
+            using var gamesVm = new CoinGamesViewModel(_hostStore, new SoloProgressionService(), _hostSocial);
+            using var hubVm = new SoloHubViewModel(new PomodoroTimerService(), new TestAudioAnalyzer(), gamesVm);
+            hubVm.BindProfile(_hostProfile);
+
+            var win = new SoloHubWindow(hubVm)
+            {
+                Left = -20000,
+                Top = -20000
+            };
+            try
+            {
+                win.Show();
+                win.UpdateLayout();
+                await WpfTestHost.FlushAsync();
+
+                Assert.Equal(SoloHubSection.GrowthAudio, hubVm.ActiveSection);
+                Assert.Equal(Visibility.Collapsed, win.GamesSectionContainer.Visibility);
+                Assert.False(win.GamesHubControl.IsVisible);
+
+                hubVm.SelectSectionCommand.Execute(SoloHubSection.Pomodoro);
+                win.UpdateLayout();
+                await WpfTestHost.FlushAsync();
+                Assert.Equal(Visibility.Collapsed, win.GamesSectionContainer.Visibility);
+                Assert.False(win.GamesHubControl.IsVisible);
+
+                hubVm.SelectSectionCommand.Execute(SoloHubSection.Games);
+                gamesVm.ActiveGameScreen = GameScreen.HiLow;
+                win.UpdateLayout();
+                await WpfTestHost.FlushAsync();
+                Assert.Equal(Visibility.Visible, win.GamesSectionContainer.Visibility);
+                Assert.True(win.GamesHubControl.IsVisible);
+
+                hubVm.SelectSectionCommand.Execute(SoloHubSection.GrowthAudio);
+                win.UpdateLayout();
+                await WpfTestHost.FlushAsync();
+                Assert.Equal(Visibility.Collapsed, win.GamesSectionContainer.Visibility);
+                Assert.False(win.GamesHubControl.IsVisible);
+            }
+            finally
+            {
+                win.Close();
+            }
+        });
+    }
+
+    [Fact]
     public async Task Ladder_DirectFriendSelection_OnlyInvitesCheckedFriends()
     {
         await WpfTestHost.RunAsync(async () =>
@@ -715,6 +765,8 @@ public sealed class GameUiUxAndInviteTests : IAsyncLifetime
         {
             var hub = new SoloHubViewModel(pomodoroSvc, analyzer, gamesVm);
             hub.BindProfile(profile);
+            Assert.Equal(6, hub.CoinEarningGuides.Count);
+            Assert.Contains(hub.CoinEarningGuides, item => item.ConditionText.Contains("40타") && item.RewardBadge == "+2 코인");
             hub.SetPomodoroPresetCommand.Execute("15");
             Assert.Equal("15:00", hub.PomodoroTimeText);
             hub.SelectSectionCommand.Execute(SoloHubSection.Games);

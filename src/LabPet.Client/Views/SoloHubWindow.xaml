@@ -246,6 +246,64 @@
                                 </StackPanel>
                             </Border>
 
+                            <!-- 코인 얻는 방법 안내 카드 -->
+                            <Border Background="{StaticResource GameCardBrush}"
+                                    BorderBrush="{StaticResource GameDividerBrush}"
+                                    BorderThickness="1"
+                                    CornerRadius="18"
+                                    Padding="20,18"
+                                    Margin="0,0,0,14">
+                                <StackPanel>
+                                    <DockPanel Margin="0,0,0,12" LastChildFill="False">
+                                        <StackPanel DockPanel.Dock="Left" Orientation="Horizontal" VerticalAlignment="Center">
+                                            <Border Width="26" Height="26" CornerRadius="8" Background="{StaticResource GameCoinSoftBrush}" Margin="0,0,8,0">
+                                                <Path Data="{StaticResource IconCoinGeometry}"
+                                                      Width="14" Height="14"
+                                                      Stretch="Uniform"
+                                                      Stroke="{StaticResource GameCoinBrush}"
+                                                      StrokeThickness="2"
+                                                      HorizontalAlignment="Center"
+                                                      VerticalAlignment="Center" />
+                                            </Border>
+                                            <TextBlock Text="코인 얻는 방법" FontWeight="Bold" FontSize="14" Foreground="{StaticResource GameTextPrimaryBrush}" VerticalAlignment="Center" />
+                                        </StackPanel>
+                                        <TextBlock DockPanel.Dock="Right" Text="활동·집중·친구 교류로 자동 적립됩니다" FontSize="11.5" Foreground="{StaticResource GameTextMutedBrush}" VerticalAlignment="Center" />
+                                    </DockPanel>
+
+                                    <ItemsControl ItemsSource="{Binding CoinEarningGuides}">
+                                        <ItemsControl.ItemsPanel>
+                                            <ItemsPanelTemplate>
+                                                <UniformGrid Columns="2" />
+                                            </ItemsPanelTemplate>
+                                        </ItemsControl.ItemsPanel>
+                                        <ItemsControl.ItemTemplate>
+                                            <DataTemplate>
+                                                <Border Background="{StaticResource GameSubtleFillBrush}"
+                                                        CornerRadius="12"
+                                                        Padding="12,10"
+                                                        Margin="4">
+                                                    <DockPanel LastChildFill="False">
+                                                        <StackPanel DockPanel.Dock="Left" VerticalAlignment="Center">
+                                                            <TextBlock Text="{Binding Title}" FontSize="12.5" FontWeight="Bold" Foreground="{StaticResource GameTextPrimaryBrush}" />
+                                                            <TextBlock Text="{Binding ConditionText}" FontSize="11" Foreground="{StaticResource GameTextSecondaryBrush}" Margin="0,2,0,0" />
+                                                        </StackPanel>
+                                                        <Border DockPanel.Dock="Right"
+                                                                Background="{StaticResource GameCoinSoftBrush}"
+                                                                BorderBrush="{StaticResource GameCoinBorderBrush}"
+                                                                BorderThickness="1"
+                                                                CornerRadius="8"
+                                                                Padding="9,4"
+                                                                VerticalAlignment="Center">
+                                                            <TextBlock Text="{Binding RewardBadge}" FontSize="11" FontWeight="Bold" Foreground="{StaticResource GameCoinBrush}" />
+                                                        </Border>
+                                                    </DockPanel>
+                                                </Border>
+                                            </DataTemplate>
+                                        </ItemsControl.ItemTemplate>
+                                    </ItemsControl>
+                                </StackPanel>
+                            </Border>
+
                             <Border Background="{StaticResource GameCardBrush}"
                                     BorderBrush="{StaticResource GameDividerBrush}"
                                     BorderThickness="1"
@@ -335,8 +393,11 @@
                     </Border>
 
                     <!-- 3) 게임 허브 (카드 대시보드 + 단일 게임 전용 화면) -->
-                    <games:GamesHubView Visibility="{Binding ActiveSection, Converter={StaticResource EnumToVis}, ConverterParameter=Games}"
-                                        DataContext="{Binding Games}" />
+                    <Grid x:Name="GamesSectionContainer"
+                          Visibility="{Binding ActiveSection, Converter={StaticResource EnumToVis}, ConverterParameter=Games}">
+                        <games:GamesHubView x:Name="GamesHubControl"
+                                            DataContext="{Binding Games}" />
+                    </Grid>
                 </Grid>
             </Grid>
         </Border>
