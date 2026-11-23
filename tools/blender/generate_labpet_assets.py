@@ -1473,6 +1473,627 @@ def build_mochi_spirit():
 
 
 # ---------------------------------------------------------------------------
+# 1E. 치이카와 3종 공통 헬퍼 (눈썹, 볼터치 빗금 ////, 귀여운 w 입 + 혀)
+# ---------------------------------------------------------------------------
+
+def build_chiikawa_style_face(
+    head_clay,
+    eye_x=0.225,
+    eye_y=0.24,
+    eye_rx=0.090,
+    eye_ry=0.100,
+    eye_depth=0.048,
+    mouth_y=0.095,
+    cheek_x=0.39,
+    cheek_y=0.135,
+    cheek_rx=0.125,
+    cheek_ry=0.072,
+    brow_style="short_arc",
+    open_tongue_default=True,
+):
+    """하치와레·치이카와·우사기 특유의 볼터치 4줄 빗금(////), 눈썹, 비즈 눈, 귀여운 입+혀 생성."""
+    expr_parts, blink_center = build_conformed_face_expressions(
+        head_clay,
+        eye_x=eye_x,
+        eye_y=eye_y,
+        eye_rx=eye_rx,
+        eye_ry=eye_ry,
+        eye_depth=eye_depth,
+        mouth_y=mouth_y,
+        is_puppy=open_tongue_default,
+        cheek_x=cheek_x,
+        cheek_y=cheek_y,
+        cheek_rx=cheek_rx,
+        cheek_ry=cheek_ry,
+    )
+
+    def project_surface_tube(name, pts_xy_rad, normal_embed=0.014, cast_dir=(0.0, 0.0, -1.0)):
+        out = []
+        for px, py, rad in pts_xy_rad:
+            _, sp, sn = sample_aimed_surface_wpf(head_clay, (px, py, 0.48), cast_dir)
+            p = sp + sn * normal_embed
+            out.append((p.x, p.y, p.z, rad))
+        return create_curve_tube(name, "eye_dark", out, resolution_u=2, bevel_resolution=0)
+
+    # 1) 양볼 위 4줄 대각선 빗금 (////)
+    hatch_objs = []
+    for side in (-1, 1):
+        c_dir = Vector((-side * 0.28, -0.04, -0.96)).normalized()
+        for h_idx in range(4):
+            u_off = (h_idx - 1.5) * (cheek_rx * 0.36)
+            hx0 = side * cheek_x + u_off - 0.011
+            hy0 = cheek_y - cheek_ry * 0.34
+            hx1 = side * cheek_x + u_off + 0.011
+            hy1 = cheek_y + cheek_ry * 0.34
+            hatch_objs.append(
+                project_surface_tube(
+                    f"_CheekHatch_{side}_{h_idx}",
+                    [(hx0, hy0, 0.0072), ((hx0 + hx1) * 0.5, (hy0 + hy1) * 0.5, 0.0080), (hx1, hy1, 0.0072)],
+                    normal_embed=0.013,
+                    cast_dir=c_dir,
+                )
+            )
+    expr_parts["Cheeks"] = join_part_group("Cheeks", [expr_parts["Cheeks"]] + hatch_objs)
+
+    # 2) 캐릭터별 눈썹 및 작은 코/입술 포인트 (Head에 합쳐질 리스트 반환)
+    extra_head_objs = []
+    for side in (-1, 1):
+        b_dir = Vector((-side * 0.14, 0.05, -0.99)).normalized()
+        if brow_style == "tick":
+            # 하치와레: 눈 위 짧은 점/틱 눈썹
+            bx = side * (eye_x * 0.88)
+            by = eye_y + 0.145
+            extra_head_objs.append(
+                project_surface_tube(
+                    f"_BrowTick_{side}",
+                    [
+                        (bx - side * 0.022, by - 0.006, 0.009),
+                        (bx, by + 0.004, 0.010),
+                        (bx + side * 0.022, by + 0.010, 0.009),
+                    ],
+                    normal_embed=0.006,
+                    cast_dir=b_dir,
+                )
+            )
+        elif brow_style == "high_arch":
+            # 우사기: 시원하게 둥근 아치형 눈썹
+            bx = side * (eye_x * 1.02)
+            by = eye_y + 0.175
+            extra_head_objs.append(
+                project_surface_tube(
+                    f"_BrowArch_{side}",
+                    [
+                        (bx - side * 0.095, by - 0.015, 0.009),
+                        (bx - side * 0.020, by + 0.032, 0.012),
+                        (bx + side * 0.055, by + 0.012, 0.011),
+                        (bx + side * 0.105, by - 0.048, 0.009),
+                    ],
+                    normal_embed=0.006,
+                    cast_dir=b_dir,
+                )
+            )
+        else:
+            # 치이카와: 순하고 짧은 아치 눈썹
+            bx = side * (eye_x * 0.94)
+            by = eye_y + 0.150
+            extra_head_objs.append(
+                project_surface_tube(
+                    f"_BrowSoft_{side}",
+                    [
+                        (bx - side * 0.048, by + 0.004, 0.009),
+                        (bx, by + 0.014, 0.011),
+                        (bx + side * 0.048, by - 0.006, 0.009),
+                    ],
+                    normal_embed=0.006,
+                    cast_dir=b_dir,
+                )
+            )
+
+    # 입 바로 위 아주 작고 귀여운 코 점 + 턱 아래 작은 미소 보조선
+    extra_head_objs.append(
+        project_surface_tube(
+            "_TinyNoseTick",
+            [(-0.014, mouth_y + 0.032, 0.008), (0.0, mouth_y + 0.026, 0.010), (0.014, mouth_y + 0.032, 0.008)],
+            normal_embed=0.007,
+        )
+    )
+    extra_head_objs.append(
+        project_surface_tube(
+            "_ChinDimple",
+            [(-0.022, mouth_y - 0.068, 0.007), (0.0, mouth_y - 0.073, 0.008), (0.022, mouth_y - 0.068, 0.007)],
+            normal_embed=0.006,
+        )
+    )
+
+    return expr_parts, blink_center, extra_head_objs
+
+
+# ---------------------------------------------------------------------------
+# 1F. 하치와레 (hachiware) — 파란 8자 가르마 무늬와 쫑긋한 고양이 귀·파란 꼬리
+# ---------------------------------------------------------------------------
+
+def build_hachiware():
+    clear_scene()
+    objects = []
+
+    # 1) Body: 포동포동한 아랫배와 짧은 두 발이 하나로 이어진 눈사람/찹쌀떡형 바디
+    body_elements = [
+        ((0.0, 0.02, 0.00), (0.48, 0.28, 0.44), None, 2.0),
+        ((0.0, -0.34, 0.01), (0.58, 0.42, 0.52), None, 2.15),
+        ((0.0, -0.60, 0.00), (0.54, 0.30, 0.48), None, 2.1),
+        # 아래쪽으로 귀엽게 톡 튀어나온 짧은 두 발
+        ((-0.26, -0.82, 0.06), (0.14, 0.15, 0.16), (0.0, 0.10, -0.08), 2.0),
+        ((0.26, -0.82, 0.06), (0.14, 0.15, 0.16), (0.0, -0.10, 0.08), 2.0),
+    ]
+    body_clay = create_metaball_clay(
+        "Body",
+        "body",
+        body_elements,
+        mb_res=0.034,
+        voxel_size=0.026,
+        smooth_iters=14,
+        target_tris=1050,
+        post_smooth_fn=lambda x, y, z: (x, soft_cushion_floor(y, -0.94, 0.10), z),
+    )
+    objects.append(body_clay)
+
+    # 2) LeftArm / RightArm (몸통 양옆에 앙증맞게 달린 짧은 찹쌀 팔)
+    for side, name in ((-1, "LeftArm"), (1, "RightArm")):
+        arm_elements = [
+            ((side * 0.54, -0.28, 0.10), (0.125, 0.115, 0.120), None, 2.0),
+            ((side * 0.67, -0.33, 0.16), (0.120, 0.105, 0.115), (0.0, -side * 0.18, side * 0.25), 2.1),
+        ]
+        objects.append(
+            create_metaball_clay(
+                name,
+                "body",
+                arm_elements,
+                mb_res=0.022,
+                voxel_size=0.017,
+                smooth_iters=14,
+                target_tris=190,
+            )
+        )
+
+    # 3) Tail (하치와레 특유의 하늘색 고양이 꼬리)
+    tail_pivot = (0.0, -0.66, -0.44)
+    tail_elements = [
+        ((0.0, -0.66, -0.44), (0.105, 0.100, 0.120), None, 2.0),
+        ((-0.14, -0.63, -0.58), (0.110, 0.105, 0.130), (0.15, -0.35, 0.0), 2.1),
+        ((-0.26, -0.56, -0.64), (0.115, 0.110, 0.125), None, 2.0),
+    ]
+    objects.append(
+        create_metaball_clay(
+            "Tail",
+            "hachi_blue",
+            tail_elements,
+            mb_res=0.022,
+            voxel_size=0.017,
+            smooth_iters=14,
+            target_tris=200,
+        )
+    )
+
+    # 4) Head (만두처럼 둥글고 통통한 두상 + 이마 양옆으로 갈라진 하늘색 8자 가르마 무늬 패치)
+    head_elements = [
+        ((0.0, 0.34, 0.00), (0.69, 0.56, 0.63), None, 2.05),
+        ((-0.24, 0.22, 0.10), (0.45, 0.35, 0.44), None, 2.1),
+        ((0.24, 0.22, 0.10), (0.45, 0.35, 0.44), None, 2.1),
+    ]
+    head_clay = create_metaball_clay(
+        "_HachiHeadClay",
+        "body",
+        head_elements,
+        mb_res=0.034,
+        voxel_size=0.026,
+        smooth_iters=15,
+        target_tris=1200,
+    )
+
+    # 하치와레 시그니처 하늘색 가르마 무늬 (좌/우 이마에서 정수리·뒤통수로 이어지는 V-갈래 캡)
+    cap_patches = []
+    for side in (-1, 1):
+        cap_dir = Vector((-side * 0.38, -0.58, -0.72)).normalized()
+        cap_origin = Vector((side * 0.31, 0.66, 0.26)) - cap_dir * 1.6
+        cap_patches.append(
+            create_conformed_clay_patch(
+                f"_HachiBlueCap_{side}",
+                "hachi_blue",
+                head_clay,
+                ray_origin_wpf=cap_origin,
+                ray_dir_wpf=cap_dir,
+                rx=0.41,
+                ry=0.35,
+                center_offset=0.015,
+                rim_offset=-0.011,
+                rings=5,
+                segs=24,
+                wrap_focus_depth=1.3,
+                shape_fn=lambda ux, vy, s=side: (
+                    ux * (0.94 + 0.18 * max(0.0, -vy)),
+                    vy - 0.18 * max(0.0, s * ux),
+                ),
+            )
+        )
+
+    expr_parts, blink_center, extra_head_objs = build_chiikawa_style_face(
+        head_clay,
+        eye_x=0.225,
+        eye_y=0.275,
+        eye_rx=0.090,
+        eye_ry=0.100,
+        eye_depth=0.048,
+        mouth_y=0.135,
+        cheek_x=0.395,
+        cheek_y=0.175,
+        cheek_rx=0.125,
+        cheek_ry=0.070,
+        brow_style="tick",
+        open_tongue_default=True,
+    )
+    objects.append(join_part_group("Head", [head_clay] + cap_patches + extra_head_objs))
+
+    # 5) LeftEar / RightEar (하늘색 쫑긋한 고양이 귀)
+    for side, ear_name in ((-1, "LeftEar"), (1, "RightEar")):
+        ear_elements = [
+            ((side * 0.38, 0.75, 0.02), (0.21, 0.16, 0.16), (0.0, 0.0, -side * 0.18), 2.0),
+            ((side * 0.45, 0.90, 0.02), (0.155, 0.145, 0.130), (0.0, 0.0, -side * 0.24), 2.1),
+            ((side * 0.51, 1.02, 0.02), (0.090, 0.095, 0.088), None, 2.0),
+        ]
+        objects.append(
+            create_metaball_clay(
+                ear_name,
+                "hachi_blue",
+                ear_elements,
+                mb_res=0.022,
+                voxel_size=0.017,
+                smooth_iters=14,
+                target_tris=220,
+            )
+        )
+
+    objects.extend(expr_parts.values())
+
+    head_socket_y, head_radius_x = measure_head_crown_and_radius(head_clay, head_center_z=0.0)
+    out_dir = os.path.join(MODELS_ROOT, "Characters", "hachiware")
+    tris = export_obj(os.path.join(out_dir, "model.obj"), objects)
+    rig_meta = {
+        "coordinateSystem": "WPF_Y_UP_Z_FRONT",
+        "unitScale": 1.0,
+        "originOffset": {"x": 0.0, "y": 0.0, "z": 0.0},
+        "headPivot": {"x": 0.0, "y": 0.02, "z": 0.0},
+        "headSocket": {"x": 0.0, "y": head_socket_y, "z": 0.01},
+        "headRadiusX": head_radius_x,
+        "auraSocket": {"x": 0.0, "y": 0.0, "z": 0.0},
+        "shadowY": -0.94,
+        "shadowRadiusX": 0.70,
+        "shadowRadiusZ": 0.62,
+        "eyeBlinkCenter": {"x": 0.0, "y": blink_center[1], "z": blink_center[2]},
+        "nameplateAnchor": {"x": 0.0, "y": -0.94, "z": 0.35},
+        "leftEarPivot": {"x": -0.38, "y": 0.76, "z": 0.02},
+        "rightEarPivot": {"x": 0.38, "y": 0.76, "z": 0.02},
+        "leftEarBaseAngle": 0.0,
+        "rightEarBaseAngle": 0.0,
+        "leftArmPivot": {"x": -0.54, "y": -0.28, "z": 0.10},
+        "rightArmPivot": {"x": 0.54, "y": -0.28, "z": 0.10},
+        "tailPivot": {"x": tail_pivot[0], "y": tail_pivot[1], "z": tail_pivot[2]},
+    }
+    save_rig_metadata(os.path.join(out_dir, "rig.json"), rig_meta)
+    print(f"[hachiware] exported model.obj ({tris} tris across expression layers) & rig.json (crown={head_socket_y}, rx={head_radius_x})")
+
+
+# ---------------------------------------------------------------------------
+# 1G. 치이카와 (chiikawa) — 동글동글 하얀 찹쌀 몸통과 작은 둥근 곰/햄스터 귀
+# ---------------------------------------------------------------------------
+
+def build_chiikawa():
+    clear_scene()
+    objects = []
+
+    # 1) Body: 치이카와 특유의 아담하고 통통한 찹쌀떡 몸통 + 가운데로 모인 짧은 두 발
+    body_elements = [
+        ((0.0, 0.00, 0.00), (0.48, 0.27, 0.44), None, 2.0),
+        ((0.0, -0.35, 0.01), (0.57, 0.41, 0.51), None, 2.15),
+        ((0.0, -0.59, 0.00), (0.52, 0.29, 0.46), None, 2.1),
+        ((-0.18, -0.82, 0.05), (0.135, 0.145, 0.155), (0.0, 0.06, -0.05), 2.0),
+        ((0.18, -0.82, 0.05), (0.135, 0.145, 0.155), (0.0, -0.06, 0.05), 2.0),
+    ]
+    body_clay = create_metaball_clay(
+        "Body",
+        "body",
+        body_elements,
+        mb_res=0.034,
+        voxel_size=0.026,
+        smooth_iters=14,
+        target_tris=1050,
+        post_smooth_fn=lambda x, y, z: (x, soft_cushion_floor(y, -0.94, 0.10), z),
+    )
+    objects.append(body_clay)
+
+    # 2) LeftArm / RightArm (짧고 앙증맞은 양옆 미니 팔)
+    for side, name in ((-1, "LeftArm"), (1, "RightArm")):
+        arm_elements = [
+            ((side * 0.53, -0.27, 0.10), (0.120, 0.110, 0.115), None, 2.0),
+            ((side * 0.65, -0.31, 0.15), (0.115, 0.100, 0.110), (0.0, -side * 0.16, side * 0.22), 2.1),
+        ]
+        objects.append(
+            create_metaball_clay(
+                name,
+                "body",
+                arm_elements,
+                mb_res=0.022,
+                voxel_size=0.017,
+                smooth_iters=14,
+                target_tris=190,
+            )
+        )
+
+    # 3) Tail (엉덩이 뒤 작고 동그란 폼폼 꼬리)
+    tail_pivot = (0.0, -0.62, -0.45)
+    objects.append(
+        create_metaball_clay(
+            "Tail",
+            "body",
+            [((0.0, -0.62, -0.49), (0.125, 0.125, 0.125), None, 2.0)],
+            mb_res=0.022,
+            voxel_size=0.017,
+            smooth_iters=12,
+            target_tris=160,
+        )
+    )
+
+    # 4) Head (양볼이 말랑하게 부푼 둥근 만두형 머리)
+    head_elements = [
+        ((0.0, 0.33, 0.00), (0.70, 0.55, 0.63), None, 2.05),
+        ((-0.26, 0.21, 0.10), (0.46, 0.35, 0.44), None, 2.1),
+        ((0.26, 0.21, 0.10), (0.46, 0.35, 0.44), None, 2.1),
+    ]
+    head_clay = create_metaball_clay(
+        "_ChiikawaHeadClay",
+        "body",
+        head_elements,
+        mb_res=0.034,
+        voxel_size=0.026,
+        smooth_iters=15,
+        target_tris=1200,
+    )
+
+    expr_parts, blink_center, extra_head_objs = build_chiikawa_style_face(
+        head_clay,
+        eye_x=0.220,
+        eye_y=0.255,
+        eye_rx=0.088,
+        eye_ry=0.098,
+        eye_depth=0.048,
+        mouth_y=0.120,
+        cheek_x=0.395,
+        cheek_y=0.160,
+        cheek_rx=0.126,
+        cheek_ry=0.070,
+        brow_style="short_arc",
+        open_tongue_default=True,
+    )
+    objects.append(join_part_group("Head", [head_clay] + extra_head_objs))
+
+    # 5) LeftEar / RightEar (작고 동글동글한 햄스터/곰 귀)
+    for side, ear_name in ((-1, "LeftEar"), (1, "RightEar")):
+        ear_elements = [
+            ((side * 0.42, 0.77, 0.01), (0.145, 0.135, 0.120), None, 2.0),
+            ((side * 0.46, 0.87, 0.01), (0.145, 0.145, 0.110), None, 2.1),
+        ]
+        outer_ear = create_metaball_clay(
+            f"_{ear_name}_Outer",
+            "body",
+            ear_elements,
+            mb_res=0.020,
+            voxel_size=0.016,
+            smooth_iters=14,
+            target_tris=190,
+        )
+        ear_in_dir = Vector((-side * 0.08, -0.05, -0.995)).normalized()
+        inner_ear = create_conformed_clay_patch(
+            f"_{ear_name}_Inner",
+            "body_shade",
+            outer_ear,
+            ray_origin_wpf=Vector((side * 0.45, 0.86, 0.12)) - ear_in_dir * 1.2,
+            ray_dir_wpf=ear_in_dir,
+            rx=0.075,
+            ry=0.075,
+            center_offset=0.008,
+            rim_offset=-0.008,
+            rings=3,
+            segs=14,
+            wrap_focus_depth=0.5,
+        )
+        objects.append(join_part_group(ear_name, [outer_ear, inner_ear]))
+
+    objects.extend(expr_parts.values())
+
+    head_socket_y, head_radius_x = measure_head_crown_and_radius(head_clay, head_center_z=0.0)
+    out_dir = os.path.join(MODELS_ROOT, "Characters", "chiikawa")
+    tris = export_obj(os.path.join(out_dir, "model.obj"), objects)
+    rig_meta = {
+        "coordinateSystem": "WPF_Y_UP_Z_FRONT",
+        "unitScale": 1.0,
+        "originOffset": {"x": 0.0, "y": 0.0, "z": 0.0},
+        "headPivot": {"x": 0.0, "y": 0.01, "z": 0.0},
+        "headSocket": {"x": 0.0, "y": head_socket_y, "z": 0.01},
+        "headRadiusX": head_radius_x,
+        "auraSocket": {"x": 0.0, "y": 0.0, "z": 0.0},
+        "shadowY": -0.94,
+        "shadowRadiusX": 0.70,
+        "shadowRadiusZ": 0.62,
+        "eyeBlinkCenter": {"x": 0.0, "y": blink_center[1], "z": blink_center[2]},
+        "nameplateAnchor": {"x": 0.0, "y": -0.94, "z": 0.35},
+        "leftEarPivot": {"x": -0.42, "y": 0.77, "z": 0.01},
+        "rightEarPivot": {"x": 0.42, "y": 0.77, "z": 0.01},
+        "leftEarBaseAngle": 0.0,
+        "rightEarBaseAngle": 0.0,
+        "leftArmPivot": {"x": -0.53, "y": -0.27, "z": 0.10},
+        "rightArmPivot": {"x": 0.53, "y": -0.27, "z": 0.10},
+        "tailPivot": {"x": tail_pivot[0], "y": tail_pivot[1], "z": tail_pivot[2]},
+    }
+    save_rig_metadata(os.path.join(out_dir, "rig.json"), rig_meta)
+    print(f"[chiikawa] exported model.obj ({tris} tris across expression layers) & rig.json (crown={head_socket_y}, rx={head_radius_x})")
+
+
+# ---------------------------------------------------------------------------
+# 1H. 우사기 (usagi) — 크림 옐로우 통통 바디와 정수리 위 쫑긋 솟은 긴 토끼 귀
+# ---------------------------------------------------------------------------
+
+def build_usagi():
+    clear_scene()
+    objects = []
+
+    # 1) Body: 포동포동한 배와 아담한 두 발
+    body_elements = [
+        ((0.0, 0.01, 0.00), (0.48, 0.28, 0.44), None, 2.0),
+        ((0.0, -0.35, 0.01), (0.58, 0.42, 0.52), None, 2.15),
+        ((0.0, -0.60, 0.00), (0.54, 0.30, 0.48), None, 2.1),
+        ((-0.25, -0.82, 0.06), (0.14, 0.15, 0.16), (0.0, 0.10, -0.08), 2.0),
+        ((0.25, -0.82, 0.06), (0.14, 0.15, 0.16), (0.0, -0.10, 0.08), 2.0),
+    ]
+    body_clay = create_metaball_clay(
+        "Body",
+        "body",
+        body_elements,
+        mb_res=0.034,
+        voxel_size=0.026,
+        smooth_iters=14,
+        target_tris=1050,
+        post_smooth_fn=lambda x, y, z: (x, soft_cushion_floor(y, -0.94, 0.10), z),
+    )
+    objects.append(body_clay)
+
+    # 2) LeftArm / RightArm (양옆 짧은 팔)
+    for side, name in ((-1, "LeftArm"), (1, "RightArm")):
+        arm_elements = [
+            ((side * 0.54, -0.28, 0.10), (0.125, 0.115, 0.120), None, 2.0),
+            ((side * 0.67, -0.33, 0.15), (0.120, 0.105, 0.115), (0.0, -side * 0.18, side * 0.25), 2.1),
+        ]
+        objects.append(
+            create_metaball_clay(
+                name,
+                "body",
+                arm_elements,
+                mb_res=0.022,
+                voxel_size=0.017,
+                smooth_iters=14,
+                target_tris=190,
+            )
+        )
+
+    # 3) Tail (보송하고 동그란 토끼 솜방울 꼬리)
+    tail_pivot = (0.0, -0.61, -0.45)
+    objects.append(
+        create_metaball_clay(
+            "Tail",
+            "body_light",
+            [((0.0, -0.61, -0.51), (0.155, 0.155, 0.155), None, 2.0)],
+            mb_res=0.022,
+            voxel_size=0.017,
+            smooth_iters=12,
+            target_tris=180,
+        )
+    )
+
+    # 4) Head (둥글고 통통한 우사기 두상)
+    head_elements = [
+        ((0.0, 0.32, 0.00), (0.69, 0.54, 0.62), None, 2.05),
+        ((-0.25, 0.20, 0.10), (0.45, 0.34, 0.44), None, 2.1),
+        ((0.25, 0.20, 0.10), (0.45, 0.34, 0.44), None, 2.1),
+    ]
+    head_clay = create_metaball_clay(
+        "_UsagiHeadClay",
+        "body",
+        head_elements,
+        mb_res=0.034,
+        voxel_size=0.026,
+        smooth_iters=15,
+        target_tris=1200,
+    )
+
+    expr_parts, blink_center, extra_head_objs = build_chiikawa_style_face(
+        head_clay,
+        eye_x=0.220,
+        eye_y=0.250,
+        eye_rx=0.090,
+        eye_ry=0.100,
+        eye_depth=0.048,
+        mouth_y=0.130,
+        cheek_x=0.395,
+        cheek_y=0.165,
+        cheek_rx=0.125,
+        cheek_ry=0.070,
+        brow_style="high_arch",
+        open_tongue_default=False,
+    )
+    objects.append(join_part_group("Head", [head_clay] + extra_head_objs))
+
+    # 5) LeftEar / RightEar (정수리 중앙 가까이에 나란히 쫑긋 솟은 긴 토끼 귀 + 핑크 속귀)
+    for side, ear_name in ((-1, "LeftEar"), (1, "RightEar")):
+        ear_elements = [
+            ((side * 0.145, 0.80, 0.00), (0.115, 0.16, 0.095), (0.0, 0.0, -side * 0.04), 2.0),
+            ((side * 0.160, 1.02, 0.00), (0.112, 0.20, 0.092), (0.0, 0.0, -side * 0.05), 2.1),
+            ((side * 0.172, 1.24, 0.00), (0.098, 0.16, 0.085), None, 2.0),
+        ]
+        outer_ear = create_metaball_clay(
+            f"_{ear_name}_Outer",
+            "body",
+            ear_elements,
+            mb_res=0.020,
+            voxel_size=0.016,
+            smooth_iters=14,
+            target_tris=240,
+        )
+        ear_in_dir = Vector((-side * 0.04, 0.0, -0.999)).normalized()
+        inner_ear = create_conformed_clay_patch(
+            f"_{ear_name}_Inner",
+            "accent",
+            outer_ear,
+            ray_origin_wpf=Vector((side * 0.160, 1.04, 0.12)) - ear_in_dir * 1.2,
+            ray_dir_wpf=ear_in_dir,
+            rx=0.058,
+            ry=0.220,
+            center_offset=0.011,
+            rim_offset=-0.008,
+            rings=3,
+            segs=18,
+            wrap_focus_depth=0.5,
+        )
+        objects.append(join_part_group(ear_name, [outer_ear, inner_ear]))
+
+    objects.extend(expr_parts.values())
+
+    head_socket_y, head_radius_x = measure_head_crown_and_radius(head_clay, head_center_z=0.0)
+    out_dir = os.path.join(MODELS_ROOT, "Characters", "usagi")
+    tris = export_obj(os.path.join(out_dir, "model.obj"), objects)
+    rig_meta = {
+        "coordinateSystem": "WPF_Y_UP_Z_FRONT",
+        "unitScale": 1.0,
+        "originOffset": {"x": 0.0, "y": 0.0, "z": 0.0},
+        "headPivot": {"x": 0.0, "y": 0.01, "z": 0.0},
+        "headSocket": {"x": 0.0, "y": head_socket_y, "z": 0.01},
+        "headRadiusX": head_radius_x,
+        "auraSocket": {"x": 0.0, "y": 0.0, "z": 0.0},
+        "shadowY": -0.94,
+        "shadowRadiusX": 0.70,
+        "shadowRadiusZ": 0.62,
+        "eyeBlinkCenter": {"x": 0.0, "y": blink_center[1], "z": blink_center[2]},
+        "nameplateAnchor": {"x": 0.0, "y": -0.94, "z": 0.35},
+        "leftEarPivot": {"x": -0.145, "y": 0.78, "z": 0.0},
+        "rightEarPivot": {"x": 0.145, "y": 0.78, "z": 0.0},
+        "leftEarBaseAngle": 0.0,
+        "rightEarBaseAngle": 0.0,
+        "leftArmPivot": {"x": -0.54, "y": -0.28, "z": 0.10},
+        "rightArmPivot": {"x": 0.54, "y": -0.28, "z": 0.10},
+        "tailPivot": {"x": tail_pivot[0], "y": tail_pivot[1], "z": tail_pivot[2]},
+    }
+    save_rig_metadata(os.path.join(out_dir, "rig.json"), rig_meta)
+    print(f"[usagi] exported model.obj ({tris} tris across expression layers) & rig.json (crown={head_socket_y}, rx={head_radius_x})")
+
+
+# ---------------------------------------------------------------------------
 # 2. 공통 액세서리 5종 (원점 = HeadSocket (0,0,0))
 # ---------------------------------------------------------------------------
 
@@ -1722,6 +2343,12 @@ def main():
         build_fluffy_cloud()
     if "all" in targets or "fluffy_puppy" in targets:
         build_fluffy_puppy()
+    if "all" in targets or "hachiware" in targets:
+        build_hachiware()
+    if "all" in targets or "chiikawa" in targets:
+        build_chiikawa()
+    if "all" in targets or "usagi" in targets:
+        build_usagi()
     if "all" in targets or "accessories" in targets:
         build_accessories()
     if "all" in targets or "effects" in targets:

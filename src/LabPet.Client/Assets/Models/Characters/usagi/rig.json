@@ -1,0 +1,65 @@
+{
+  "coordinateSystem": "WPF_Y_UP_Z_FRONT",
+  "unitScale": 1.0,
+  "originOffset": {
+    "x": 0.0,
+    "y": 0.0,
+    "z": 0.0
+  },
+  "headPivot": {
+    "x": 0.0,
+    "y": 0.01,
+    "z": 0.0
+  },
+  "headSocket": {
+    "x": 0.0,
+    "y": 0.8338,
+    "z": 0.01
+  },
+  "headRadiusX": 0.7919,
+  "auraSocket": {
+    "x": 0.0,
+    "y": 0.0,
+    "z": 0.0
+  },
+  "shadowY": -0.94,
+  "shadowRadiusX": 0.7,
+  "shadowRadiusZ": 0.62,
+  "eyeBlinkCenter": {
+    "x": 0.0,
+    "y": 0.25,
+    "z": 0.6524
+  },
+  "nameplateAnchor": {
+    "x": 0.0,
+    "y": -0.94,
+    "z": 0.35
+  },
+  "leftEarPivot": {
+    "x": -0.145,
+    "y": 0.78,
+    "z": 0.0
+  },
+  "rightEarPivot": {
+    "x": 0.145,
+    "y": 0.78,
+    "z": 0.0
+  },
+  "leftEarBaseAngle": 0.0,
+  "rightEarBaseAngle": 0.0,
+  "leftArmPivot": {
+    "x": -0.54,
+    "y": -0.28,
+    "z": 0.1
+  },
+  "rightArmPivot": {
+    "x": 0.54,
+    "y": -0.28,
+    "z": 0.1
+  },
+  "tailPivot": {
+    "x": 0.0,
+    "y": -0.61,
+    "z": -0.45
+  }
+}

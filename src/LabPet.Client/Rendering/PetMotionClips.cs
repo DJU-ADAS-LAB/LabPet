@@ -186,11 +186,34 @@ internal sealed record SpeciesMotionProfile(
             PetMotionClipKind.HappyJump
         ]);
 
+    public static readonly SpeciesMotionProfile ChiikawaTrio = new(
+        BounceAmplitude: 0.125,
+        SquashFactor: 1.25,
+        SwayAmplitude: 8.2,
+        HeadBobScale: 1.15,
+        PawDanceScale: 0.0,
+        ArmSwingScale: 1.45,
+        EarScale: 1.28,
+        OutwardFlopEars: false,
+        TailAmplitude: 16.0,
+        TailSpeedMultiplier: 1.35,
+        FloatBaseAmplitude: 0.025,
+        TurnAmplitude: 17.5,
+        DanceCycle:
+        [
+            PetMotionClipKind.Bounce,
+            PetMotionClipKind.Groove,
+            PetMotionClipKind.HeadBob,
+            PetMotionClipKind.HappyJump,
+            PetMotionClipKind.Turn
+        ]);
+
     public static SpeciesMotionProfile ForSpecies(string? speciesId) => speciesId switch
     {
         PetSpeciesIds.ChibiCat => Cat,
         PetSpeciesIds.FluffyPuppy => Puppy,
         PetSpeciesIds.FluffyCloud => Cloud,
+        PetSpeciesIds.Hachiware or PetSpeciesIds.Chiikawa or PetSpeciesIds.Usagi => ChiikawaTrio,
         _ => Mochi
     };
 }

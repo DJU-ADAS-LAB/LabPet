@@ -19,7 +19,10 @@ public static class PetCustomizationCatalog
         new(PetSpeciesIds.MochiSpirit, "말랑 모찌 정령", "쫀득한 3D 타원체 바디와 볼록한 볼터치", "#FFF5F7"),
         new(PetSpeciesIds.ChibiCat, "치비 고양이", "큰 둥근 머리, 쫑긋한 3D 귀, 곡선 꼬리", "#FFE6CC"),
         new(PetSpeciesIds.FluffyCloud, "솜구름", "유기적으로 뭉친 몽실한 구름 클러스터", "#F0F8FF"),
-        new(PetSpeciesIds.FluffyPuppy, "솜뭉치 강아지", "축 처진 복슬 귀, 짧은 네 발, 깃털 꼬리", "#F2C27D")
+        new(PetSpeciesIds.FluffyPuppy, "솜뭉치 강아지", "축 처진 복슬 귀, 짧은 네 발, 깃털 꼬리", "#F2C27D"),
+        new(PetSpeciesIds.Hachiware, "하치와레", "파란 가르마 무늬와 쫑긋한 고양이 귀, 파란 꼬리", "#FFF5F7"),
+        new(PetSpeciesIds.Chiikawa, "치이카와", "동글동글 하얀 찹쌀 몸통과 작은 둥근 귀", "#FFF5F7"),
+        new(PetSpeciesIds.Usagi, "우사기", "따뜻한 크림 옐로우 몸통과 쫑긋 솟은 긴 토끼 귀", "#FFF7CC")
     ];
 
     public static IReadOnlyList<CustomizationOption> BodyColors { get; } =

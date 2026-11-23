@@ -9,13 +9,19 @@ public static class PetSpeciesIds
     public const string ChibiCat = "chibi_cat";
     public const string FluffyCloud = "fluffy_cloud";
     public const string FluffyPuppy = "fluffy_puppy";
+    public const string Hachiware = "hachiware";
+    public const string Chiikawa = "chiikawa";
+    public const string Usagi = "usagi";
 
     public static IReadOnlyList<string> All { get; } =
     [
         MochiSpirit,
         ChibiCat,
         FluffyCloud,
-        FluffyPuppy
+        FluffyPuppy,
+        Hachiware,
+        Chiikawa,
+        Usagi
     ];
 }
 

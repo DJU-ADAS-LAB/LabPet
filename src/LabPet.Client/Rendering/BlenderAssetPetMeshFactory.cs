@@ -37,6 +37,7 @@ public sealed class BlenderAssetPetMeshFactory : IPetMeshFactory
     private static readonly Material FrozenAccWhiteMaterial = CreateFrozenClayMaterial(Color.FromRgb(250, 250, 252), null, 10, 24);
     private static readonly Material FrozenAccGoldMaterial = CreateFrozenClayMaterial(Color.FromRgb(255, 212, 82), Color.FromRgb(42, 32, 6), 38, 125);
     private static readonly Material FrozenAccHeadbandMaterial = CreateFrozenClayMaterial(Color.FromRgb(56, 62, 78), null, 24, 78);
+    private static readonly Material FrozenHachiBlueMaterial = CreateFrozenClayMaterial(Color.FromRgb(109, 169, 204), null, 11, 28);
 
     private readonly ProceduralPetMeshFactory _fallbackFactory;
     private readonly ObjMeshLoader _objLoader = new();
@@ -143,6 +144,7 @@ public sealed class BlenderAssetPetMeshFactory : IPetMeshFactory
                 "acc_white" => FrozenAccWhiteMaterial,
                 "acc_gold" => FrozenAccGoldMaterial,
                 "acc_headband" => FrozenAccHeadbandMaterial,
+                "hachi_blue" => FrozenHachiBlueMaterial,
                 _ => bodyMat
             };
         }

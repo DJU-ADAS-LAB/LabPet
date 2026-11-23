@@ -3,6 +3,7 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:models="clr-namespace:LabPet.Shared.Models;assembly=LabPet.Shared"
         xmlns:vm="clr-namespace:LabPet.Client.ViewModels"
+        xmlns:views="clr-namespace:LabPet.Client.Views"
         xmlns:tb="clr-namespace:H.NotifyIcon;assembly=H.NotifyIcon.Wpf"
         Title="LabPet"
         Width="214"
@@ -432,25 +433,14 @@
             <ModelVisual3D x:Name="PetVisual" />
         </Viewport3D>
 
-        <!-- 5분 무입력 수면 상태 배지 (Viewport 위에 겹치되 클릭을 방해하지 않음) -->
-        <Border Grid.Row="0"
-                HorizontalAlignment="Right"
-                VerticalAlignment="Top"
-                Margin="0,12,14,0"
-                Padding="7,2"
-                CornerRadius="9"
-                Background="#EEEDF2FF"
-                BorderBrush="#FFC7D2FE"
-                BorderThickness="1"
-                IsHitTestVisible="False"
-                Opacity="{Binding PetOpacity}"
-                Visibility="{Binding IsSleeping, Converter={StaticResource BoolToVis}}"
-                Effect="{StaticResource SoftCardShadow}">
-            <TextBlock Text="zzz"
-                       FontSize="11"
-                       FontWeight="Bold"
-                       Foreground="#FF4F46E5" />
-        </Border>
+        <!-- 5분 무입력 수면 상태 플로팅 ZZZ 방울 애니메이션 (Viewport 위에 겹치되 클릭을 방해하지 않음) -->
+        <views:SleepZzzOverlay x:Name="PetSleepZzzOverlay"
+                               Grid.Row="0"
+                               HorizontalAlignment="Right"
+                               VerticalAlignment="Top"
+                               Margin="0,4,10,0"
+                               Opacity="{Binding PetOpacity}"
+                               Visibility="{Binding IsSleeping, Converter={StaticResource BoolToVis}}" />
 
         <!-- 마우스 오버레이 미니멀 주변 친구 퀵 팝업 -->
         <Popup x:Name="FriendOverlayPopup"

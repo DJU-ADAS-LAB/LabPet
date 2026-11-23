@@ -256,6 +256,30 @@ public sealed class PetAnimationAndEffectTests
             Win32WindowHelper.ComputeIdleDurationFromTickDiff(afterWrap, beforeWrap));
     }
 
+    [Fact]
+    public void SleepZzzOverlay_StartsAndStopsFloatingAnimationWithVisibility()
+    {
+        RunOnSta(() =>
+        {
+            var overlay = new LabPet.Client.Views.SleepZzzOverlay
+            {
+                Visibility = System.Windows.Visibility.Collapsed
+            };
+
+            Assert.Equal(3, overlay.BubbleCount);
+            Assert.False(overlay.IsAnimating);
+
+            overlay.Visibility = System.Windows.Visibility.Visible;
+            Assert.True(overlay.IsAnimating);
+
+            overlay.FlipHorizontal = true;
+            Assert.True(overlay.IsAnimating);
+
+            overlay.Visibility = System.Windows.Visibility.Collapsed;
+            Assert.False(overlay.IsAnimating);
+        });
+    }
+
     private static void RunOnSta(Action action)
     {
         Exception? threadException = null;

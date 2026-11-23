@@ -18,6 +18,9 @@ public sealed class BlenderAssetPipelineTests
     [InlineData(PetSpeciesIds.ChibiCat)]
     [InlineData(PetSpeciesIds.FluffyCloud)]
     [InlineData(PetSpeciesIds.FluffyPuppy)]
+    [InlineData(PetSpeciesIds.Hachiware)]
+    [InlineData(PetSpeciesIds.Chiikawa)]
+    [InlineData(PetSpeciesIds.Usagi)]
     public void BuildPetRig_LoadsShippedBlenderAssetsForAllFourSpecies(string speciesId)
     {
         RunOnSta(() =>

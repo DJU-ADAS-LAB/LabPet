@@ -433,6 +433,100 @@ public sealed class ProceduralPetMeshFactory : IPetMeshFactory
                 break;
             }
 
+            case PetSpeciesIds.Hachiware:
+            case PetSpeciesIds.Chiikawa:
+            case PetSpeciesIds.Usagi:
+            {
+                headPivotY = 0.02f;
+                headSocketY = 0.86f;
+                faceCenterY = 0.24f;
+                faceZ = 0.63f;
+                headRadiusX = 0.78f;
+
+                var isHachi = appearance.SpeciesId == PetSpeciesIds.Hachiware;
+                var isUsagi = appearance.SpeciesId == PetSpeciesIds.Usagi;
+                var hachiBlueMat = CreateClayMaterial(Color.FromRgb(109, 169, 204), bodyEmissiveBrush, specularPower: 14, specularAlpha: 48);
+
+                var torsoMb = new MeshBuilder(true, false);
+                torsoMb.AddEllipsoid(new Vector3(0, -0.36f, 0), 0.56f, 0.44f, 0.50f, 28, 18);
+                torsoMb.AddEllipsoid(new Vector3(-0.22f, -0.80f, 0.06f), 0.14f, 0.15f, 0.16f, 16, 10);
+                torsoMb.AddEllipsoid(new Vector3(0.22f, -0.80f, 0.06f), 0.14f, 0.15f, 0.16f, 16, 10);
+                triangleCount += AddGeometry(bodyGroup, torsoMb, bodyMaterial);
+
+                leftArmRot = new AxisAngleRotation3D(new Vector3D(0, 0, 1), 0);
+                leftArmPitch = new AxisAngleRotation3D(new Vector3D(1, 0, 0), 0);
+                var leftArmTf = new Transform3DGroup();
+                var leftArmPivot = new Point3D(-0.54, -0.28, 0.10);
+                leftArmTf.Children.Add(new RotateTransform3D(leftArmRot, leftArmPivot));
+                leftArmTf.Children.Add(new RotateTransform3D(leftArmPitch, leftArmPivot));
+                var leftArmMb = new MeshBuilder(true, false);
+                leftArmMb.AddEllipsoid(new Vector3(-0.62f, -0.30f, 0.14f), 0.15f, 0.11f, 0.12f, 14, 10);
+                triangleCount += AddGeometry(bodyGroup, leftArmMb, bodyMaterial, leftArmTf);
+
+                rightArmRot = new AxisAngleRotation3D(new Vector3D(0, 0, 1), 0);
+                rightArmPitch = new AxisAngleRotation3D(new Vector3D(1, 0, 0), 0);
+                var rightArmTf = new Transform3DGroup();
+                var rightArmPivot = new Point3D(0.54, -0.28, 0.10);
+                rightArmTf.Children.Add(new RotateTransform3D(rightArmRot, rightArmPivot));
+                rightArmTf.Children.Add(new RotateTransform3D(rightArmPitch, rightArmPivot));
+                var rightArmMb = new MeshBuilder(true, false);
+                rightArmMb.AddEllipsoid(new Vector3(0.62f, -0.30f, 0.14f), 0.15f, 0.11f, 0.12f, 14, 10);
+                triangleCount += AddGeometry(bodyGroup, rightArmMb, bodyMaterial, rightArmTf);
+
+                tailRot = new AxisAngleRotation3D(new Vector3D(0, 1, 0), 0);
+                var tailGroup = new Model3DGroup
+                {
+                    Transform = new RotateTransform3D(tailRot, new Point3D(0, -0.62, -0.45))
+                };
+                var tailMb = new MeshBuilder(true, false);
+                tailMb.AddSphere(new Vector3(isHachi ? -0.18f : 0f, -0.60f, -0.54f), 0.14f, 14, 10);
+                triangleCount += AddGeometry(tailGroup, tailMb, isHachi ? hachiBlueMat : softLightBodyMaterial);
+                bodyGroup.Children.Add(tailGroup);
+
+                var headMb = new MeshBuilder(true, false);
+                headMb.AddEllipsoid(new Vector3(0, 0.33f, 0), 0.72f, 0.56f, 0.63f, 32, 22);
+                triangleCount += AddGeometry(headGroup, headMb, bodyMaterial);
+
+                if (isHachi)
+                {
+                    var capMb = new MeshBuilder(true, false);
+                    capMb.AddEllipsoid(new Vector3(-0.30f, 0.64f, 0.16f), 0.34f, 0.22f, 0.34f, 18, 12);
+                    capMb.AddEllipsoid(new Vector3(0.30f, 0.64f, 0.16f), 0.34f, 0.22f, 0.34f, 18, 12);
+                    triangleCount += AddGeometry(headGroup, capMb, hachiBlueMat);
+                }
+
+                leftEarRot = new AxisAngleRotation3D(new Vector3D(0, 0, 1), 0);
+                rightEarRot = new AxisAngleRotation3D(new Vector3D(0, 0, 1), 0);
+                for (var side = -1; side <= 1; side += 2)
+                {
+                    var earRot = side < 0 ? leftEarRot : rightEarRot;
+                    var earPivot = isUsagi
+                        ? new Point3D(side * 0.15, 0.78, 0)
+                        : new Point3D(side * 0.40, 0.77, 0);
+                    var earGroup = new Model3DGroup { Transform = new RotateTransform3D(earRot, earPivot) };
+                    var earMb = new MeshBuilder(true, false);
+                    if (isUsagi)
+                    {
+                        earMb.AddEllipsoid(new Vector3(side * 0.16f, 1.05f, 0), 0.11f, 0.32f, 0.09f, 16, 12);
+                        triangleCount += AddGeometry(earGroup, earMb, bodyMaterial);
+                    }
+                    else if (isHachi)
+                    {
+                        earMb.AddCone(new Vector3(side * 0.40f, 0.75f, 0), new Vector3(side * 0.14f, 1.0f, 0.04f), 0.21f, 0.05f, 0.32f, true, true, 18);
+                        triangleCount += AddGeometry(earGroup, earMb, hachiBlueMat);
+                    }
+                    else
+                    {
+                        earMb.AddSphere(new Vector3(side * 0.44f, 0.84f, 0.01f), 0.15f, 16, 12);
+                        triangleCount += AddGeometry(earGroup, earMb, bodyMaterial);
+                    }
+
+                    headGroup.Children.Add(earGroup);
+                }
+
+                break;
+            }
+
             case PetSpeciesIds.MochiSpirit:
             default:
             {
