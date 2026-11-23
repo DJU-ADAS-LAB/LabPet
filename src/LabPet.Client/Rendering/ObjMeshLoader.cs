@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.IO;
+using System.Runtime.CompilerServices;
 using System.Windows.Media;
 using System.Windows.Media.Media3D;
 using WpfMeshGeometry3D = System.Windows.Media.Media3D.MeshGeometry3D;
@@ -35,6 +36,7 @@ public sealed class ObjMeshLoader
 {
     private const int MaxCachedAssets = 48;
     private readonly Dictionary<string, WeakReference<ObjMeshAsset>> _assetCache = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConditionalWeakTable<WpfMeshGeometry3D, ObjMeshAsset> _geometryAssetHolders = new();
     private readonly object _cacheLock = new();
 
     public bool TryLoad(string filePath, out ObjMeshAsset? asset, double unitScale = 1.0, Point3D originOffset = default)
@@ -103,6 +105,11 @@ public sealed class ObjMeshLoader
                 {
                     _assetCache.Remove(_assetCache.Keys.First());
                 }
+            }
+
+            foreach (var subMesh in parsed.SubMeshes)
+            {
+                _geometryAssetHolders.AddOrUpdate(subMesh.Geometry, parsed);
             }
 
             _assetCache[cacheKey] = new WeakReference<ObjMeshAsset>(parsed);

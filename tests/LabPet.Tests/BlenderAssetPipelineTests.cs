@@ -111,7 +111,7 @@ public sealed class BlenderAssetPipelineTests
                 }
             }
 
-            // 동일 외형 구조의 두 펫은 동결된 기하 데이터를 공유하되 색상·애니메이션은 독립적이어야 한다.
+            // 동일 외형 구조의 두 펫은 중간에 GC가 발생하더라도 동결된 기하 데이터를 공유하되 색상·애니메이션은 독립적이어야 한다.
             var first = factory.BuildPetRig(new PetAppearance
             {
                 SpeciesId = PetSpeciesIds.FluffyPuppy,
@@ -120,6 +120,11 @@ public sealed class BlenderAssetPipelineTests
                 HeadAccessoryId = "ribbon",
                 AuraEffectId = "halo_ring"
             });
+
+            GC.Collect();
+            GC.WaitForPendingFinalizers();
+            GC.Collect();
+
             var second = factory.BuildPetRig(new PetAppearance
             {
                 SpeciesId = PetSpeciesIds.FluffyPuppy,
