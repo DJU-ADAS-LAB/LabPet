@@ -9,7 +9,7 @@
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <RootNamespace>LabPet.Client</RootNamespace>
     <AssemblyName>LabPet.Client</AssemblyName>
-    <Version>0.2.2</Version>
+    <Version>0.3.0</Version>
     <Authors>LabPet</Authors>
     <Product>LabPet</Product>
     <ApplicationIcon>Assets\app.ico</ApplicationIcon>
@@ -32,11 +32,17 @@
     <InternalsVisibleTo Include="LabPet.Tests" />
   </ItemGroup>
 
+  <!-- 릴리스 CI 등에서 -p:LabPetDefaultServerUrl=... 전달 시 별도 설정 파일 없이 기본 서버 URL을 어셈블리에 포함 -->
+  <ItemGroup Condition="'$(LabPetDefaultServerUrl)' != ''">
+    <AssemblyMetadata Include="LabPetDefaultServerUrl" Value="$(LabPetDefaultServerUrl)" />
+  </ItemGroup>
+
   <ItemGroup>
     <PackageReference Include="CommunityToolkit.Mvvm" Version="8.4.0" />
     <PackageReference Include="H.NotifyIcon.Wpf" Version="2.3.0" />
     <PackageReference Include="HelixToolkit.Wpf" Version="3.1.2" />
-    <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="10.0.0" />
+    <PackageReference Include="Microsoft.AspNetCore.SignalR.Client" Version="10.0.15" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="10.0.15" />
     <PackageReference Include="NAudio" Version="2.2.1" />
     <PackageReference Include="Velopack" Version="1.2.161" />
   </ItemGroup>

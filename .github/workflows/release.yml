@@ -40,14 +40,23 @@ jobs:
           dotnet test LabPet.slnx -c Release --no-restore
 
       - name: Publish LabPet.Client (win-x64 self-contained)
+        env:
+          LABPET_SERVER_URL: ${{ secrets.LABPET_SERVER_URL || vars.LABPET_SERVER_URL }}
         shell: pwsh
         run: |
-          dotnet publish src/LabPet.Client/LabPet.Client.csproj `
-            -c Release `
-            -r win-x64 `
-            --self-contained true `
-            -p:Version=${{ steps.version.outputs.version }} `
-            -o ./publish/win-x64
+          $publishArgs = @(
+            'publish', 'src/LabPet.Client/LabPet.Client.csproj',
+            '-c', 'Release',
+            '-r', 'win-x64',
+            '--self-contained', 'true',
+            "-p:Version=${{ steps.version.outputs.version }}",
+            '-o', './publish/win-x64'
+          )
+          if (-not [string]::IsNullOrWhiteSpace($env:LABPET_SERVER_URL)) {
+            $publishArgs += "-p:LabPetDefaultServerUrl=$($env:LABPET_SERVER_URL.Trim())"
+          }
+          dotnet @publishArgs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Install Velopack CLI (vpk) matching NuGet version
         shell: pwsh

@@ -50,6 +50,7 @@ public sealed class DiscoveryHelloPacket
     public PetAppearance Appearance { get; set; } = new();
     public int Level { get; set; } = 1;
     public bool IsMusicActive { get; set; }
+    public bool IsSleeping { get; set; }
     public int TcpPort { get; set; } = ProtocolConstants.TcpControlPort;
     public DateTimeOffset TimestampUtc { get; set; } = DateTimeOffset.UtcNow;
 }
@@ -146,6 +147,7 @@ public sealed class FriendPresencePayload
     public PetAppearance Appearance { get; set; } = new();
     public int Level { get; set; }
     public bool IsMusicActive { get; set; }
+    public bool IsSleeping { get; set; }
     public int TcpPort { get; set; }
     public string AppVersion { get; set; } = string.Empty;
 }

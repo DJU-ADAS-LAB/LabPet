@@ -806,6 +806,108 @@ public sealed class SocialCoordinatorTests : IAsyncLifetime
         Assert.Same(row, viewModel.QuickMessageTarget);
     }
 
+    [Fact]
+    public async Task LocalSleepState_SyncsPeerSnapshotAndShowsZzzInFriendAndOverlayStatus()
+    {
+        var guestFriend = Assert.Single(_host.Friends);
+        var sleepObservedTcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var wakeObservedTcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        void OnStateChanged(object? sender, EventArgs args)
+        {
+            var live = _host.DiscoveredPeers.FirstOrDefault(p =>
+                string.Equals(p.PetId, guestFriend.PetId, StringComparison.OrdinalIgnoreCase));
+            if (live is null)
+            {
+                return;
+            }
+
+            if (live.IsSleeping)
+            {
+                sleepObservedTcs.TrySetResult(true);
+            }
+            else if (sleepObservedTcs.Task.IsCompleted)
+            {
+                wakeObservedTcs.TrySetResult(true);
+            }
+        }
+
+        _host.StateChanged += OnStateChanged;
+        try
+        {
+            // 1. 게스트가 수면 상태(IsSleeping=true)로 전환 후 첫 탐색→PresenceSync 검증
+            await _guestTransport.UpdateLocalPresenceAsync(new LocalPresenceState(
+                guestFriend.OwnerName,
+                guestFriend.PetName,
+                guestFriend.CachedAppearance.Clone(),
+                Level: 1,
+                IsMusicActive: false,
+                AppVersion: "0.2.2",
+                IsSleeping: true));
+
+            _hostTransport.HandleDiscoveryHello(
+                new DiscoveryHelloPacket
+                {
+                    ProtocolVersion = ProtocolConstants.CurrentProtocolVersion,
+                    AppVersion = "0.2.2",
+                    PetId = guestFriend.PetId,
+                    OwnerName = guestFriend.OwnerName,
+                    PetName = guestFriend.PetName,
+                    Appearance = guestFriend.CachedAppearance.Clone(),
+                    IsSleeping = true,
+                    TcpPort = _guestTransport.BoundTcpPort
+                },
+                IPAddress.Loopback.ToString(),
+                CancellationToken.None);
+
+            await sleepObservedTcs.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+            var sleepingPeer = Assert.Single(_host.DiscoveredPeers);
+            Assert.True(sleepingPeer.IsSleeping);
+
+            var friendVm = new FriendListItemViewModel(guestFriend, sleepingPeer, isFollowingMusic: false, isVisitingDesktop: false);
+            Assert.True(friendVm.IsSleeping);
+            Assert.Contains("zzz", friendVm.StatusText, StringComparison.Ordinal);
+
+            var peerVm = new PeerListItemViewModel(sleepingPeer);
+            Assert.True(peerVm.IsSleeping);
+
+            var petVm = new PetWindowViewModel(_store, _host);
+            petVm.RefreshQuickOverlayEntries();
+            var overlayRow = Assert.Single(petVm.QuickOverlayEntries);
+            Assert.True(overlayRow.IsSleeping);
+            Assert.True(overlayRow.HasSleepBadge);
+
+            // 2. 게스트 입력 재개로 수면 해제 -> 즉시 PresenceSync 푸시로 온라인·비수면 복귀
+            await _guestTransport.UpdateLocalPresenceAsync(new LocalPresenceState(
+                guestFriend.OwnerName,
+                guestFriend.PetName,
+                guestFriend.CachedAppearance.Clone(),
+                Level: 1,
+                IsMusicActive: false,
+                AppVersion: "0.2.2",
+                IsSleeping: false));
+
+            await wakeObservedTcs.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+            var awakePeer = Assert.Single(_host.DiscoveredPeers);
+            Assert.False(awakePeer.IsSleeping);
+
+            var awakeFriendVm = new FriendListItemViewModel(guestFriend, awakePeer, isFollowingMusic: false, isVisitingDesktop: false);
+            Assert.False(awakeFriendVm.IsSleeping);
+            Assert.Equal("온라인", awakeFriendVm.StatusText);
+
+            petVm.RefreshQuickOverlayEntries();
+            var awakeOverlayRow = Assert.Single(petVm.QuickOverlayEntries);
+            Assert.False(awakeOverlayRow.IsSleeping);
+            Assert.False(awakeOverlayRow.HasSleepBadge);
+        }
+        finally
+        {
+            _host.StateChanged -= OnStateChanged;
+        }
+    }
+
     public async Task DisposeAsync()
     {
         await _host.DisposeAsync();

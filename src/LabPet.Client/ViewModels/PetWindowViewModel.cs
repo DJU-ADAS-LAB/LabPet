@@ -13,12 +13,17 @@ namespace LabPet.Client.ViewModels;
 /// </summary>
 public sealed partial class QuickOverlayEntry : ObservableObject
 {
+    private static readonly Brush OnlineDotBrush = CreateFrozenBrush("#FF34D399");
+    private static readonly Brush SleepingDotBrush = CreateFrozenBrush("#FF818CF8");
+
     public string PetId { get; init; } = string.Empty;
     [ObservableProperty] private string _displayTitle = string.Empty;
     [ObservableProperty, NotifyPropertyChangedFor(nameof(CanFollowMusic), nameof(CanSendFriendRequest))]
     private bool _isFriend;
     [ObservableProperty, NotifyPropertyChangedFor(nameof(CanFollowMusic), nameof(MusicTooltip), nameof(MusicButtonIcon))]
     private bool _isMusicActive;
+    [ObservableProperty, NotifyPropertyChangedFor(nameof(HasSleepBadge), nameof(StatusDotBrush))]
+    private bool _isSleeping;
     [ObservableProperty, NotifyPropertyChangedFor(nameof(CanFollowMusic), nameof(MusicTooltip), nameof(MusicButtonIcon))]
     private bool _isFollowingMusic;
     [ObservableProperty, NotifyPropertyChangedFor(nameof(CanSendFriendRequest))]
@@ -26,6 +31,8 @@ public sealed partial class QuickOverlayEntry : ObservableObject
     [ObservableProperty] private bool _isComposingMessage;
     public bool CanFollowMusic => IsFriend && (IsMusicActive || IsFollowingMusic);
     public bool CanSendFriendRequest => !IsFriend && !RequiresUpdate;
+    public bool HasSleepBadge => IsSleeping;
+    public Brush StatusDotBrush => IsSleeping ? SleepingDotBrush : OnlineDotBrush;
     public FriendEntry? Friend { get; set; }
     public PeerSnapshot? Peer { get; set; }
 
@@ -34,6 +41,13 @@ public sealed partial class QuickOverlayEntry : ObservableObject
     public string MusicTooltip => IsFollowingMusic
         ? "노래 따라하기 중지"
         : (IsMusicActive ? "노래 따라하기 시작" : "음악 재생 중이 아님");
+
+    private static Brush CreateFrozenBrush(string hex)
+    {
+        var brush = new SolidColorBrush((Color)ColorConverter.ConvertFromString(hex));
+        brush.Freeze();
+        return brush;
+    }
 }
 
 /// <summary>
@@ -62,6 +76,7 @@ public sealed partial class PetWindowViewModel : ObservableObject
     public event EventHandler? OpenSoloHubRequested;
     public event EventHandler? OpenSocialRequested;
     public event EventHandler? OpenEnvironmentGuideRequested;
+    public event EventHandler? LaunchChristmasTreeRequested;
     public event EventHandler? CheckUpdatesRequested;
     public event EventHandler? ApplyUpdateRestartRequested;
     public event EventHandler<bool>? StartupAutoRunToggled;
@@ -80,6 +95,7 @@ public sealed partial class PetWindowViewModel : ObservableObject
 
     [ObservableProperty] private string _petName = "모찌";
     [ObservableProperty] private string _friendCode = string.Empty;
+    [ObservableProperty] private bool _isSleeping;
     [ObservableProperty] private bool _isClickThroughEnabled;
     [ObservableProperty] private bool _isStartupAutoRunEnabled;
     [ObservableProperty] private bool _isUpdateReady;
@@ -243,6 +259,7 @@ public sealed partial class PetWindowViewModel : ObservableObject
                     string.IsNullOrWhiteSpace(live.PetName) ? f.PetName : live.PetName),
                 IsFriend = true,
                 IsMusicActive = live.IsMusicActive,
+                IsSleeping = live.IsSleeping,
                 IsFollowingMusic = string.Equals(followingId, f.PetId, StringComparison.OrdinalIgnoreCase),
                 Friend = f,
                 Peer = live
@@ -268,6 +285,7 @@ public sealed partial class PetWindowViewModel : ObservableObject
                 DisplayTitle = SocialCoordinatorService.FormatDisplayName(p.OwnerName, p.PetName),
                 IsFriend = false,
                 IsMusicActive = p.IsMusicActive,
+                IsSleeping = p.IsSleeping,
                 RequiresUpdate = p.RequiresUpdate,
                 Peer = p
             });
@@ -288,6 +306,7 @@ public sealed partial class PetWindowViewModel : ObservableObject
             existing.DisplayTitle = item.DisplayTitle;
             existing.IsFriend = item.IsFriend;
             existing.IsMusicActive = item.IsMusicActive;
+            existing.IsSleeping = item.IsSleeping;
             existing.IsFollowingMusic = item.IsFollowingMusic;
             existing.RequiresUpdate = item.RequiresUpdate;
             existing.Friend = item.Friend;
@@ -529,6 +548,9 @@ public sealed partial class PetWindowViewModel : ObservableObject
 
     [RelayCommand]
     private void OpenEnvironmentGuide() => OpenEnvironmentGuideRequested?.Invoke(this, EventArgs.Empty);
+
+    [RelayCommand]
+    private void LaunchChristmasTree() => LaunchChristmasTreeRequested?.Invoke(this, EventArgs.Empty);
 
     [RelayCommand]
     private void OpenSocial() => OpenSocialRequested?.Invoke(this, EventArgs.Empty);

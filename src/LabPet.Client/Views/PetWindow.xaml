@@ -6,7 +6,7 @@
         xmlns:tb="clr-namespace:H.NotifyIcon;assembly=H.NotifyIcon.Wpf"
         Title="LabPet"
         Width="214"
-        Height="234"
+        Height="286"
         WindowStyle="None"
         AllowsTransparency="True"
         Background="Transparent"
@@ -180,8 +180,9 @@
                         <MenuItem Header="크게 (125%)" Command="{Binding SetPetScaleCommand}" CommandParameter="1.25" />
                         <MenuItem Header="아주 크게 (150%)" Command="{Binding SetPetScaleCommand}" CommandParameter="1.5" />
                     </MenuItem>
+                    <MenuItem Header="🎄  크리스마스 트리" Command="{Binding LaunchChristmasTreeCommand}" />
                     <Separator />
-                    <MenuItem Header="클릭 투과 집중 모드"
+                    <MenuItem Header="🎯  클릭 투과 집중 모드"
                               IsCheckable="True"
                               IsChecked="{Binding IsClickThroughEnabled, Mode=TwoWay}" />
                     <MenuItem Header="Windows 시작 시 자동 실행"
@@ -366,7 +367,7 @@
         <!-- 순수 WPF Viewport3D (AllowsTransparency 호환, 에어스페이스 충돌 없음) -->
         <Viewport3D x:Name="PetViewport"
                     Grid.Row="0"
-                    Height="172"
+                    Height="224"
                     HorizontalAlignment="Center"
                     Opacity="{Binding PetOpacity}"
                     ClipToBounds="False"
@@ -396,8 +397,9 @@
                         <MenuItem Header="크게 (125%)" Command="{Binding SetPetScaleCommand}" CommandParameter="1.25" />
                         <MenuItem Header="아주 크게 (150%)" Command="{Binding SetPetScaleCommand}" CommandParameter="1.5" />
                     </MenuItem>
+                    <MenuItem Header="🎄  크리스마스 트리" Command="{Binding LaunchChristmasTreeCommand}" />
                     <Separator />
-                    <MenuItem Header="클릭 투과 집중 모드"
+                    <MenuItem Header="🎯  클릭 투과 집중 모드"
                               IsCheckable="True"
                               IsChecked="{Binding IsClickThroughEnabled, Mode=TwoWay}" />
                     <MenuItem Header="📍  기본 위치로 복귀" Command="{Binding ResetPositionCommand}" />
@@ -420,8 +422,8 @@
             </Viewport3D.ContextMenu>
 
             <Viewport3D.Camera>
-                <PerspectiveCamera Position="0,0.34,5.95"
-                                   LookDirection="0,-0.06,-1"
+                <PerspectiveCamera Position="0,0.30,6.65"
+                                   LookDirection="0,-0.02,-1"
                                    UpDirection="0,1,0"
                                    FieldOfView="36" />
             </Viewport3D.Camera>
@@ -429,6 +431,26 @@
             <ModelVisual3D x:Name="LightsVisual" />
             <ModelVisual3D x:Name="PetVisual" />
         </Viewport3D>
+
+        <!-- 5분 무입력 수면 상태 배지 (Viewport 위에 겹치되 클릭을 방해하지 않음) -->
+        <Border Grid.Row="0"
+                HorizontalAlignment="Right"
+                VerticalAlignment="Top"
+                Margin="0,12,14,0"
+                Padding="7,2"
+                CornerRadius="9"
+                Background="#EEEDF2FF"
+                BorderBrush="#FFC7D2FE"
+                BorderThickness="1"
+                IsHitTestVisible="False"
+                Opacity="{Binding PetOpacity}"
+                Visibility="{Binding IsSleeping, Converter={StaticResource BoolToVis}}"
+                Effect="{StaticResource SoftCardShadow}">
+            <TextBlock Text="zzz"
+                       FontSize="11"
+                       FontWeight="Bold"
+                       Foreground="#FF4F46E5" />
+        </Border>
 
         <!-- 마우스 오버레이 미니멀 주변 친구 퀵 팝업 -->
         <Popup x:Name="FriendOverlayPopup"
@@ -478,13 +500,27 @@
                                         Margin="0,0,0,4">
                                     <StackPanel>
                                         <DockPanel LastChildFill="False">
-                                            <StackPanel DockPanel.Dock="Left" Orientation="Horizontal" VerticalAlignment="Center" MaxWidth="112">
-                                                <Ellipse Width="6" Height="6" Fill="#FF34D399" Margin="0,0,5,0" VerticalAlignment="Center" />
+                                            <StackPanel DockPanel.Dock="Left" Orientation="Horizontal" VerticalAlignment="Center" MaxWidth="128">
+                                                <Ellipse Width="6" Height="6" Fill="{Binding StatusDotBrush}" Margin="0,0,5,0" VerticalAlignment="Center" />
                                                 <TextBlock Text="{Binding DisplayTitle}"
                                                            FontSize="11.5"
                                                            FontWeight="SemiBold"
                                                            Foreground="#FF1F2430"
+                                                           MaxWidth="88"
                                                            TextTrimming="CharacterEllipsis" />
+                                                <Border Background="#FFEEF2FF"
+                                                        BorderBrush="#FFC7D2FE"
+                                                        BorderThickness="1"
+                                                        CornerRadius="5"
+                                                        Padding="4,0"
+                                                        Margin="4,0,0,0"
+                                                        VerticalAlignment="Center"
+                                                        Visibility="{Binding HasSleepBadge, Converter={StaticResource BoolToVis}}">
+                                                    <TextBlock Text="zzz"
+                                                               FontSize="9.5"
+                                                               FontWeight="Bold"
+                                                               Foreground="#FF4F46E5" />
+                                                </Border>
                                             </StackPanel>
 
                                             <!-- 친구인 경우: 메시지 / 쓰다듬기 / 노래 따라하기 / 데려오기 -->

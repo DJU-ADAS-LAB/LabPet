@@ -113,6 +113,7 @@ public partial class SocialWindow : Window
         _currentRig = rig;
         FriendPreviewPet.Content = rig.RootModel;
         _previewAnimator.AttachRig(rig, appearance.AccentColorHex);
+        _previewAnimator.SetSleeping(selected.IsSleeping);
     }
 
     private void ClearFriendPreviewMesh()
@@ -134,6 +135,8 @@ public partial class SocialWindow : Window
         {
             return;
         }
+
+        _previewAnimator.SetSleeping(_viewModel.SelectedFriend.IsSleeping);
 
         if (!_isRotating)
         {

@@ -44,9 +44,15 @@ public sealed class PetAnimationController
     private double _currentLookX;
     private double _currentLookY;
 
-    // 상호작용 반응 잔여 시간 (초)
+    // 상호작용·수면·기상 반응 상태
+    private const double WakeUpReactionDuration = 0.95;
+    private const double SleepEyeClosedScale = 0.07;
+
     private double _petReactionTime;
     private double _dizzyReactionTime;
+    private double _wakeUpReactionTime;
+    private bool _isSleeping;
+    private double _sleepWeight;
 
     // 비트 펄스 및 타이핑 자세/교대 타건 상태
     private double _beatPulse;
@@ -85,9 +91,13 @@ public sealed class PetAnimationController
     private Color _emissiveAccentColor = Color.FromRgb(255, 158, 181);
 
     public PetMotionClipKind CurrentMotionClip => _currentClip;
+    public bool IsSleeping => _isSleeping;
+    public bool IsWakingUp => _wakeUpReactionTime > 0.01;
 
     internal bool HasInteractiveMotion =>
-        _petReactionTime > 0 || _dizzyReactionTime > 0 || _typingStanceHoldTime > 0
+        _petReactionTime > 0 || _dizzyReactionTime > 0 || _wakeUpReactionTime > 0
+        || (_sleepWeight > 0.01 && _sleepWeight < 0.99)
+        || _typingStanceHoldTime > 0
         || _typingStanceWeight > 0.01 || Volatile.Read(ref _pendingPawTaps) > 0
         || _musicWeight > 0.02 || HasActiveParticles();
 
@@ -100,6 +110,8 @@ public sealed class PetAnimationController
         _clipBlend = 1.0;
         _clipHoldSeconds = 0.0;
         _smoothedPose = PetPose.Identity;
+        _sleepWeight = _isSleeping ? 1.0 : 0.0;
+        _wakeUpReactionTime = 0.0;
 
         _particleStates = new ParticleState[rig.MusicParticles.Count];
         for (var i = 0; i < _particleStates.Length; i++)
@@ -130,6 +142,37 @@ public sealed class PetAnimationController
     {
         _rig = null;
         _particleStates = [];
+        _wakeUpReactionTime = 0.0;
+    }
+
+    /// <summary>
+    /// 수면 상태를 전환한다. 수면 중 깨어날 때는 깜짝 놀라는 기상 모션을 자동 트리거한다.
+    /// </summary>
+    public void SetSleeping(bool isSleeping)
+    {
+        if (_isSleeping == isSleeping)
+        {
+            return;
+        }
+
+        _isSleeping = isSleeping;
+        if (isSleeping)
+        {
+            _wakeUpReactionTime = 0.0;
+        }
+        else
+        {
+            TriggerWakeUpStartle();
+        }
+    }
+
+    /// <summary>수면에서 깨어날 때 화들짝 점프하고 눈을 번쩍 뜨는 깜짝 기상 모션을 트리거한다.</summary>
+    public void TriggerWakeUpStartle()
+    {
+        _wakeUpReactionTime = WakeUpReactionDuration;
+        _blinkProgress = -1.0;
+        _nextBlinkInSeconds = 2.6;
+        EmitReactionStarBurst(count: 4);
     }
 
     /// <summary>쓰다듬기/기쁨 3D 반응(부피 보존형 점프 + 발광 + 별 파티클 버스트)을 트리거한다.</summary>
@@ -279,69 +322,67 @@ public sealed class PetAnimationController
             blendedDancePose = PetPose.Lerp(in prevPose, in currentMusicPose, PetMotionClips.SmoothStep(_clipBlend));
         }
 
-        // 음악 비중(_musicWeight)에 따라 대기(Idle) <-> 댄스 블렌딩 후 관성 감쇠 적용
+        // 수면 비중 보간 (잠들 때는 느긋하게, 깨어날 때는 재빠르게 전환)
+        var sleepTarget = _isSleeping ? 1.0 : 0.0;
+        var sleepSpeed = _isSleeping ? 2.8 : 14.0;
+        _sleepWeight = Math.Clamp(
+            _sleepWeight + (sleepTarget - _sleepWeight) * (1.0 - Math.Exp(-sleepSpeed * deltaSeconds)),
+            0.0,
+            1.0);
+        var sleepWeight = _sleepWeight;
+        var awakeFactor = 1.0 - sleepWeight;
+
+        // 음악 비중(_musicWeight)에 따라 대기(Idle) <-> 댄스 블렌딩 후 수면 포즈 혼합 및 관성 감쇠 적용
         var targetPose = PetPose.Lerp(in idlePose, in blendedDancePose, _musicWeight);
+        if (sleepWeight > 0.001)
+        {
+            var breath = Math.Sin(_elapsedSeconds * 1.45);
+            var slowSway = Math.Sin(_elapsedSeconds * 0.72);
+            var earDroop = _speciesProfile.OutwardFlopEars ? 10.0 - breath * 1.2 : 12.0 - breath * 1.5;
+            var sleepPose = new PetPose
+            {
+                BodyOffsetY = -0.075 + breath * 0.012,
+                BodyScaleY = 0.935 + breath * 0.032,
+                BodyPitch = 9.0 + breath * 1.8,
+                BodyRoll = slowSway * 3.5,
+                HeadPitch = 19.0 + Math.Sin(_elapsedSeconds * 1.45 - 0.6) * 3.2,
+                HeadRoll = 10.5 + slowSway * 2.5,
+                LeftEarOffset = _speciesProfile.OutwardFlopEars ? -earDroop : earDroop,
+                RightEarOffset = _speciesProfile.OutwardFlopEars ? earDroop : -earDroop,
+                TailAngle = slowSway * 4.5,
+                LeftPawY = -0.02,
+                RightPawY = -0.02,
+                LeftArmRoll = -8.0,
+                RightArmRoll = 8.0
+            };
+            targetPose = PetPose.Lerp(in targetPose, in sleepPose, sleepWeight);
+        }
+
         var poseDamp = 1.0 - Math.Exp(-14.0 * deltaSeconds);
         _smoothedPose = PetPose.Lerp(in _smoothedPose, in targetPose, poseDamp);
 
+        var activeStance = stance * awakeFactor;
         var p = _smoothedPose;
-        var offsetX = p.BodyOffsetX * (1.0 - stance * 0.7);
-        var offsetY = p.BodyOffsetY + anyTapWave * 0.03;
-        var scaleY = p.BodyScaleY - anyTapWave * 0.035;
-        var bodyRoll = p.BodyRoll * (1.0 - stance * 0.5) + signedTap * 4.0;
-        var bodyYawExtra = p.BodyYaw * (1.0 - stance * 0.75);
-        var bodyPitchExtra = p.BodyPitch * (1.0 - stance * 0.7);
-        var headYawExtra = p.HeadYaw * (1.0 - stance * 0.8);
-        var headPitchExtra = p.HeadPitch + stance * 11.0 + anyTapWave * 5.0;
-        var headRollExtra = p.HeadRoll + signedTap * 3.2;
-        var emissiveStrength = p.EmissiveBoost + bass * 0.04 + beat * 0.045;
+        var offsetX = p.BodyOffsetX * (1.0 - activeStance * 0.7);
+        var offsetY = p.BodyOffsetY + anyTapWave * 0.03 * awakeFactor;
+        var scaleY = p.BodyScaleY - anyTapWave * 0.035 * awakeFactor;
+        var bodyRoll = p.BodyRoll * (1.0 - activeStance * 0.5) + signedTap * 4.0 * awakeFactor;
+        var bodyYawExtra = p.BodyYaw * (1.0 - activeStance * 0.75);
+        var bodyPitchExtra = p.BodyPitch * (1.0 - activeStance * 0.7);
+        var headYawExtra = p.HeadYaw * (1.0 - activeStance * 0.8);
+        var headPitchExtra = p.HeadPitch + activeStance * 11.0 + anyTapWave * 5.0 * awakeFactor;
+        var headRollExtra = p.HeadRoll + signedTap * 3.2 * awakeFactor;
+        var emissiveStrength = p.EmissiveBoost + (bass * 0.04 + beat * 0.045) * awakeFactor;
 
-        // 귀 적용 (rig.json / 종별 기본 각도 기반)
-        if (rig.LeftEarRotation is not null && rig.RightEarRotation is not null)
-        {
-            rig.LeftEarRotation.Angle = rig.LeftEarBaseAngle + p.LeftEarOffset + leftTapWave * (_speciesProfile.OutwardFlopEars ? -5.0 : 8.0);
-            rig.RightEarRotation.Angle = rig.RightEarBaseAngle + p.RightEarOffset + rightTapWave * (_speciesProfile.OutwardFlopEars ? 5.0 : -8.0);
-        }
+        // 풀링 3D 이펙트 파티클 갱신 (음표/별 알파 페이드 및 반응 버스트; 수면 중 신규 음표 방출 억제)
+        UpdateMusicParticles(
+            rig,
+            deltaSeconds,
+            sleepWeight > 0.5 ? 0 : bass,
+            sleepWeight > 0.5 ? 0 : treble,
+            sleepWeight > 0.5 ? 0 : beat);
 
-        // 꼬리 적용
-        if (rig.TailRotation is not null)
-        {
-            rig.TailRotation.Angle = p.TailAngle + signedTap * 6.5;
-        }
-
-        // 앞발 (모션 클립 춤 + 타이핑 교대 타건 블렌딩)
-        if (rig.LeftPawTranslate is not null && rig.RightPawTranslate is not null)
-        {
-            var proceduralStandingPuppy = rig.SpeciesId == PetSpeciesIds.FluffyPuppy && !rig.IsExternalAsset;
-            var liftY = proceduralStandingPuppy ? 0.18 : 0.08;
-            var reachZ = proceduralStandingPuppy ? 0.30 : 0.25;
-            var strikeHeight = proceduralStandingPuppy ? 0.12 : 0.14;
-
-            rig.LeftPawTranslate.OffsetY = stance * liftY + leftStrike * strikeHeight + p.LeftPawY * (1.0 - stance);
-            rig.LeftPawTranslate.OffsetZ = stance * reachZ + p.LeftPawZ * (1.0 - stance);
-            rig.RightPawTranslate.OffsetY = stance * liftY + rightStrike * strikeHeight + p.RightPawY * (1.0 - stance);
-            rig.RightPawTranslate.OffsetZ = stance * reachZ + p.RightPawZ * (1.0 - stance);
-        }
-
-        // 미니 팔/날개 (모션 클립 + 쓰다듬기 반응 + 타이핑 타건)
-        if (rig.LeftArmRotation is not null && rig.RightArmRotation is not null)
-        {
-            var reactionLift = _petReactionTime > 0 ? 18.0 * (_petReactionTime / 0.90) : 0.0;
-            var stanceInward = stance * 28.0;
-            rig.LeftArmRotation.Angle = p.LeftArmRoll * (1.0 - stance * 0.7) + reactionLift + stanceInward - leftStrike * 26.0;
-            rig.RightArmRotation.Angle = p.RightArmRoll * (1.0 - stance * 0.7) - reactionLift - stanceInward + rightStrike * 26.0;
-        }
-
-        if (rig.LeftArmPitch is not null && rig.RightArmPitch is not null)
-        {
-            rig.LeftArmPitch.Angle = p.LeftArmPitch * (1.0 - stance * 0.7) + stance * 24.0 - leftStrike * 34.0;
-            rig.RightArmPitch.Angle = p.RightArmPitch * (1.0 - stance * 0.7) + stance * 24.0 - rightStrike * 34.0;
-        }
-
-        // 풀링 3D 이펙트 파티클 갱신 (음표/별 알파 페이드 및 반응 버스트)
-        UpdateMusicParticles(rig, deltaSeconds, bass, treble, beat);
-
-        // 자연스러운 자동 눈 깜빡임
+        // 자연스러운 자동 눈 깜빡임 / 수면 감김 / 깜짝 기상 눈 번쩍 뜨기
         UpdateAutoBlink(rig, deltaSeconds);
 
         // 쓰다듬기/기쁨 반응 오버레이
@@ -367,6 +408,94 @@ public sealed class PetAnimationController
             headRollExtra += Math.Cos(_elapsedSeconds * 22.0) * 14.0 * decay;
         }
 
+        // 깜짝 놀라며 깨어나는 기상 모션 오버레이 (화들짝 점프 → 착지 스쿼시·좌우 두리번거림 → 안착)
+        var wakeEarBoost = 0.0;
+        var wakeArmBoost = 0.0;
+        if (_wakeUpReactionTime > 0)
+        {
+            _wakeUpReactionTime = Math.Max(0, _wakeUpReactionTime - deltaSeconds);
+            var pWake = 1.0 - (_wakeUpReactionTime / WakeUpReactionDuration);
+            if (pWake < 0.28)
+            {
+                var u = pWake / 0.28;
+                var jump = Math.Sin(u * Math.PI);
+                offsetY += 0.34 * jump;
+                scaleY += 0.18 * jump;
+                bodyPitchExtra -= 14.0 * jump;
+                headPitchExtra -= 16.0 * jump;
+                wakeEarBoost = 22.0 * jump;
+                wakeArmBoost = 32.0 * jump;
+            }
+            else if (pWake < 0.72)
+            {
+                var u = (pWake - 0.28) / 0.44;
+                var settle = 1.0 - u * 0.5;
+                var squash = Math.Sin(u * Math.PI) * (1.0 - u * 0.4);
+                var lookAround = Math.Sin(u * Math.PI * 2.5) * settle;
+                scaleY -= 0.11 * squash;
+                offsetY -= 0.03 * squash;
+                headYawExtra += 24.0 * lookAround;
+                headRollExtra += 10.0 * lookAround;
+                bodyYawExtra += 8.0 * lookAround;
+                wakeEarBoost = 8.0 * (1.0 - u);
+                wakeArmBoost = 10.0 * (1.0 - u);
+            }
+            else
+            {
+                var u = (pWake - 0.72) / 0.28;
+                var fade = 1.0 - PetMotionClips.SmoothStep(u);
+                headRollExtra += Math.Sin(u * Math.PI) * 3.0 * fade;
+            }
+
+            emissiveStrength = Math.Max(emissiveStrength, (1.0 - pWake) * 0.16);
+        }
+
+        // 귀 적용 (rig.json / 종별 기본 각도 + 깜짝 기상 귀 쫑긋)
+        if (rig.LeftEarRotation is not null && rig.RightEarRotation is not null)
+        {
+            var leftWakeEar = _speciesProfile.OutwardFlopEars ? -wakeEarBoost : wakeEarBoost;
+            var rightWakeEar = _speciesProfile.OutwardFlopEars ? wakeEarBoost : -wakeEarBoost;
+            rig.LeftEarRotation.Angle = rig.LeftEarBaseAngle + p.LeftEarOffset
+                + leftTapWave * (_speciesProfile.OutwardFlopEars ? -5.0 : 8.0) * awakeFactor + leftWakeEar;
+            rig.RightEarRotation.Angle = rig.RightEarBaseAngle + p.RightEarOffset
+                + rightTapWave * (_speciesProfile.OutwardFlopEars ? 5.0 : -8.0) * awakeFactor + rightWakeEar;
+        }
+
+        // 꼬리 적용
+        if (rig.TailRotation is not null)
+        {
+            rig.TailRotation.Angle = p.TailAngle + signedTap * 6.5 * awakeFactor;
+        }
+
+        // 앞발 (모션 클립 춤 + 타이핑 교대 타건 블렌딩)
+        if (rig.LeftPawTranslate is not null && rig.RightPawTranslate is not null)
+        {
+            var proceduralStandingPuppy = rig.SpeciesId == PetSpeciesIds.FluffyPuppy && !rig.IsExternalAsset;
+            var liftY = proceduralStandingPuppy ? 0.18 : 0.08;
+            var reachZ = proceduralStandingPuppy ? 0.30 : 0.25;
+            var strikeHeight = proceduralStandingPuppy ? 0.12 : 0.14;
+
+            rig.LeftPawTranslate.OffsetY = activeStance * liftY + leftStrike * strikeHeight * awakeFactor + p.LeftPawY * (1.0 - activeStance);
+            rig.LeftPawTranslate.OffsetZ = activeStance * reachZ + p.LeftPawZ * (1.0 - activeStance);
+            rig.RightPawTranslate.OffsetY = activeStance * liftY + rightStrike * strikeHeight * awakeFactor + p.RightPawY * (1.0 - activeStance);
+            rig.RightPawTranslate.OffsetZ = activeStance * reachZ + p.RightPawZ * (1.0 - activeStance);
+        }
+
+        // 미니 팔/날개 (모션 클립 + 쓰다듬기/깜짝 기상 반응 + 타이핑 타건)
+        if (rig.LeftArmRotation is not null && rig.RightArmRotation is not null)
+        {
+            var reactionLift = _petReactionTime > 0 ? 18.0 * (_petReactionTime / 0.90) : 0.0;
+            var stanceInward = activeStance * 28.0;
+            rig.LeftArmRotation.Angle = p.LeftArmRoll * (1.0 - activeStance * 0.7) + reactionLift + stanceInward - leftStrike * 26.0 * awakeFactor + wakeArmBoost;
+            rig.RightArmRotation.Angle = p.RightArmRoll * (1.0 - activeStance * 0.7) - reactionLift - stanceInward + rightStrike * 26.0 * awakeFactor - wakeArmBoost;
+        }
+
+        if (rig.LeftArmPitch is not null && rig.RightArmPitch is not null)
+        {
+            rig.LeftArmPitch.Angle = p.LeftArmPitch * (1.0 - activeStance * 0.7) + activeStance * 24.0 - leftStrike * 34.0 * awakeFactor;
+            rig.RightArmPitch.Angle = p.RightArmPitch * (1.0 - activeStance * 0.7) + activeStance * 24.0 - rightStrike * 34.0 * awakeFactor;
+        }
+
         // 부피 보존형 Squash & Stretch 및 안전 클램프 (급격한 튐·창 경계 이탈 방지)
         scaleY = Math.Clamp(scaleY, 0.80, 1.24);
         var scaleXZ = 1.0 / Math.Sqrt(scaleY);
@@ -379,8 +508,8 @@ public sealed class PetAnimationController
         rig.BodyTranslate.OffsetY = Math.Clamp(offsetY, -0.15, 0.45);
         rig.BodyTranslate.OffsetZ = Math.Clamp(p.BodyOffsetZ, -0.15, 0.15);
 
-        rig.BodyYaw.Angle = _currentLookX * 14.0 * (1.0 - stance * 0.65) + bodyYawExtra + dizzyYaw;
-        rig.BodyPitch.Angle = _currentLookY * 8.0 * (1.0 - stance * 0.7) + stance * 4.5 + bodyPitchExtra;
+        rig.BodyYaw.Angle = _currentLookX * 14.0 * (1.0 - activeStance * 0.65) * awakeFactor + bodyYawExtra + dizzyYaw;
+        rig.BodyPitch.Angle = _currentLookY * 8.0 * (1.0 - activeStance * 0.7) * awakeFactor + activeStance * 4.5 + bodyPitchExtra;
         rig.BodyRoll.Angle = Math.Clamp(bodyRoll, -26.0, 26.0);
 
         if (rig.ShadowScale is not null)
@@ -390,8 +519,8 @@ public sealed class PetAnimationController
             rig.ShadowScale.ScaleZ = shadowFactor;
         }
 
-        rig.HeadYaw.Angle = _currentLookX * 18.0 + headYawExtra;
-        rig.HeadPitch.Angle = _currentLookY * 12.0 + headPitchExtra;
+        rig.HeadYaw.Angle = _currentLookX * 18.0 * awakeFactor + headYawExtra;
+        rig.HeadPitch.Angle = _currentLookY * 12.0 * awakeFactor + headPitchExtra;
         rig.HeadRoll.Angle = Math.Clamp(headRollExtra, -22.0, 22.0);
 
         if (rig.AuraRotation is not null)
@@ -506,6 +635,21 @@ public sealed class PetAnimationController
     {
         if (rig.EyeBlinkScale is null)
         {
+            return;
+        }
+
+        if (_wakeUpReactionTime > 0.01)
+        {
+            _blinkProgress = -1.0;
+            rig.EyeBlinkScale.ScaleY = 1.0;
+            return;
+        }
+
+        if (_sleepWeight > 0.01)
+        {
+            _blinkProgress = -1.0;
+            var closedAmount = Math.Clamp(_sleepWeight * 1.35, 0.0, 1.0);
+            rig.EyeBlinkScale.ScaleY = 1.0 + (SleepEyeClosedScale - 1.0) * closedAmount;
             return;
         }
 

@@ -186,7 +186,29 @@ public sealed partial class LanP2pTransport : ISocialTransport
 
     public Task UpdateLocalPresenceAsync(LocalPresenceState presence, CancellationToken cancellationToken = default)
     {
+        var previous = _localPresence;
         _localPresence = presence;
+
+        if (IsRunning && (previous.IsSleeping != presence.IsSleeping || previous.IsMusicActive != presence.IsMusicActive))
+        {
+            var ct = _cts?.Token ?? cancellationToken;
+            if (!ct.IsCancellationRequested)
+            {
+                _ = Task.Run(async () =>
+                {
+                    try
+                    {
+                        await SendHelloBroadcastOnceAsync(ct).ConfigureAwait(false);
+                    }
+                    catch
+                    {
+                        // 즉시 브로드캐스트 실패 시 다음 주기 송신으로 보완
+                    }
+                }, ct);
+                PushPresenceToOnlineFriends(ct);
+            }
+        }
+
         return Task.CompletedTask;
     }
 
@@ -445,6 +467,7 @@ public sealed partial class LanP2pTransport : ISocialTransport
             Appearance = presence.Appearance.Clone(),
             Level = presence.Level,
             IsMusicActive = presence.IsMusicActive,
+            IsSleeping = presence.IsSleeping,
             TcpPort = _boundTcpPort,
             TimestampUtc = DateTimeOffset.UtcNow
         };

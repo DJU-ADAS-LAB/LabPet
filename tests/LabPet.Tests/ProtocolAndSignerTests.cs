@@ -174,4 +174,42 @@ public sealed class ProtocolAndSignerTests
         Assert.Equal("default", profile.Appearance.ExpressionId);
         Assert.Equal("none", profile.Appearance.HeadAccessoryId);
     }
+
+    [Fact]
+    public void PresencePayloads_SerializeIsSleepingAndDefaultFalseForLegacyJson()
+    {
+        var hello = new DiscoveryHelloPacket
+        {
+            PetId = "pet-sleep-1",
+            PetName = "모찌",
+            IsSleeping = true
+        };
+        var helloJson = JsonSerializer.Serialize(hello, ProtocolJson.PacketOptions);
+        var roundTripHello = JsonSerializer.Deserialize<DiscoveryHelloPacket>(helloJson, ProtocolJson.PacketOptions);
+        Assert.NotNull(roundTripHello);
+        Assert.True(roundTripHello!.IsSleeping);
+
+        var presence = new FriendPresencePayload
+        {
+            OwnerName = "승우",
+            PetName = "모찌",
+            IsSleeping = true,
+            TcpPort = ProtocolConstants.TcpControlPort,
+            AppVersion = "0.2.2"
+        };
+        var presenceJson = JsonSerializer.Serialize(presence, ProtocolJson.PacketOptions);
+        var roundTripPresence = JsonSerializer.Deserialize<FriendPresencePayload>(presenceJson, ProtocolJson.PacketOptions);
+        Assert.NotNull(roundTripPresence);
+        Assert.True(roundTripPresence!.IsSleeping);
+
+        // 구버전 피어(IsSleeping 필드 미포함 JSON)는 기본값 false로 역직렬화되어 호환 유지
+        const string legacyHelloJson = """{"protocolVersion":3,"petId":"legacy-1","petName":"구버전","tcpPort":45680}""";
+        const string legacyPresenceJson = """{"ownerName":"민수","petName":"냥이","tcpPort":45680,"appVersion":"0.2.1"}""";
+        var parsedLegacyHello = JsonSerializer.Deserialize<DiscoveryHelloPacket>(legacyHelloJson, ProtocolJson.PacketOptions);
+        var parsedLegacyPresence = JsonSerializer.Deserialize<FriendPresencePayload>(legacyPresenceJson, ProtocolJson.PacketOptions);
+        Assert.NotNull(parsedLegacyHello);
+        Assert.NotNull(parsedLegacyPresence);
+        Assert.False(parsedLegacyHello!.IsSleeping);
+        Assert.False(parsedLegacyPresence!.IsSleeping);
+    }
 }

@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>LabPet.Server</RootNamespace>
+    <AssemblyName>LabPet.Server</AssemblyName>
+    <Version>0.2.2</Version>
+    <InvariantGlobalization>true</InvariantGlobalization>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\LabPet.Shared\LabPet.Shared.csproj" />
+    <InternalsVisibleTo Include="LabPet.Tests" />
+  </ItemGroup>
+
+</Project>

@@ -3,7 +3,7 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="LabPet · 놀러 온 친구"
         Width="176"
-        Height="226"
+        Height="244"
         WindowStyle="None"
         AllowsTransparency="True"
         Background="Transparent"
@@ -97,8 +97,8 @@
             </Viewport3D.ContextMenu>
 
             <Viewport3D.Camera>
-                <PerspectiveCamera Position="0,0.34,6.15"
-                                   LookDirection="0,-0.06,-1"
+                <PerspectiveCamera Position="0,0.30,6.55"
+                                   LookDirection="0,-0.02,-1"
                                    UpDirection="0,1,0"
                                    FieldOfView="36" />
             </Viewport3D.Camera>
@@ -106,6 +106,26 @@
             <ModelVisual3D x:Name="LightsVisual" />
             <ModelVisual3D x:Name="VisitorPetVisual" />
         </Viewport3D>
+
+        <!-- 수면(zzz) 상태 배지 (닫기 버튼과 겹치지 않는 좌상단) -->
+        <Border x:Name="VisitorSleepBadge"
+                Grid.Row="1"
+                HorizontalAlignment="Left"
+                VerticalAlignment="Top"
+                Margin="10,6,0,0"
+                Padding="6,1"
+                CornerRadius="8"
+                Background="#EEEDF2FF"
+                BorderBrush="#FFC7D2FE"
+                BorderThickness="1"
+                Visibility="Collapsed"
+                IsHitTestVisible="False"
+                Effect="{StaticResource SoftCardShadow}">
+            <TextBlock Text="zzz"
+                       FontSize="10"
+                       FontWeight="Bold"
+                       Foreground="#FF4F46E5" />
+        </Border>
 
         <!-- 마우스 오버레이 시 우측 상단에 나타나는 돌려보내기(✕) 버튼 -->
         <Button x:Name="DismissButton"

@@ -29,10 +29,39 @@ public sealed partial class LanP2pTransport
         {
             PetId = hello.PetId, OwnerName = hello.OwnerName ?? string.Empty, PetName = hello.PetName,
             Appearance = hello.Appearance ?? new PetAppearance(), Level = hello.Level, IsMusicActive = hello.IsMusicActive,
-            IpAddress = ip, TcpPort = hello.TcpPort, ProtocolVersion = hello.ProtocolVersion, AppVersion = hello.AppVersion,
+            IsSleeping = hello.IsSleeping, IpAddress = ip, TcpPort = hello.TcpPort,
+            ProtocolVersion = hello.ProtocolVersion, AppVersion = hello.AppVersion,
             Compatibility = ProtocolConstants.EvaluateCompatibility(hello.ProtocolVersion), LastSeenUtc = DateTimeOffset.UtcNow
         };
         RaisePeersChanged();
+    }
+
+    private void PushPresenceToOnlineFriends(CancellationToken ct)
+    {
+        if (ct.IsCancellationRequested)
+        {
+            return;
+        }
+
+        foreach (var peer in _peers.Values)
+        {
+            if (!peer.IsFriend || peer.RequiresUpdate || string.IsNullOrWhiteSpace(peer.IpAddress) || !IsValidPort(peer.TcpPort))
+            {
+                continue;
+            }
+
+            if (_friendsByPetId.TryGetValue(peer.PetId, out var friend) && _presenceInFlight.TryAdd(friend.PetId, 0))
+            {
+                if (_presenceSlots.Wait(0))
+                {
+                    _ = VerifyPresenceAsync(friend, peer.IpAddress, peer.TcpPort, ct);
+                }
+                else
+                {
+                    _presenceInFlight.TryRemove(friend.PetId, out _);
+                }
+            }
+        }
     }
 
     private void ProbeFriendPresence(DiscoveryHelloPacket candidate, string ip, FriendEntry friend, CancellationToken ct)
@@ -79,8 +108,8 @@ public sealed partial class LanP2pTransport
         return new FriendPresencePayload
         {
             OwnerName = local.OwnerName, PetName = local.PetName, Appearance = local.Appearance,
-            Level = local.Level, IsMusicActive = local.IsMusicActive, TcpPort = _boundTcpPort,
-            AppVersion = local.AppVersion
+            Level = local.Level, IsMusicActive = local.IsMusicActive, IsSleeping = local.IsSleeping,
+            TcpPort = _boundTcpPort, AppVersion = local.AppVersion
         };
     }
 
@@ -116,7 +145,7 @@ public sealed partial class LanP2pTransport
         {
             PetId = petId, IpAddress = ip, TcpPort = presence.TcpPort, PetName = presence.PetName,
             OwnerName = presence.OwnerName ?? string.Empty, Appearance = presence.Appearance.Clone(),
-            Level = presence.Level, IsMusicActive = presence.IsMusicActive, IsFriend = true,
+            Level = presence.Level, IsMusicActive = presence.IsMusicActive, IsSleeping = presence.IsSleeping, IsFriend = true,
             ProtocolVersion = ProtocolConstants.CurrentProtocolVersion, AppVersion = presence.AppVersion,
             Compatibility = ProtocolCompatibility.Compatible, LastSeenUtc = now
         };

@@ -1,5 +1,6 @@
 using System.Runtime.CompilerServices;
 using System.Runtime.ExceptionServices;
+using LabPet.Client.Interop;
 using LabPet.Client.Rendering;
 using LabPet.Shared.Models;
 using Xunit;
@@ -180,6 +181,79 @@ public sealed class PetAnimationAndEffectTests
             controller.DetachRig();
             return refs;
         }
+    }
+
+    [Fact]
+    public void SleepAndWakeUpStartle_ClosesEyesBreathesSlowlyAndJumpsOnWake()
+    {
+        RunOnSta(() =>
+        {
+            var factory = new BlenderAssetPetMeshFactory(new ProceduralPetMeshFactory());
+            var rig = factory.BuildPetRig(new PetAppearance
+            {
+                SpeciesId = PetSpeciesIds.MochiSpirit,
+                AuraEffectId = "starlight"
+            });
+
+            var controller = new PetAnimationController();
+            controller.AttachRig(rig, "#FF9EB5");
+
+            // 5분 무입력 수면 진입 -> 눈 감김 유지 및 고개 숙인 호흡 자세 확인
+            controller.SetSleeping(true);
+            Assert.True(controller.IsSleeping);
+
+            for (var i = 0; i < 45; i++)
+            {
+                controller.UpdateFrame(0.033, targetLookX: 0.9, targetLookY: -0.7);
+            }
+
+            Assert.NotNull(rig.EyeBlinkScale);
+            Assert.InRange(rig.EyeBlinkScale!.ScaleY, 0.05, 0.18);
+            Assert.True(rig.HeadPitch.Angle > 8.0);
+            Assert.InRange(rig.BodyScale.ScaleY, 0.80, 1.24);
+            Assert.InRange(rig.BodyTranslate.OffsetY, -0.15, 0.45);
+
+            // 사용자 입력 재개 -> 수면 해제 + 깜짝 놀라며 깨는 점프/눈 뜨기/파티클 버스트
+            controller.SetSleeping(false);
+            Assert.False(controller.IsSleeping);
+            Assert.True(controller.IsWakingUp);
+
+            var maxJumpOffsetY = double.MinValue;
+            for (var i = 0; i < 5; i++)
+            {
+                controller.UpdateFrame(0.025, 0, 0);
+                maxJumpOffsetY = Math.Max(maxJumpOffsetY, rig.BodyTranslate.OffsetY);
+            }
+
+            Assert.Equal(1.0, rig.EyeBlinkScale.ScaleY);
+            Assert.True(maxJumpOffsetY > 0.12);
+            Assert.Contains(rig.MusicParticles, p => p.Scale.ScaleX > 0.05 && p.TintBrush is { Color.A: > 0 });
+
+            // 약 1.2초 후 깜짝 기상 모션이 정상 종료되고 안정 범위로 안착
+            for (var i = 0; i < 40; i++)
+            {
+                controller.UpdateFrame(0.033, 0, 0);
+            }
+
+            Assert.False(controller.IsWakingUp);
+            Assert.InRange(rig.BodyScale.ScaleY, 0.80, 1.24);
+            Assert.InRange(rig.BodyTranslate.OffsetY, -0.15, 0.45);
+        });
+    }
+
+    [Fact]
+    public void Win32IdleDuration_HandlesNormalAndTickCountWrapAround()
+    {
+        Assert.Equal(
+            TimeSpan.FromMinutes(5),
+            Win32WindowHelper.ComputeIdleDurationFromTickDiff(350_000u, 50_000u));
+
+        // 32-bit Environment.TickCount 49.7일 wrap-around 경계에서도 5분(300,000ms) 경과를 정확히 계산
+        const uint beforeWrap = uint.MaxValue - 199_999u;
+        const uint afterWrap = 100_000u;
+        Assert.Equal(
+            TimeSpan.FromMinutes(5),
+            Win32WindowHelper.ComputeIdleDurationFromTickDiff(afterWrap, beforeWrap));
     }
 
     private static void RunOnSta(Action action)

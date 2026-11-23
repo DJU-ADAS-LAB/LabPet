@@ -18,6 +18,7 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\LabPet.Shared\LabPet.Shared.csproj" />
     <ProjectReference Include="..\..\src\LabPet.Client\LabPet.Client.csproj" />
+    <ProjectReference Include="..\..\src\LabPet.Server\LabPet.Server.csproj" />
   </ItemGroup>
 
 </Project>

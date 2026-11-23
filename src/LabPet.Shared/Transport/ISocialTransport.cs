@@ -55,6 +55,12 @@ public interface ISocialTransport : IAsyncDisposable
 
     /// <summary>구독 중인 팔로워들에게만 30Hz 경량 오디오 프레임을 전송한다.</summary>
     ValueTask PublishMusicFrameAsync(MusicFrameData frame, CancellationToken cancellationToken = default);
+
+    /// <summary>원격 GCP 서버 실시간 연결 여부(로컬 전용 전송 계층은 false).</summary>
+    bool IsRemoteConnected => false;
+
+    /// <summary>UI 상태 표시줄에 사용할 간결한 연결 요약.</summary>
+    string ConnectionSummary => TransportName;
 }
 
 public sealed class FriendRequestReceivedEventArgs(

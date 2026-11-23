@@ -1,6 +1,7 @@
 <Solution>
   <Folder Name="/src/">
     <Project Path="src/LabPet.Client/LabPet.Client.csproj" />
+    <Project Path="src/LabPet.Server/LabPet.Server.csproj" />
     <Project Path="src/LabPet.Shared/LabPet.Shared.csproj" />
   </Folder>
   <Folder Name="/tests/">

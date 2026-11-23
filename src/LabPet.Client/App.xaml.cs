@@ -73,6 +73,7 @@ public partial class App : Application
         }
 
         var startupService = _serviceProvider.GetRequiredService<StartupRegistrationService>();
+        var christmasTreeService = _serviceProvider.GetRequiredService<TerminalChristmasTreeService>();
         var updateService = _serviceProvider.GetRequiredService<UpdateService>();
 
         var isWindowsAutoStart = e.Args.Any(a =>
@@ -97,6 +98,11 @@ public partial class App : Application
         petVm.OpenSoloHubRequested += OnOpenSoloHubRequested;
         petVm.OpenSocialRequested += OnOpenSocialRequested;
         petVm.OpenEnvironmentGuideRequested += OnOpenEnvironmentGuideRequested;
+        petVm.LaunchChristmasTreeRequested += (_, _) =>
+        {
+            var (ok, message) = christmasTreeService.Launch(petVm.CurrentProfile.PetName);
+            petVm.ShowBubble(message, ok ? 3000 : 2600);
+        };
         petVm.ToggleVisitFriendRequested += (_, args) => ToggleVisitorPetWindow(args.Friend, args.Appearance);
         petVm.PetScaleChanged += (_, scale) => SyncVisitorDisplaySettings(scale, petVm.PetOpacity);
         petVm.PetOpacityChanged += (_, opacity) => SyncVisitorDisplaySettings(petVm.PetScale, opacity);
@@ -423,12 +429,19 @@ public partial class App : Application
         services.AddSingleton<GlobalActivityHookService>();
         services.AddSingleton<PomodoroTimerService>();
 
-        // 통신 계층은 ISocialTransport 인터페이스로만 등록 (향후 GcpSignalRTransport/HybridTransportRouter로 교체 가능)
-        services.AddSingleton<ISocialTransport>(_ => new LanP2pTransport());
+        // 통신 계층은 ISocialTransport 인터페이스로만 등록 (LAN P2P 우선 + GCP SignalR 하이브리드 라우터)
+        services.AddSingleton(sp => ServerConnectionOptions.Load(sp.GetRequiredService<IAppDataStore>()));
+        services.AddSingleton<DeviceIdentityStore>();
+        services.AddSingleton<LanP2pTransport>();
+        services.AddSingleton<GcpSignalRTransport>();
+        services.AddSingleton<ISocialTransport>(sp => new HybridTransportRouter(
+            sp.GetRequiredService<LanP2pTransport>(),
+            sp.GetRequiredService<GcpSignalRTransport>()));
         services.AddSingleton<SocialCoordinatorService>();
 
-        // 배포·자동 업데이트 및 Windows 시작 프로그램 통합
+        // 배포·자동 업데이트 및 Windows 시작 프로그램·터미널 연동
         services.AddSingleton<StartupRegistrationService>();
+        services.AddSingleton<TerminalChristmasTreeService>();
         services.AddSingleton(new UpdateSourceOptions());
         services.AddSingleton<UpdateService>();
 

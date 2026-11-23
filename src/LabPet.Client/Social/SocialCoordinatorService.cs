@@ -41,6 +41,7 @@ public sealed class SocialCoordinatorService : IAsyncDisposable
     private volatile PetProfile _localProfile = new();
     private volatile FriendEntry[] _friends = [];
     private uint _musicFrameSequence;
+    private bool _isLocalSleeping;
 
     // 노래 따라하기 팔로워 상태
     private string? _followingHostPetId;
@@ -51,6 +52,9 @@ public sealed class SocialCoordinatorService : IAsyncDisposable
     /// <summary>내 음악이 동시에 재생 중일 때 팔로우 대신 로컬 음악을 우선할지 여부.</summary>
     public bool PreferLocalMusicWhenActive { get; set; } = true;
 
+    public bool IsLocalSleeping => _isLocalSleeping;
+    public bool IsRemoteConnected => _transport.IsRemoteConnected;
+    public string ConnectionSummary => _transport.ConnectionSummary;
     public string? FollowingHostPetId => _followingHostPetId;
     public IReadOnlyList<FriendEntry> Friends => Array.ConvertAll(_friends, static friend => friend.Clone());
     public IReadOnlyList<PeerSnapshot> DiscoveredPeers => _transport.GetDiscoveredPeers();
@@ -120,9 +124,18 @@ public sealed class SocialCoordinatorService : IAsyncDisposable
         return !string.IsNullOrEmpty(owner) ? owner : (string.IsNullOrEmpty(pet) ? "이름 없음" : pet);
     }
 
-    public async Task UpdateLocalPresenceAsync(PetProfile profile, bool isMusicActive, CancellationToken cancellationToken = default)
+    public async Task UpdateLocalPresenceAsync(
+        PetProfile profile,
+        bool isMusicActive,
+        bool? isSleeping = null,
+        CancellationToken cancellationToken = default)
     {
         _localProfile = profile;
+        if (isSleeping is { } sleepState)
+        {
+            _isLocalSleeping = sleepState;
+        }
+
         var version = typeof(SocialCoordinatorService).Assembly.GetName().Version?.ToString(3) ?? "0.1.0";
         await _transport.UpdateLocalPresenceAsync(
             new LocalPresenceState(
@@ -131,7 +144,9 @@ public sealed class SocialCoordinatorService : IAsyncDisposable
                 profile.Appearance.Clone(),
                 profile.SoloProgress.Level,
                 isMusicActive,
-                version),
+                version,
+                _isLocalSleeping,
+                profile.FriendCode),
             cancellationToken).ConfigureAwait(false);
     }
 

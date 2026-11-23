@@ -39,6 +39,13 @@ public static partial class Win32WindowHelper
         public int Flags;
     }
 
+    [StructLayout(LayoutKind.Sequential)]
+    private struct NativeLastInputInfo
+    {
+        public uint Size;
+        public uint Time;
+    }
+
     [LibraryImport("user32.dll")]
     private static partial IntPtr MonitorFromWindow(IntPtr window, uint flags);
 
@@ -87,6 +94,35 @@ public static partial class Win32WindowHelper
     [LibraryImport("user32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
     private static partial bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int x, int y, int cx, int cy, uint flags);
+
+    [LibraryImport("user32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool GetLastInputInfo(ref NativeLastInputInfo plii);
+
+    /// <summary>
+    /// OS 전역 키보드·마우스 마지막 입력 이후 경과 시간을 조회한다.
+    /// </summary>
+    public static bool TryGetSystemIdleDuration(out TimeSpan idleDuration)
+    {
+        var info = new NativeLastInputInfo
+        {
+            Size = (uint)Marshal.SizeOf<NativeLastInputInfo>()
+        };
+        if (!GetLastInputInfo(ref info))
+        {
+            idleDuration = TimeSpan.Zero;
+            return false;
+        }
+
+        idleDuration = ComputeIdleDurationFromTickDiff(unchecked((uint)Environment.TickCount), info.Time);
+        return true;
+    }
+
+    internal static TimeSpan ComputeIdleDurationFromTickDiff(uint currentTickCount, uint lastInputTickCount)
+    {
+        var elapsedMilliseconds = unchecked(currentTickCount - lastInputTickCount);
+        return TimeSpan.FromMilliseconds(elapsedMilliseconds);
+    }
 
     /// <summary>
     /// 창을 Alt+Tab 목록에서 숨기고 포커스를 빼앗지 않는 Non-Activating ToolWindow 스타일을 적용한다.

@@ -13,9 +13,12 @@ public sealed class PeerListItemViewModel
     public PeerSnapshot Snapshot { get; }
     public string DisplayTitle => SocialCoordinatorService.FormatDisplayName(Snapshot.OwnerName, Snapshot.PetName);
     public string PetName => Snapshot.PetName;
-    public string SubInfo => $"Lv.{Snapshot.Level} · {Snapshot.IpAddress} · v{Snapshot.AppVersion}";
+    public string SubInfo => Snapshot.TransportKind == PeerTransportKind.GcpRelay
+        ? $"Lv.{Snapshot.Level} · 인터넷(GCP) · v{Snapshot.AppVersion}"
+        : $"Lv.{Snapshot.Level} · {Snapshot.IpAddress} · v{Snapshot.AppVersion}";
     public bool IsFriend => Snapshot.IsFriend;
     public bool IsMusicActive => Snapshot.IsMusicActive;
+    public bool IsSleeping => Snapshot.IsSleeping;
     public bool RequiresUpdate => Snapshot.RequiresUpdate;
     public bool CanSendFriendRequest => !Snapshot.IsFriend && !Snapshot.RequiresUpdate;
 
@@ -45,6 +48,7 @@ public sealed class FriendListItemViewModel
     public PetAppearance EffectiveAppearance { get; }
     public bool IsOnline { get; }
     public bool IsMusicActive { get; }
+    public bool IsSleeping { get; }
     public bool IsFollowingMusic { get; }
     public bool IsVisitingDesktop { get; }
     public bool RequiresUpdate { get; }
@@ -57,7 +61,13 @@ public sealed class FriendListItemViewModel
     public string StatusText => RequiresUpdate
         ? UpdateBadgeText
         : IsOnline
-            ? (IsMusicActive ? "온라인 · 🎵 음악 반응 중" : "온라인")
+            ? (IsSleeping, IsMusicActive) switch
+            {
+                (true, true) => "온라인 · zzz · 🎵 음악 반응 중",
+                (true, false) => "온라인 · zzz",
+                (false, true) => "온라인 · 🎵 음악 반응 중",
+                (false, false) => "온라인"
+            }
             : "오프라인";
 
     public string IntimacyText => $"친밀도 {Entry.Intimacy}";
@@ -84,6 +94,7 @@ public sealed class FriendListItemViewModel
         EffectiveAppearance = (livePeer?.Appearance ?? entry.CachedAppearance ?? new PetAppearance()).Clone();
         IsOnline = livePeer is not null;
         IsMusicActive = livePeer?.IsMusicActive ?? false;
+        IsSleeping = livePeer?.IsSleeping ?? false;
         IsFollowingMusic = isFollowingMusic;
         IsVisitingDesktop = isVisitingDesktop;
         RequiresUpdate = livePeer?.RequiresUpdate ?? false;
@@ -118,6 +129,7 @@ public sealed partial class SocialViewModel : ObservableObject
     [ObservableProperty] private bool _preferLocalMusicWhenActive = true;
 
     public bool HasSelectedFriend => SelectedFriend is not null;
+    public string RemoteConnectionStatusText => _social.ConnectionSummary;
 
     public SocialViewModel(SocialCoordinatorService social)
     {
@@ -185,6 +197,8 @@ public sealed partial class SocialViewModel : ObservableObject
         {
             SelectedFriend = Friends[0];
         }
+
+        OnPropertyChanged(nameof(RemoteConnectionStatusText));
     }
 
     [RelayCommand]

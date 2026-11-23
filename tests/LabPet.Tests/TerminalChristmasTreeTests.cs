@@ -1,0 +1,134 @@
+using System.IO;
+using LabPet.Client.Storage;
+using LabPet.Client.SystemIntegration;
+using Xunit;
+
+namespace LabPet.Tests;
+
+public sealed class TerminalChristmasTreeTests
+{
+    [Fact]
+    public void EnsureScriptFile_WritesUtf8BomPowerShell5CompatibleScriptOutsideBaseDirectory()
+    {
+        var defaultService = new TerminalChristmasTreeService(new JsonAppDataStore(new StateMigrator()));
+        var expectedRoamingScript = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+            "LabPet",
+            TerminalChristmasTreeService.ScriptsDirectoryName,
+            TerminalChristmasTreeService.ScriptFileName);
+
+        Assert.Equal(expectedRoamingScript, defaultService.ScriptFilePath);
+        Assert.False(
+            defaultService.ScriptFilePath.StartsWith(AppContext.BaseDirectory, StringComparison.OrdinalIgnoreCase),
+            "생성되는 스크립트 경로는 설치 폴더(AppContext.BaseDirectory) 내부일 수 없습니다.");
+
+        var tempDir = Path.Combine(Path.GetTempPath(), "LabPet_Christmas_" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            var service = new TerminalChristmasTreeService(tempDir);
+            var scriptPath = service.EnsureScriptFile();
+
+            Assert.Equal(
+                Path.Combine(tempDir, TerminalChristmasTreeService.ScriptsDirectoryName, TerminalChristmasTreeService.ScriptFileName),
+                scriptPath);
+            Assert.True(File.Exists(scriptPath));
+
+            var rawBytes = File.ReadAllBytes(scriptPath);
+            Assert.True(rawBytes.Length > 3);
+            Assert.Equal(0xEF, rawBytes[0]);
+            Assert.Equal(0xBB, rawBytes[1]);
+            Assert.Equal(0xBF, rawBytes[2]);
+
+            var text = File.ReadAllText(scriptPath);
+            Assert.DoesNotContain("`e", text, StringComparison.Ordinal);
+            Assert.DoesNotContain("`u{", text, StringComparison.Ordinal);
+            Assert.DoesNotContain("Ctrl+휠", text, StringComparison.Ordinal);
+            Assert.Equal(164, TerminalChristmasTreeService.DefaultWindowColumns);
+            Assert.Equal(48, TerminalChristmasTreeService.DefaultWindowRows);
+            Assert.Equal((short)11, TerminalChristmasTreeService.DefaultFontPixelHeight);
+            Assert.Contains("WriteByte(27)", text, StringComparison.Ordinal);
+            Assert.Contains("KeyAvailable", text, StringComparison.Ordinal);
+            Assert.Contains("finally", text, StringComparison.Ordinal);
+            Assert.Contains("$PetName", text, StringComparison.Ordinal);
+            Assert.Contains("Merry Christmas", text, StringComparison.Ordinal);
+            Assert.Contains("LabPetChristmasEngine", text, StringComparison.Ordinal);
+            Assert.Contains("2580", text, StringComparison.Ordinal);
+            Assert.Contains("ToneMapAces", text, StringComparison.Ordinal);
+            Assert.Contains("_pondMask", text, StringComparison.Ordinal);
+            Assert.Contains("SetConsoleOutputCP", text, StringComparison.Ordinal);
+            Assert.Contains("SetCurrentConsoleFontEx", text, StringComparison.Ordinal);
+            Assert.Contains("TryDisableQuickEditMode", text, StringComparison.Ordinal);
+            Assert.Contains("TryConfigureHighDensityWindow(164, 48, 11)", text, StringComparison.Ordinal);
+            Assert.Contains("DrawKeyGuideBar", text, StringComparison.Ordinal);
+            Assert.Contains(" SPACE ", text, StringComparison.Ordinal);
+            Assert.Contains(" Q / ESC ", text, StringComparison.Ordinal);
+            Assert.Contains("RunLoop", text, StringComparison.Ordinal);
+            Assert.Contains("RenderFrameBytes", text, StringComparison.Ordinal);
+            Assert.Contains("1049h", text, StringComparison.Ordinal);
+            Assert.Contains("1049l", text, StringComparison.Ordinal);
+            Assert.Contains("Spacebar", text, StringComparison.Ordinal);
+            Assert.Contains("ConsoleKey.F", text, StringComparison.Ordinal);
+            Assert.Contains("ConsoleKey.S", text, StringComparison.Ordinal);
+
+            // 동일 내용 재호출 시에도 예외 없이 동일 경로 반환
+            var secondCallPath = service.EnsureScriptFile();
+            Assert.Equal(scriptPath, secondCallPath);
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir))
+            {
+                Directory.Delete(tempDir, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
+    public void BuildLaunchStartInfo_UsesConsoleHostWhenAvailableAndFallsBackToPowerShell()
+    {
+        const string scriptPath = @"C:\Users\Test\AppData\Roaming\LabPet\scripts\christmas_tree.ps1";
+        const string conhostPath = @"C:\Windows\System32\conhost.exe";
+
+        var conhostInfo = TerminalChristmasTreeService.BuildLaunchStartInfo(scriptPath, "모찌\r\n", conhostPath);
+        Assert.Equal(conhostPath, conhostInfo.FileName);
+        Assert.False(conhostInfo.UseShellExecute);
+        Assert.Equal(
+            [
+                "powershell.exe",
+                "-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass",
+                "-File", scriptPath,
+                "-PetName", "모찌"
+            ],
+            conhostInfo.ArgumentList);
+
+        var psInfo = TerminalChristmasTreeService.BuildLaunchStartInfo(scriptPath, "초코", consoleHostPath: null);
+        Assert.Equal("powershell.exe", psInfo.FileName);
+        Assert.False(psInfo.UseShellExecute);
+        Assert.Equal(
+            [
+                "-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass",
+                "-File", scriptPath,
+                "-PetName", "초코"
+            ],
+            psInfo.ArgumentList);
+    }
+
+    [Theory]
+    [InlineData(null, "LabPet")]
+    [InlineData("", "LabPet")]
+    [InlineData("   \r\n\t\u001b  ", "LabPet")]
+    [InlineData("  모찌\r\n\u001b[31m펫  ", "모찌[31m펫")]
+    public void SanitizePetName_RemovesControlCharactersAndAppliesFallback(string? input, string expected)
+    {
+        Assert.Equal(expected, TerminalChristmasTreeService.SanitizePetName(input));
+    }
+
+    [Fact]
+    public void SanitizePetName_ClampsToMaxLength()
+    {
+        var longName = new string('가', TerminalChristmasTreeService.MaxPetNameLength + 10);
+        var sanitized = TerminalChristmasTreeService.SanitizePetName(longName);
+
+        Assert.Equal(TerminalChristmasTreeService.MaxPetNameLength, sanitized.Length);
+    }
+}

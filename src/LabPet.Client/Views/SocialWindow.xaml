@@ -110,10 +110,27 @@
                     CornerRadius="14"
                     Padding="14,10"
                     Margin="20,2,20,12">
-                <TextBlock Text="{Binding StatusBanner}"
-                           FontSize="12.5"
-                           FontWeight="SemiBold"
-                           Foreground="{StaticResource TextSecondaryBrush}" />
+                <DockPanel>
+                    <Border DockPanel.Dock="Right"
+                            Background="#FFF3F5FA"
+                            BorderBrush="{StaticResource BorderSubtleBrush}"
+                            BorderThickness="1"
+                            CornerRadius="8"
+                            Padding="8,2"
+                            Margin="10,0,0,0"
+                            VerticalAlignment="Center">
+                        <TextBlock Text="{Binding RemoteConnectionStatusText}"
+                                   FontSize="11"
+                                   FontWeight="SemiBold"
+                                   Foreground="{StaticResource TextSecondaryBrush}" />
+                    </Border>
+                    <TextBlock Text="{Binding StatusBanner}"
+                               FontSize="12.5"
+                               FontWeight="SemiBold"
+                               VerticalAlignment="Center"
+                               TextTrimming="CharacterEllipsis"
+                               Foreground="{StaticResource TextSecondaryBrush}" />
+                </DockPanel>
             </Border>
 
             <!-- 친구 탭 (기본 화면: 이미 추가된 친구) -->
@@ -165,8 +182,20 @@
                                         <DataTemplate>
                                             <StackPanel>
                                                 <DockPanel>
-                                                    <TextBlock Text="{Binding DisplayTitle}" FontWeight="Bold" FontSize="13.5" Foreground="{StaticResource TextPrimaryBrush}" />
-                                                    <TextBlock Text="{Binding IntimacyText}" DockPanel.Dock="Right" FontSize="11" FontWeight="SemiBold" Foreground="{StaticResource BrandPinkBrush}" />
+                                                    <TextBlock Text="{Binding IntimacyText}" DockPanel.Dock="Right" FontSize="11" FontWeight="SemiBold" Foreground="{StaticResource BrandPinkBrush}" VerticalAlignment="Center" />
+                                                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                                        <TextBlock Text="{Binding DisplayTitle}" FontWeight="Bold" FontSize="13.5" Foreground="{StaticResource TextPrimaryBrush}" TextTrimming="CharacterEllipsis" />
+                                                        <Border Background="#FFEEF2FF"
+                                                                BorderBrush="#FFC7D2FE"
+                                                                BorderThickness="1"
+                                                                CornerRadius="6"
+                                                                Padding="5,1"
+                                                                Margin="6,0,0,0"
+                                                                VerticalAlignment="Center"
+                                                                Visibility="{Binding IsSleeping, Converter={StaticResource BoolToVis}}">
+                                                            <TextBlock Text="zzz" FontSize="10" FontWeight="Bold" Foreground="#FF4F46E5" />
+                                                        </Border>
+                                                    </StackPanel>
                                                 </DockPanel>
                                                 <TextBlock Text="{Binding StatusText}" FontSize="11.5" Foreground="{StaticResource TextSecondaryBrush}" Margin="0,2,0,0" />
                                             </StackPanel>
@@ -304,7 +333,7 @@
                     </Grid>
                 </TabItem>
 
-                <TabItem Header="주변 펫 (LAN)">
+                <TabItem Header="주변 펫">
                     <Grid>
                         <ListBox x:Name="NearbyPeersList"
                                  ItemsSource="{Binding NearbyPeers}"
@@ -353,6 +382,15 @@
                                                             Margin="6,0,0,0"
                                                             Visibility="{Binding IsMusicActive, Converter={StaticResource BoolToVis}}">
                                                         <TextBlock Text="🎵 음악 반응 중" FontSize="11" FontWeight="SemiBold" Foreground="#FF0369A1" />
+                                                    </Border>
+                                                    <Border Background="#FFEEF2FF"
+                                                            BorderBrush="#FFC7D2FE"
+                                                            BorderThickness="1"
+                                                            CornerRadius="7"
+                                                            Padding="7,2"
+                                                            Margin="6,0,0,0"
+                                                            Visibility="{Binding IsSleeping, Converter={StaticResource BoolToVis}}">
+                                                        <TextBlock Text="zzz 자는 중" FontSize="11" FontWeight="Bold" Foreground="#FF4F46E5" />
                                                     </Border>
                                                 </StackPanel>
                                                 <TextBlock Text="{Binding SubInfo}" FontSize="11.5" Foreground="{StaticResource TextSecondaryBrush}" Margin="0,3,0,0" />

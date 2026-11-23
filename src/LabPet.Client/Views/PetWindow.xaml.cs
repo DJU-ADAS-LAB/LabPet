@@ -16,20 +16,18 @@ using LabPet.Client.Social;
 using LabPet.Client.Solo;
 using LabPet.Client.ViewModels;
 using LabPet.Shared.Models;
-using Microsoft.Win32;
 
 namespace LabPet.Client.Views;
 
 public partial class PetWindow : Window
 {
-    private const double DragThresholdPixels = 5.0;
     private static readonly TimeSpan ActiveFrameInterval = TimeSpan.FromMilliseconds(16);
     private static readonly TimeSpan IdleFrameInterval = TimeSpan.FromMilliseconds(40);
+    public static readonly TimeSpan SleepIdleThreshold = TimeSpan.FromMinutes(5);
+    private const double DragThresholdPixels = 5.0;
     private const double BaseWindowWidth = 214.0;
-    private const double DefaultWindowHeight = 274.0;
-    private const double LegacyMessageRowHeight = 78.0;
+    private const double BaseViewportHeight = 224.0;
     private const double NameplateGap = 4.0;
-    private const double BaseNameplateHeight = 24.0;
     private const double FriendOverlayGap = 4.0;
     private const double FriendOverlayTopInset = 12.0;
     private const double SpeechBubbleBottomOverlap = 8.0;
@@ -62,7 +60,9 @@ public partial class PetWindow : Window
     private readonly Stopwatch _clock = Stopwatch.StartNew();
     private double _lastFrameSeconds;
     private double _lastMusicPublishSeconds;
+    private double _lastIdleCheckSeconds = -1.0;
     private bool _lastReportedMusicActive;
+    private bool _isLocalSleeping;
     private Point3D _nameplateAnchor;
     private FrameworkElement? _messageEditorToClose;
     private PetRigHandle? _currentRig;
@@ -111,11 +111,14 @@ public partial class PetWindow : Window
 
         Loaded += (_, _) =>
         {
-            KeepPetInMonitorWorkArea();
+            UpdateNameplatePosition();
             RepositionSpeechBubblePopup();
         };
-        SystemEvents.DisplaySettingsChanged += OnDisplaySettingsChanged;
-        LocationChanged += (_, _) => RepositionSpeechBubblePopup();
+        LocationChanged += (_, _) =>
+        {
+            UpdateNameplatePosition();
+            RepositionSpeechBubblePopup();
+        };
         SizeChanged += (_, e) =>
         {
             FriendOverlayPopup.PlacementRectangle = new Rect(e.NewSize);
@@ -180,7 +183,6 @@ public partial class PetWindow : Window
 
         Closed += (_, _) =>
         {
-            SystemEvents.DisplaySettingsChanged -= OnDisplaySettingsChanged;
             _frameTimer.Stop();
             _activityFlushTimer.Stop();
             _uptimeTimer.Stop();
@@ -237,22 +239,26 @@ public partial class PetWindow : Window
             _animator.AttachRig(rig, profile.Appearance.AccentColorHex);
         }
 
-        _ = _social.UpdateLocalPresenceAsync(profile, _lastReportedMusicActive);
+        _ = _social.UpdateLocalPresenceAsync(profile, _lastReportedMusicActive, _isLocalSleeping);
+    }
+
+    internal static Size ComputeViewportSize(double scale)
+    {
+        var clamped = PetProfile.NormalizePetScale(scale);
+        return new Size(Math.Round(BaseWindowWidth * clamped), Math.Round(BaseViewportHeight * clamped));
     }
 
     private void OnPetScaleChanged(object? sender, double scale)
     {
-        var clamped = PetProfile.NormalizePetScale(scale);
+        var viewportSize = ComputeViewportSize(scale);
         var previousWidth = Width;
         var previousHeight = Height;
 
-        // 뷰포트 너비로 펫 배율을 맞추고, 창은 이름표와 조절바가 들어갈 너비를 확보한다.
-        PetViewport.Width = Math.Round(BaseWindowWidth * clamped);
-        Width = Math.Max(180.0, PetViewport.Width);
-        var viewportHeight = Math.Max(220.0, Math.Round(DefaultWindowHeight * clamped))
-            - LegacyMessageRowHeight - BaseNameplateHeight;
-        PetViewport.Height = viewportHeight;
-        Height = viewportHeight + PetNameplateRow.Height.Value;
+        // 모든 배율에서 동일한 3D 뷰포트 종횡비를 유지해 상단(모자)·하단(키보드)이 잘리지 않도록 한다.
+        PetViewport.Width = viewportSize.Width;
+        PetViewport.Height = viewportSize.Height;
+        Width = Math.Max(180.0, viewportSize.Width);
+        Height = viewportSize.Height + PetNameplateRow.Height.Value;
         UpdateNameplatePosition();
         RepositionSpeechBubblePopup();
 
@@ -304,7 +310,26 @@ public partial class PetWindow : Window
                     lowestY = Math.Max(lowestY, effectAnchor.Y);
                 }
 
-                PetNameplateOffset.Y = Math.Min(0, lowestY + NameplateGap - PetViewport.ActualHeight);
+                var offsetDip = Math.Min(0, lowestY + NameplateGap - PetViewport.ActualHeight);
+
+                // 펫을 작업표시줄 바로 위까지 내린 경우 호버 시 이름표·크기·투명 조절바가 작업표시줄 아래로 가리지 않게 위로 보정한다.
+                if (IsLoaded && Win32WindowHelper.TryGetNearestWorkArea(this, out var workArea))
+                {
+                    var dpi = VisualTreeHelper.GetDpi(this);
+                    var viewportBottomPhysical = PetLayout.PointToScreen(new Point(0, PetViewport.ActualHeight)).Y;
+                    var controlsHeightDip = PetControls.ActualHeight > 0
+                        ? PetControls.ActualHeight
+                        : PetNameplateRow.Height.Value;
+                    var controlsBottomPhysical = viewportBottomPhysical + (offsetDip + controlsHeightDip) * dpi.DpiScaleY;
+                    var overflowPhysical = controlsBottomPhysical - workArea.Bottom;
+                    if (overflowPhysical > 0)
+                    {
+                        var minOffsetDip = Math.Min(offsetDip, -PetViewport.ActualHeight * 0.65);
+                        offsetDip = Math.Max(minOffsetDip, offsetDip - (overflowPhysical / dpi.DpiScaleY) - 4.0);
+                    }
+                }
+
+                PetNameplateOffset.Y = offsetDip;
             }
         }
     }
@@ -601,6 +626,21 @@ public partial class PetWindow : Window
     {
         var now = _clock.Elapsed.TotalSeconds;
 
+        // 5분 이상 키보드/마우스 입력이 없으면 수면(zzz) 상태로 전환, 입력 재개 시 깜짝 기상
+        var idleCheckInterval = _isLocalSleeping ? 0.1 : 0.5;
+        if (_lastIdleCheckSeconds < 0 || now - _lastIdleCheckSeconds >= idleCheckInterval)
+        {
+            _lastIdleCheckSeconds = now;
+            if (Win32WindowHelper.TryGetSystemIdleDuration(out var idleDuration))
+            {
+                var shouldSleep = idleDuration >= SleepIdleThreshold;
+                if (shouldSleep != _isLocalSleeping)
+                {
+                    ApplyLocalSleepState(shouldSleep);
+                }
+            }
+        }
+
         // 로컬 오디오 스냅샷 조회
         var localAudio = _audioAnalyzer.GetCurrentSnapshot();
 
@@ -608,7 +648,7 @@ public partial class PetWindow : Window
         if (localAudio.IsMusicActive != _lastReportedMusicActive)
         {
             _lastReportedMusicActive = localAudio.IsMusicActive;
-            _ = _social.UpdateLocalPresenceAsync(_viewModel.CurrentProfile, localAudio.IsMusicActive);
+            _ = _social.UpdateLocalPresenceAsync(_viewModel.CurrentProfile, localAudio.IsMusicActive, _isLocalSleeping);
         }
 
         // 호스트로서 구독 중인 친구들에게 30Hz(약 33ms 간격) 경량 오디오 프레임 송출
@@ -645,6 +685,14 @@ public partial class PetWindow : Window
         _lastFrameSeconds = now;
         ComputeNormalizedLookDirection(out var lookX, out var lookY);
         _animator.UpdateFrame(dt, lookX, lookY);
+    }
+
+    private void ApplyLocalSleepState(bool isSleeping)
+    {
+        _isLocalSleeping = isSleeping;
+        _viewModel.IsSleeping = isSleeping;
+        _animator.SetSleeping(isSleeping);
+        _ = _social.UpdateLocalPresenceAsync(_viewModel.CurrentProfile, _lastReportedMusicActive, isSleeping);
     }
 
     private void ComputeNormalizedLookDirection(out double lookX, out double lookY)
@@ -808,41 +856,14 @@ public partial class PetWindow : Window
         PlaceAtDefaultBottomRight();
     }
 
-    private void KeepPetInMonitorWorkArea()
-    {
-        if (!Win32WindowHelper.TryGetNearestWorkArea(this, out var workArea))
-        {
-            return;
-        }
-        var dpi = VisualTreeHelper.GetDpi(this);
-        var origin = PetLayout.PointToScreen(new Point());
-        var bounds = new Rect(origin, new Size(ActualWidth * dpi.DpiScaleX, ActualHeight * dpi.DpiScaleY));
-        var visibleOrigin = ClampWindowOrigin(bounds, workArea);
-        Left += (visibleOrigin.X - origin.X) / dpi.DpiScaleX;
-        Top += (visibleOrigin.Y - origin.Y) / dpi.DpiScaleY;
-    }
-
-    private void OnDisplaySettingsChanged(object? sender, EventArgs e)
-    {
-        Dispatcher.BeginInvoke(DispatcherPriority.Loaded, () =>
-        {
-            if (IsLoaded && IsVisible)
-            {
-                KeepPetInMonitorWorkArea();
-            }
-        });
-    }
-
-    internal static Point ClampWindowOrigin(Rect window, Rect workArea)
-        => new(
-            Math.Clamp(window.Left, workArea.Left, Math.Max(workArea.Left, workArea.Right - window.Width)),
-            Math.Clamp(window.Top, workArea.Top, Math.Max(workArea.Top, workArea.Bottom - window.Height)));
-
     private void PlaceAtDefaultBottomRight()
     {
         var workArea = SystemParameters.WorkArea;
+        var viewportHeight = double.IsFinite(PetViewport.Height) && PetViewport.Height > 0
+            ? PetViewport.Height
+            : BaseViewportHeight;
         Left = workArea.Right - Width - 28;
-        Top = workArea.Bottom - Height - 18;
+        Top = workArea.Bottom - viewportHeight - 8;
     }
 
     private void SaveRestingPosition()

@@ -1,0 +1,39 @@
+[Unit]
+Description=LabPet Real-Time Social Relay Server (.NET 10 SignalR)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=labpet
+Group=labpet
+WorkingDirectory=/opt/labpet/current
+ExecStart=/usr/bin/dotnet /opt/labpet/current/LabPet.Server.dll
+EnvironmentFile=/etc/labpet/labpet.env
+Environment=DOTNET_ENVIRONMENT=Production
+Environment=ASPNETCORE_URLS=http://127.0.0.1:5000
+Environment=DOTNET_EnableDiagnostics=0
+
+Restart=always
+RestartSec=5
+TimeoutStopSec=15
+
+# 저사양 VM(e2-micro) 보호 및 최소 권한 격리
+MemoryMax=512M
+CPUQuota=80%
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+ReadWritePaths=/var/lib/labpet
+
+# 로그 폭주 방지
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=labpet-server
+
+[Install]
+WantedBy=multi-user.target

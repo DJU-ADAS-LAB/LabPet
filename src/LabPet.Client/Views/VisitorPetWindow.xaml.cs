@@ -22,7 +22,7 @@ public partial class VisitorPetWindow : Window
     private static readonly TimeSpan IdleInterval = TimeSpan.FromMilliseconds(45);
     private const double DragThresholdPixels = 5.0;
     private const double BaseWindowWidth = 176.0;
-    private const double BaseViewportHeight = 168.0;
+    private const double BaseViewportHeight = 186.0;
     private const double BaseBubbleHeight = 34.0;
     private const double BaseNameplateHeight = 24.0;
 
@@ -64,6 +64,8 @@ public partial class VisitorPetWindow : Window
 
         LightsVisual.Content = _meshFactory.CreateStudioLights();
         ApplyFriendState(friend, initialAppearance);
+        var initialPeer = _social.DiscoveredPeers.FirstOrDefault(p => string.Equals(p.PetId, friend.PetId, StringComparison.OrdinalIgnoreCase));
+        ApplyFriendSleepState(initialPeer?.IsSleeping ?? false);
 
         SourceInitialized += (_, _) => Win32WindowHelper.ApplyToolWindowStyle(this);
         _social.StateChanged += OnSocialStateChanged;
@@ -114,6 +116,7 @@ public partial class VisitorPetWindow : Window
         Height = BaseBubbleHeight + viewportHeight + BaseNameplateHeight;
 
         VisitorViewport.Opacity = clampedOpacity;
+        VisitorSleepBadge.Opacity = clampedOpacity;
         VisitorNameplate.Opacity = clampedOpacity;
 
         if (IsLoaded)
@@ -196,6 +199,12 @@ public partial class VisitorPetWindow : Window
         _animator.AttachRig(rig, appearance.AccentColorHex);
     }
 
+    private void ApplyFriendSleepState(bool isSleeping)
+    {
+        _animator.SetSleeping(isSleeping);
+        VisitorSleepBadge.Visibility = isSleeping ? Visibility.Visible : Visibility.Collapsed;
+    }
+
     public async void ShowVisitorBubble(string message, int durationMs = 2200)
     {
         _bubbleCts?.Cancel();
@@ -231,6 +240,8 @@ public partial class VisitorPetWindow : Window
                 var appearance = livePeer?.Appearance ?? latestFriend.CachedAppearance;
                 ApplyFriendState(latestFriend, appearance);
             }
+
+            ApplyFriendSleepState(livePeer?.IsSleeping ?? false);
         });
     }
 
