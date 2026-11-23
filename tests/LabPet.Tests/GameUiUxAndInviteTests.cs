@@ -205,9 +205,18 @@ public sealed class GameUiUxAndInviteTests : IAsyncLifetime
         await _guestSocial.DisposeAsync();
         await _hostTransport.DisposeAsync();
         await _guestTransport.DisposeAsync();
-        if (Directory.Exists(_dataDir))
+
+        for (var attempt = 0; attempt < 5 && Directory.Exists(_dataDir); attempt++)
         {
-            Directory.Delete(_dataDir, recursive: true);
+            try
+            {
+                Directory.Delete(_dataDir, recursive: true);
+                break;
+            }
+            catch (IOException) when (attempt < 4)
+            {
+                await Task.Delay(50);
+            }
         }
     }
 
@@ -324,9 +333,11 @@ public sealed class GameUiUxAndInviteTests : IAsyncLifetime
             await hostGames.SendRpsInviteCommand.ExecuteAsync(null);
             await guestInvited3.WaitAsync(TimeSpan.FromSeconds(5));
 
+            var hostInRps = WaitUntilAsync(hostGames, () => hostGames.RpsPhase == RpsPhase.Choosing);
             await Task.WhenAll(
                 guestGames.AcceptIncomingInviteCommand.ExecuteAsync(null),
                 guestGames.AcceptIncomingInviteCommand.ExecuteAsync(null));
+            await hostInRps.WaitAsync(TimeSpan.FromSeconds(5));
 
             Assert.Equal(170, _guestProfile.SoloProgress.Coins);
             Assert.Equal(GameInviteStatus.Accepted, guestGames.IncomingInviteStatus);
