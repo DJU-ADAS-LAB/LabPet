@@ -2,6 +2,7 @@ using System.Buffers.Binary;
 using System.Net;
 using System.Net.Sockets;
 using System.Text.Json;
+using LabPet.Shared.Models;
 using LabPet.Shared.Protocol;
 using LabPet.Shared.Transport;
 
@@ -9,6 +10,12 @@ namespace LabPet.Client.Network;
 
 public sealed partial class LanP2pTransport
 {
+    internal sealed record ControlSendOutcome(
+        AckPayload? VerifiedAck,
+        string? ErrorCode,
+        bool IsTransient,
+        string? Detail = null);
+
     private Task TcpAcceptLoopAsync(TcpListener listener, CancellationToken ct)
         => Task.WhenAll(Enumerable.Range(0, MaxConcurrentControlConnections)
             .Select(_ => TcpControlWorkerAsync(listener, ct)));
@@ -181,18 +188,39 @@ public sealed partial class LanP2pTransport
         switch (header.PacketType)
         {
             case PacketType.FriendRequest:
-                if (envelope.IsEncrypted || !ReceiveFriendRequest(envelope, remoteIp))
-                    return RejectAck(header.MessageId, "PAIRING_REQUEST_REJECTED");
+                if (envelope.IsEncrypted)
+                {
+                    return RejectAck(header.MessageId, FriendOperationErrorCodes.InvalidPairingEnvelope);
+                }
+
+                if (!ReceiveFriendRequest(envelope, remoteIp, out var requestError))
+                {
+                    return RejectAck(header.MessageId, requestError);
+                }
                 break;
 
             case PacketType.FriendAccept:
-                if (envelope.IsEncrypted || !ReceiveFriendAcceptance(envelope, remoteIp, out ackKey))
-                    return RejectAck(header.MessageId, "PAIRING_CONFIRMATION_FAILED");
+                if (envelope.IsEncrypted)
+                {
+                    return RejectAck(header.MessageId, FriendOperationErrorCodes.InvalidPairingEnvelope);
+                }
+
+                if (!ReceiveFriendAcceptance(envelope, remoteIp, out ackKey, out var acceptError))
+                {
+                    return RejectAck(header.MessageId, acceptError);
+                }
                 break;
 
             case PacketType.FriendReject:
-                if (envelope.IsEncrypted || !ReceiveFriendRejection(envelope))
-                    return RejectAck(header.MessageId, "PAIRING_REQUEST_UNKNOWN");
+                if (envelope.IsEncrypted)
+                {
+                    return RejectAck(header.MessageId, FriendOperationErrorCodes.InvalidPairingEnvelope);
+                }
+
+                if (!ReceiveFriendRejection(envelope, out var rejectError))
+                {
+                    return RejectAck(header.MessageId, rejectError);
+                }
                 break;
 
             case PacketType.BubbleMessage:
@@ -286,6 +314,30 @@ public sealed partial class LanP2pTransport
         string? confirmationKey = null,
         string? messageId = null)
     {
+        var outcome = await SendControlPacketWithOutcomeAsync(
+            remoteIp,
+            remotePort,
+            packetType,
+            payload,
+            pairSecretBase64,
+            ct,
+            expectedPetId,
+            confirmationKey,
+            messageId).ConfigureAwait(false);
+        return outcome.VerifiedAck;
+    }
+
+    private async Task<ControlSendOutcome> SendControlPacketWithOutcomeAsync<TPayload>(
+        string remoteIp,
+        int remotePort,
+        PacketType packetType,
+        TPayload payload,
+        string? pairSecretBase64,
+        CancellationToken ct,
+        string expectedPetId,
+        string? confirmationKey = null,
+        string? messageId = null)
+    {
         try
         {
             var payloadJson = JsonSerializer.Serialize(payload, ProtocolJson.PacketOptions);
@@ -340,17 +392,118 @@ public sealed partial class LanP2pTransport
 
             await WriteFramedJsonAsync(stream, envelope, timeoutCts.Token).ConfigureAwait(false);
             var ackEnvelope = await ReadFramedJsonAsync<ControlPacketEnvelope>(stream, timeoutCts.Token).ConfigureAwait(false);
-            return ReadVerifiedAck(ackEnvelope, header.MessageId, expectedPetId, confirmationKey ?? pairSecretBase64);
+            return InspectAckEnvelope(
+                ackEnvelope,
+                header.MessageId,
+                expectedPetId,
+                confirmationKey ?? pairSecretBase64,
+                allowUnsignedRejection: packetType == PacketType.FriendAccept);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
-            return null;
+            return new ControlSendOutcome(null, FriendOperationErrorCodes.Cancelled, false, "요청이 취소되었습니다.");
+        }
+        catch (OperationCanceledException ex)
+        {
+            TransportError?.Invoke(this, new TransportErrorEventArgs(
+                $"Send:{packetType}",
+                ex.Message,
+                ex,
+                FriendOperationErrorCodes.DeliveryFailedOrTimeout,
+                PeerTransportKind.Lan));
+            return new ControlSendOutcome(null, FriendOperationErrorCodes.DeliveryFailedOrTimeout, true, "상대방 응답 시간이 초과되었습니다.");
+        }
+        catch (SocketException sex)
+        {
+            var code = sex.SocketErrorCode == SocketError.ConnectionRefused
+                ? FriendOperationErrorCodes.RecipientOffline
+                : FriendOperationErrorCodes.NetworkError;
+            TransportError?.Invoke(this, new TransportErrorEventArgs(
+                $"Send:{packetType}",
+                sex.Message,
+                sex,
+                code,
+                PeerTransportKind.Lan));
+            return new ControlSendOutcome(null, code, true, sex.Message);
         }
         catch (Exception ex)
         {
-            TransportError?.Invoke(this, new TransportErrorEventArgs($"Send:{packetType}", ex.Message, ex));
-            return null;
+            TransportError?.Invoke(this, new TransportErrorEventArgs(
+                $"Send:{packetType}",
+                ex.Message,
+                ex,
+                FriendOperationErrorCodes.NetworkError,
+                PeerTransportKind.Lan));
+            return new ControlSendOutcome(null, FriendOperationErrorCodes.NetworkError, true, ex.Message);
         }
+    }
+
+    internal static ControlSendOutcome InspectAckEnvelope(
+        ControlPacketEnvelope? envelope,
+        string messageId,
+        string expectedPetId,
+        string? signatureKey,
+        bool allowUnsignedRejection = false)
+    {
+        if (envelope?.Header is not { PacketType: PacketType.Ack } header || envelope.IsEncrypted
+            || !string.Equals(header.SenderPetId, expectedPetId, StringComparison.OrdinalIgnoreCase))
+        {
+            return new ControlSendOutcome(null, FriendOperationErrorCodes.DeliveryFailedOrTimeout, true, "응답 헤더가 올바르지 않습니다.");
+        }
+
+        if (ProtocolConstants.EvaluateCompatibility(header.ProtocolVersion) != ProtocolCompatibility.Compatible)
+        {
+            return new ControlSendOutcome(null, FriendOperationErrorCodes.ProtocolMismatch, false, "프로토콜 버전이 호환되지 않습니다.");
+        }
+
+        AckPayload? ack;
+        try
+        {
+            ack = JsonSerializer.Deserialize<AckPayload>(envelope.PayloadJson, ProtocolJson.PacketOptions);
+        }
+        catch (JsonException)
+        {
+            return new ControlSendOutcome(null, FriendOperationErrorCodes.DeliveryFailedOrTimeout, true, "응답 포맷을 해석할 수 없습니다.");
+        }
+
+        if (ack is null || ack.AckMessageId != messageId)
+        {
+            return new ControlSendOutcome(null, FriendOperationErrorCodes.DeliveryFailedOrTimeout, true, "응답 메시지 ID가 일치하지 않습니다.");
+        }
+
+        if (signatureKey is not null)
+        {
+            var hasSignature = !string.IsNullOrWhiteSpace(header.SignatureBase64);
+            var signatureValid = hasSignature && VerifyPlaintextSignature(envelope, signatureKey);
+            if (ack.Accepted)
+            {
+                if (!signatureValid)
+                {
+                    return new ControlSendOutcome(null, FriendOperationErrorCodes.InvalidAckSignature, false, "ACK 확인 서명 검증에 실패했습니다.");
+                }
+            }
+            else if (hasSignature)
+            {
+                if (!signatureValid)
+                {
+                    return new ControlSendOutcome(null, FriendOperationErrorCodes.InvalidAckSignature, false, "거부 ACK 서명 검증에 실패했습니다.");
+                }
+            }
+            else if (!allowUnsignedRejection)
+            {
+                return new ControlSendOutcome(null, FriendOperationErrorCodes.InvalidAckSignature, false, "서명되지 않은 ACK 응답입니다.");
+            }
+        }
+
+        if (!ack.Accepted)
+        {
+            var code = string.IsNullOrWhiteSpace(ack.ErrorCode)
+                ? FriendOperationErrorCodes.PairingRequestRejected
+                : ack.ErrorCode;
+            return new ControlSendOutcome(ack, code, FriendOperationErrorCodes.IsTransient(code), code);
+        }
+
+        return new ControlSendOutcome(ack, null, false);
     }
 
     internal static AckPayload? ReadVerifiedAck(

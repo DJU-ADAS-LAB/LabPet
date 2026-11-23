@@ -20,12 +20,15 @@ public partial class App : Application
 
     private Mutex? _singleInstanceMutex;
     private ServiceProvider? _serviceProvider;
+    private SocialCoordinatorService? _social;
+    private FriendMessageRouter? _messageRouter;
     private PetWindow? _petWindow;
     private SoloHubWindow? _soloHubWindow;
     private GameInviteCardWindow? _inviteCardWindow;
     private SocialWindow? _socialWindow;
     private EnvironmentGuideWindow? _guideWindow;
     private readonly Dictionary<string, VisitorPetWindow> _visitorWindows = new(StringComparer.OrdinalIgnoreCase);
+    private bool _isRepositioningVisitorBubbles;
 
     protected override async void OnStartup(StartupEventArgs e)
     {
@@ -132,6 +135,7 @@ public partial class App : Application
 
         // LAN 피어 중 더 높은 앱 버전이 감지되면 5분 주기를 기다리지 않고 즉시 업데이트 확인
         var social = _serviceProvider.GetRequiredService<SocialCoordinatorService>();
+        _social = social;
         social.NewerAppVersionDetected += (_, _) => updateService.TriggerImmediateCheckFromPeerHint();
 
         // 코인 게임 허브(초대 카드 · 말풍선 알림 · 수락 시 해당 게임 화면 직행)
@@ -150,10 +154,24 @@ public partial class App : Application
 
         _petWindow = _serviceProvider.GetRequiredService<PetWindow>();
         MainWindow = _petWindow;
+        _messageRouter = new FriendMessageRouter(
+            petId => _visitorWindows.TryGetValue(petId, out var visitor) ? visitor : null,
+            () => _petWindow);
+        social.FriendMessageReceived += OnSocialFriendMessageReceived;
         _petWindow.LocationChanged += (_, _) => RepositionInviteCard();
         _petWindow.SizeChanged += (_, _) => RepositionInviteCard();
         _petWindow.InitializeWithProfile(profile);
         _petWindow.Show();
+    }
+
+    private void OnSocialFriendMessageReceived(object? sender, ReceivedFriendMessage message)
+    {
+        if (Dispatcher.HasShutdownStarted || Dispatcher.HasShutdownFinished)
+        {
+            return;
+        }
+
+        Dispatcher.BeginInvoke(() => _messageRouter?.Route(message));
     }
 
     private void OnOpenCustomizationRequested(object? sender, EventArgs e)
@@ -332,8 +350,8 @@ public partial class App : Application
         var petVm = _serviceProvider.GetRequiredService<PetWindowViewModel>();
         if (_visitorWindows.TryGetValue(friend.PetId, out var existing))
         {
+            RemoveVisitorWindow(friend.PetId);
             existing.Close();
-            _visitorWindows.Remove(friend.PetId);
             petVm.ShowBubble($"{SocialCoordinatorService.FormatDisplayName(friend.OwnerName, friend.PetName)}(을)를 돌려보냈어요.", 2000);
             return;
         }
@@ -343,22 +361,76 @@ public partial class App : Application
             appearance,
             _serviceProvider.GetRequiredService<IPetMeshFactory>(),
             _serviceProvider.GetRequiredService<IAudioAnalyzer>(),
-            _serviceProvider.GetRequiredService<SocialCoordinatorService>());
+            _serviceProvider.GetRequiredService<SocialCoordinatorService>(),
+            GetOccupiedVisitorBubbleBounds,
+            RepositionOtherVisitorBubbles);
 
         visitor.ApplyDisplaySettings(petVm.PetScale, petVm.PetOpacity);
         visitor.PlaceBeside(_petWindow);
-        visitor.Closed += (_, _) =>
-        {
-            _visitorWindows.Remove(friend.PetId);
-            if (_socialWindow?.DataContext is SocialViewModel vm)
-            {
-                vm.RefreshLists();
-            }
-        };
+        visitor.Closing += (_, _) => RemoveVisitorWindow(friend.PetId);
+        visitor.Closed += (_, _) => RemoveVisitorWindow(friend.PetId);
 
         _visitorWindows[friend.PetId] = visitor;
         visitor.Show();
         visitor.ShowVisitorBubble("놀러 왔어!", 2200);
+    }
+
+    private void RemoveVisitorWindow(string petId)
+    {
+        if (!_visitorWindows.Remove(petId))
+        {
+            return;
+        }
+
+        if (_socialWindow?.DataContext is SocialViewModel vm)
+        {
+            vm.RefreshLists();
+        }
+
+        RepositionOtherVisitorBubbles();
+    }
+
+    private IReadOnlyList<Rect> GetOccupiedVisitorBubbleBounds(string excludePetId)
+    {
+        List<Rect>? bounds = null;
+        foreach (var (petId, visitor) in _visitorWindows)
+        {
+            if (string.Equals(petId, excludePetId, StringComparison.OrdinalIgnoreCase)
+                || !visitor.IsAvailableForMessages)
+            {
+                continue;
+            }
+
+            var rect = visitor.CurrentBubblePhysicalBounds;
+            if (!rect.IsEmpty)
+            {
+                bounds ??= [];
+                bounds.Add(rect);
+            }
+        }
+
+        return bounds ?? (IReadOnlyList<Rect>)[];
+    }
+
+    private void RepositionOtherVisitorBubbles()
+    {
+        if (_isRepositioningVisitorBubbles || _visitorWindows.Count == 0)
+        {
+            return;
+        }
+
+        _isRepositioningVisitorBubbles = true;
+        try
+        {
+            foreach (var visitor in _visitorWindows.Values.ToList())
+            {
+                visitor.RepositionBubblePopup();
+            }
+        }
+        finally
+        {
+            _isRepositioningVisitorBubbles = false;
+        }
     }
 
     private void SyncVisitorDisplaySettings(double scale, double opacity)
@@ -392,6 +464,14 @@ public partial class App : Application
 
     protected override void OnExit(ExitEventArgs e)
     {
+        if (_social is not null)
+        {
+            _social.FriendMessageReceived -= OnSocialFriendMessageReceived;
+            _social = null;
+        }
+
+        _messageRouter = null;
+
         CloseInviteCardWindow();
         _soloHubWindow?.Close();
 

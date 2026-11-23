@@ -3,8 +3,8 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:views="clr-namespace:LabPet.Client.Views"
         Title="LabPet · 놀러 온 친구"
-        Width="176"
-        Height="244"
+        Width="214"
+        Height="252"
         WindowStyle="None"
         AllowsTransparency="True"
         Background="Transparent"
@@ -51,43 +51,99 @@
         </Style>
     </Window.Resources>
 
-    <Grid Background="Transparent">
+    <Grid Background="Transparent" UseLayoutRounding="True" TextOptions.TextFormattingMode="Display">
         <Grid.RowDefinitions>
-            <RowDefinition Height="34" />
-            <RowDefinition Height="*" />
-            <RowDefinition Height="24" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition x:Name="VisitorNameplateRow" Height="28" />
         </Grid.RowDefinitions>
 
-        <!-- 상단 미니 말풍선 -->
-        <Border x:Name="VisitorBubble"
-                Grid.Row="0"
-                HorizontalAlignment="Center"
-                VerticalAlignment="Bottom"
-                Padding="9,4"
-                CornerRadius="11"
-                Background="#F5FFFFFF"
-                BorderBrush="#FFFFC2D4"
-                BorderThickness="1.2"
-                Visibility="Collapsed"
-                IsHitTestVisible="False"
-                Effect="{StaticResource SoftCardShadow}">
-            <TextBlock x:Name="VisitorBubbleText"
-                       FontSize="10.5"
-                       FontWeight="SemiBold"
-                       Foreground="#FF2E3440"
-                       TextAlignment="Center" />
-        </Border>
+        <!-- 방문 펫 상단 꼬리 말풍선 전용 Popup (창 크기를 바꾸지 않아 말풍선 높이 변화로 펫이 튀지 않음) -->
+        <Popup x:Name="VisitorBubblePopup"
+               PlacementTarget="{Binding ElementName=VisitorViewport}"
+               Placement="Custom"
+               AllowsTransparency="True"
+               StaysOpen="True"
+               PopupAnimation="None"
+               IsOpen="False">
+            <StackPanel x:Name="VisitorBubbleContent"
+                        Margin="10,10,10,4"
+                        HorizontalAlignment="Center"
+                        IsHitTestVisible="False"
+                        SizeChanged="VisitorBubbleContent_SizeChanged">
+                <!-- 친구 채팅 메시지 스택 (최대 5개, 오래된 순 위 → 최신 아래, 개별 만료) -->
+                <ItemsControl x:Name="VisitorChatItemsControl"
+                              Visibility="Collapsed"
+                              IsHitTestVisible="False">
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate>
+                            <Border Margin="0,0,0,4"
+                                    Padding="10,5"
+                                    CornerRadius="12"
+                                    Background="#FFFFFAFC"
+                                    BorderBrush="#FFF1BCD3"
+                                    BorderThickness="1.2"
+                                    HorizontalAlignment="Center"
+                                    Effect="{StaticResource SoftCardShadow}">
+                                <TextBlock Text="{Binding Text}"
+                                           FontSize="11.5"
+                                           FontWeight="Medium"
+                                           Foreground="#FF2E3440"
+                                           TextAlignment="Left"
+                                           TextWrapping="Wrap"
+                                           MaxWidth="196" />
+                            </Border>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
 
-        <!-- 친구 3D 펫 뷰포트 -->
+                <!-- 쓰다듬기·노래 따라하기 등 시스템 알림 (채팅 메시지와 별도 표시되어 서로 덮어쓰지 않음) -->
+                <Border x:Name="VisitorStatusBubble"
+                        HorizontalAlignment="Center"
+                        Margin="0,0,0,2"
+                        Padding="9,4"
+                        CornerRadius="11"
+                        Background="#F5FFFFFF"
+                        BorderBrush="#FFFFC2D4"
+                        BorderThickness="1.2"
+                        Visibility="Collapsed"
+                        IsHitTestVisible="False"
+                        Effect="{StaticResource SoftCardShadow}">
+                    <TextBlock x:Name="VisitorStatusBubbleText"
+                               FontSize="10.5"
+                               FontWeight="SemiBold"
+                               Foreground="#FF2E3440"
+                               TextAlignment="Center"
+                               TextWrapping="Wrap"
+                               MaxWidth="196" />
+                </Border>
+
+                <!-- 말풍선 하단 꼬리 -->
+                <Polygon x:Name="VisitorBubbleTail"
+                         Points="0,0 10,0 5,6"
+                         Fill="#FFFFFAFC"
+                         Stroke="#FFF1BCD3"
+                         StrokeThickness="1"
+                         HorizontalAlignment="Center"
+                         Margin="0,-2,0,0" />
+            </StackPanel>
+        </Popup>
+
+        <!-- 친구 3D 펫 뷰포트 (내 펫과 동일한 뷰포트 크기·카메라 투영 유지) -->
         <Viewport3D x:Name="VisitorViewport"
-                    Grid.Row="1"
+                    Grid.Row="0"
+                    Width="214"
+                    Height="224"
                     HorizontalAlignment="Center"
                     ClipToBounds="False"
+                    RenderOptions.BitmapScalingMode="HighQuality"
                     MouseEnter="VisitorSurface_MouseEnter"
                     MouseLeave="VisitorSurface_MouseLeave"
                     MouseLeftButtonDown="VisitorViewport_MouseLeftButtonDown"
                     MouseMove="VisitorViewport_MouseMove"
                     MouseLeftButtonUp="VisitorViewport_MouseLeftButtonUp">
+            <Viewport3D.CacheMode>
+                <BitmapCache RenderAtScale="1.5" />
+            </Viewport3D.CacheMode>
             <Viewport3D.ContextMenu>
                 <ContextMenu Opened="VisitorContextMenu_Opened">
                     <MenuItem Header="👋  쓰다듬기 보내기" Click="PetFriendMenu_Click" />
@@ -98,7 +154,7 @@
             </Viewport3D.ContextMenu>
 
             <Viewport3D.Camera>
-                <PerspectiveCamera Position="0,0.30,6.55"
+                <PerspectiveCamera Position="0,0.30,6.65"
                                    LookDirection="0,-0.02,-1"
                                    UpDirection="0,1,0"
                                    FieldOfView="36" />
@@ -110,7 +166,7 @@
 
         <!-- 수면(z -> Z -> Z) 플로팅 방울 애니메이션 오버레이 (닫기 버튼과 겹치지 않는 좌상단) -->
         <views:SleepZzzOverlay x:Name="VisitorSleepBadge"
-                               Grid.Row="1"
+                               Grid.Row="0"
                                FlipHorizontal="True"
                                HorizontalAlignment="Left"
                                VerticalAlignment="Top"
@@ -119,7 +175,7 @@
 
         <!-- 마우스 오버레이 시 우측 상단에 나타나는 돌려보내기(✕) 버튼 -->
         <Button x:Name="DismissButton"
-                Grid.Row="1"
+                Grid.Row="0"
                 Content="✕"
                 ToolTip="친구 돌려보내기"
                 Style="{StaticResource VisitorDismissButtonStyle}"
@@ -132,20 +188,24 @@
                 MouseLeave="VisitorSurface_MouseLeave"
                 Click="DismissMenu_Click" />
 
-        <!-- 하단 글래스 이름표 -->
+        <!-- 하단 글래스 이름표 (내 펫과 동일 위치·스타일) -->
         <Border x:Name="VisitorNameplate"
-                Grid.Row="2"
+                Grid.Row="1"
                 HorizontalAlignment="Center"
                 VerticalAlignment="Top"
-                Padding="9,2"
+                Padding="10,2"
                 CornerRadius="10"
                 Background="#DCFFFFFF"
                 BorderBrush="#FFE8ECF4"
                 BorderThickness="1"
                 IsHitTestVisible="False">
+            <Border.RenderTransform>
+                <TranslateTransform x:Name="VisitorNameplateOffset" />
+            </Border.RenderTransform>
             <TextBlock x:Name="VisitorNameText"
-                       FontSize="10"
+                       FontSize="10.5"
                        FontWeight="Bold"
+                       TextTrimming="CharacterEllipsis"
                        Foreground="#FF4B5563" />
         </Border>
     </Grid>

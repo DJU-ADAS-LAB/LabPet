@@ -11,6 +11,7 @@ using Xunit;
 
 namespace LabPet.Tests;
 
+[Collection("WpfUi")]
 public sealed class BlenderAssetPipelineTests
 {
     [Theory]
@@ -207,7 +208,7 @@ public sealed class BlenderAssetPipelineTests
     [Fact]
     public void PortraitRenderer_Caches72PxBitmapsWithBoundedLruCap()
     {
-        RunOnSta(() =>
+        WpfTestHost.Run(() =>
         {
             var factory = new BlenderAssetPetMeshFactory(new ProceduralPetMeshFactory());
             var renderer = new PetPortraitRenderer(factory);

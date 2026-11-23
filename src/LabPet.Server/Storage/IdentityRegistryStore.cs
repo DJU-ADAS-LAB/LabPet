@@ -36,11 +36,13 @@ public sealed class IdentityRegistryStore
 
     private readonly string _filePath;
     private readonly int _maxDeclaredFriendsPerPet;
+    private readonly ILogger<IdentityRegistryStore>? _logger;
     private readonly object _lock = new();
     private readonly RegistryDocument _doc;
 
-    public IdentityRegistryStore(ServerOptions options)
+    public IdentityRegistryStore(ServerOptions options, ILogger<IdentityRegistryStore>? logger = null)
     {
+        _logger = logger;
         var dataDir = string.IsNullOrWhiteSpace(options.DataDirectory)
             ? Path.Combine(AppContext.BaseDirectory, "data")
             : options.DataDirectory;
@@ -163,12 +165,12 @@ public sealed class IdentityRegistryStore
         }
     }
 
-    public void ApproveFriendship(string petA, string petB)
+    public bool ApproveFriendship(string petA, string petB)
     {
         if (string.IsNullOrWhiteSpace(petA) || string.IsNullOrWhiteSpace(petB)
             || string.Equals(petA, petB, StringComparison.OrdinalIgnoreCase))
         {
-            return;
+            return false;
         }
 
         var key = BuildPairKey(petA, petB);
@@ -177,11 +179,24 @@ public sealed class IdentityRegistryStore
             var changed = _doc.ApprovedFriendships.Add(key);
             changed |= AddDeclaredLocked(petA, petB);
             changed |= AddDeclaredLocked(petB, petA);
-            if (changed)
+            if (!changed)
             {
-                _doc.UpdatedAtUtc = DateTimeOffset.UtcNow;
-                SaveAtomicLocked();
+                _logger?.LogInformation("친구 관계 승인 확인(이미 등록됨): Stage=FriendshipRegistry, TotalPairs={TotalPairs}", _doc.ApprovedFriendships.Count);
+                return true;
             }
+
+            _doc.UpdatedAtUtc = DateTimeOffset.UtcNow;
+            var saved = SaveAtomicLocked();
+            if (saved)
+            {
+                _logger?.LogInformation("친구 관계 승인 저장 완료: Stage=FriendshipRegistry, TotalPairs={TotalPairs}", _doc.ApprovedFriendships.Count);
+            }
+            else
+            {
+                _logger?.LogWarning("친구 관계 승인 저장 실패(메모리 상태만 반영): Stage=FriendshipRegistry, ErrorCode=REGISTRY_SAVE_FAILED, TotalPairs={TotalPairs}", _doc.ApprovedFriendships.Count);
+            }
+
+            return saved;
         }
     }
 
@@ -363,7 +378,7 @@ public sealed class IdentityRegistryStore
         return new RegistryDocument();
     }
 
-    private void SaveAtomicLocked()
+    private bool SaveAtomicLocked()
     {
         var tmpPath = $"{_filePath}.{Guid.NewGuid():N}.tmp";
         var bakPath = _filePath + ".bak";
@@ -383,10 +398,12 @@ public sealed class IdentityRegistryStore
             }
 
             File.Move(tmpPath, _filePath, overwrite: true);
+            return true;
         }
-        catch
+        catch (Exception ex)
         {
-            // 저장 실패 시 임시 파일만 정리
+            _logger?.LogError(ex, "저장소 원자적 저장 실패: File={FileName}, ErrorCode=REGISTRY_SAVE_FAILED", FileName);
+            return false;
         }
         finally
         {

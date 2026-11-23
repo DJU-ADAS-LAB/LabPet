@@ -42,10 +42,21 @@ public interface ISocialTransport : IAsyncDisposable
 
     Task<bool> SendFriendRequestAsync(PeerSnapshot target, CancellationToken cancellationToken = default);
 
+    Task<FriendOperationResult> SendFriendRequestDetailedAsync(
+        PeerSnapshot target,
+        CancellationToken cancellationToken = default);
+
     Task<bool> RespondFriendRequestAsync(
         string requestId,
         bool accept,
         CancellationToken cancellationToken = default);
+
+    Task<FriendOperationResult> RespondFriendRequestDetailedAsync(
+        string requestId,
+        bool accept,
+        CancellationToken cancellationToken = default);
+
+    bool HasPendingOutgoingRequest(string peerPetId) => false;
 
     Task<bool> SendBubbleMessageAsync(FriendEntry friend, string message, CancellationToken cancellationToken = default);
     Task<bool> SendQuickReactionAsync(FriendEntry friend, string reactionId, CancellationToken cancellationToken = default);
@@ -71,7 +82,9 @@ public sealed class FriendRequestReceivedEventArgs(
     PetAppearance appearance,
     int level,
     string remoteIp,
-    int remoteTcpPort) : EventArgs
+    int remoteTcpPort,
+    PeerTransportKind transportKind = PeerTransportKind.Lan,
+    DateTimeOffset expiresAtUtc = default) : EventArgs
 {
     public string RequestId { get; } = requestId;
     public string RequesterPetId { get; } = requesterPetId;
@@ -81,6 +94,8 @@ public sealed class FriendRequestReceivedEventArgs(
     public int Level { get; } = level;
     public string RemoteIp { get; } = remoteIp;
     public int RemoteTcpPort { get; } = remoteTcpPort;
+    public PeerTransportKind TransportKind { get; } = transportKind;
+    public DateTimeOffset ExpiresAtUtc { get; } = expiresAtUtc == default ? DateTimeOffset.UtcNow.AddMinutes(3) : expiresAtUtc;
 }
 
 public sealed class FriendAcceptedEventArgs(
@@ -90,7 +105,9 @@ public sealed class FriendAcceptedEventArgs(
     PetAppearance appearance,
     string pairSecretBase64,
     string remoteIp,
-    int remoteTcpPort) : EventArgs
+    int remoteTcpPort,
+    string requestId = "",
+    bool isLocalAccepter = false) : EventArgs
 {
     public string AccepterPetId { get; } = accepterPetId;
     public string AccepterOwnerName { get; } = accepterOwnerName;
@@ -99,12 +116,15 @@ public sealed class FriendAcceptedEventArgs(
     public string PairSecretBase64 { get; } = pairSecretBase64;
     public string RemoteIp { get; } = remoteIp;
     public int RemoteTcpPort { get; } = remoteTcpPort;
+    public string RequestId { get; } = requestId;
+    public bool IsLocalAccepter { get; } = isLocalAccepter;
 }
 
-public sealed class FriendRejectedEventArgs(string responderPetId, string? reason) : EventArgs
+public sealed class FriendRejectedEventArgs(string responderPetId, string? reason, string requestId = "") : EventArgs
 {
     public string ResponderPetId { get; } = responderPetId;
     public string? Reason { get; } = reason;
+    public string RequestId { get; } = requestId;
 }
 
 public sealed class BubbleMessageReceivedEventArgs(
@@ -149,9 +169,16 @@ public sealed class GameEventReceivedEventArgs(string senderPetId, GameEventPayl
     public GameEventPayload Payload { get; } = payload;
 }
 
-public sealed class TransportErrorEventArgs(string operation, string message, Exception? exception = null) : EventArgs
+public sealed class TransportErrorEventArgs(
+    string operation,
+    string message,
+    Exception? exception = null,
+    string? errorCode = null,
+    PeerTransportKind? route = null) : EventArgs
 {
     public string Operation { get; } = operation;
     public string Message { get; } = message;
     public Exception? Exception { get; } = exception;
+    public string? ErrorCode { get; } = errorCode;
+    public PeerTransportKind? Route { get; } = route;
 }

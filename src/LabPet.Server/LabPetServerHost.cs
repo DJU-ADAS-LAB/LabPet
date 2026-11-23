@@ -15,9 +15,13 @@ namespace LabPet.Server;
 /// </summary>
 public static class LabPetServerHost
 {
-    public static WebApplication BuildApplication(ServerOptions? overrideOptions = null, string[]? args = null)
+    public static WebApplication BuildApplication(
+        ServerOptions? overrideOptions = null,
+        string[]? args = null,
+        Action<ILoggingBuilder>? configureLogging = null)
     {
         var builder = WebApplication.CreateBuilder(args ?? []);
+        configureLogging?.Invoke(builder.Logging);
 
         var options = overrideOptions ?? new ServerOptions();
         if (overrideOptions is null)
@@ -57,6 +61,7 @@ public static class LabPetServerHost
             json.PayloadSerializerOptions.PropertyNameCaseInsensitive = true;
         });
 
+        var serverBootId = Guid.NewGuid().ToString("N");
         var app = builder.Build();
 
         app.UseForwardedHeaders(new ForwardedHeadersOptions
@@ -73,6 +78,7 @@ public static class LabPetServerHost
             {
                 status = "ok",
                 service = "LabPet.Server",
+                bootId = serverBootId,
                 onlinePets = presence.OnlinePetCount,
                 activeConnections = presence.ActiveConnectionCount,
                 utcNow = DateTimeOffset.UtcNow

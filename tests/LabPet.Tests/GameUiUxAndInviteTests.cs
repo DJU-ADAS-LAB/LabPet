@@ -27,6 +27,7 @@ namespace LabPet.Tests;
 internal static class WpfTestHost
 {
     private static readonly object InitLock = new();
+    private static readonly SemaphoreSlim RunGate = new(1, 1);
     private static Dispatcher? _dispatcher;
 
     private static Dispatcher EnsureDispatcher()
@@ -87,22 +88,30 @@ internal static class WpfTestHost
     public static void Run(Action action)
         => EnsureDispatcher().Invoke(action);
 
-    public static Task RunAsync(Func<Task> func)
+    public static async Task RunAsync(Func<Task> func)
     {
-        var tcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        EnsureDispatcher().BeginInvoke(async () =>
+        await RunGate.WaitAsync().ConfigureAwait(false);
+        try
         {
-            try
+            var tcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            _ = EnsureDispatcher().BeginInvoke(async () =>
             {
-                await func();
-                tcs.SetResult();
-            }
-            catch (Exception ex)
-            {
-                tcs.SetException(ex);
-            }
-        });
-        return tcs.Task;
+                try
+                {
+                    await func();
+                    tcs.SetResult();
+                }
+                catch (Exception ex)
+                {
+                    tcs.SetException(ex);
+                }
+            });
+            await tcs.Task.ConfigureAwait(false);
+        }
+        finally
+        {
+            RunGate.Release();
+        }
     }
 
     public static Task FlushAsync()
@@ -113,6 +122,12 @@ internal static class WpfTestHost
     }
 }
 
+[CollectionDefinition("WpfUi", DisableParallelization = true)]
+public sealed class WpfUiTestCollection
+{
+}
+
+[Collection("WpfUi")]
 public sealed class GameUiUxAndInviteTests : IAsyncLifetime
 {
     private readonly string _dataDir = Path.Combine(Path.GetTempPath(), "LabPet_GameUx_" + Guid.NewGuid().ToString("N"));

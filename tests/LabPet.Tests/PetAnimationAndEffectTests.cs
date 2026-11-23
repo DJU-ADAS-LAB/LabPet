@@ -7,6 +7,7 @@ using Xunit;
 
 namespace LabPet.Tests;
 
+[Collection("WpfUi")]
 public sealed class PetAnimationAndEffectTests
 {
     [Fact]

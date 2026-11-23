@@ -36,13 +36,13 @@ public sealed class GcpSignalRTransport : ISocialTransport
             => Delays[Math.Min((int)retryContext.PreviousRetryCount, Delays.Length - 1)];
     }
 
-    private sealed class OutgoingPairing(string peerId) : IDisposable
+    private sealed class OutgoingPairing(string peerId, DateTimeOffset expiresAt) : IDisposable
     {
         public string PeerId { get; } = peerId;
         public ECDiffieHellman Key { get; } = ECDiffieHellman.Create(ECCurve.NamedCurves.nistP256);
         public string PublicKey => Convert.ToBase64String(Key.ExportSubjectPublicKeyInfo());
         public string RequestFingerprint { get; set; } = string.Empty;
-        public DateTimeOffset ExpiresAt { get; } = DateTimeOffset.UtcNow.AddMinutes(3);
+        public DateTimeOffset ExpiresAt { get; } = expiresAt;
         public string? ConfirmedPublicKey { get; private set; }
         public string? ConfirmationKey { get; private set; }
 
@@ -56,20 +56,26 @@ public sealed class GcpSignalRTransport : ISocialTransport
         public void Dispose() => Key.Dispose();
     }
 
-    private sealed class IncomingPairing(FriendRequestReceivedEventArgs request, string publicKey, string fingerprint) : IDisposable
+    private sealed class IncomingPairing(FriendRequestReceivedEventArgs request, string publicKey, string fingerprint, DateTimeOffset expiresAt) : IDisposable
     {
         public FriendRequestReceivedEventArgs Request { get; } = request;
         public string PublicKey { get; } = publicKey;
         public string RequestFingerprint { get; } = fingerprint;
         public ECDiffieHellman? ReplyKey { get; set; }
         public bool IsResponding { get; set; }
-        public DateTimeOffset ExpiresAt { get; } = DateTimeOffset.UtcNow.AddMinutes(3);
+        public DateTimeOffset ExpiresAt { get; } = expiresAt;
         public void Dispose() => ReplyKey?.Dispose();
     }
 
     private const int MinRemoteMusicPublishIntervalMs = 66;
+    private const int MaxPendingPairings = 32;
+    private const int MaxExpiredRequestTombstones = 256;
+    private static readonly TimeSpan ExpiredTombstoneLifetime = TimeSpan.FromMinutes(10);
     private static readonly TimeSpan InitialConnectTimeout = TimeSpan.FromSeconds(4);
     private static readonly TimeSpan BackgroundRetryInterval = TimeSpan.FromSeconds(20);
+
+    internal TimeSpan PairingLifetime { get; set; } = TimeSpan.FromMinutes(3);
+    internal TimeSpan RelayInvokeTimeout { get; set; } = TimeSpan.FromSeconds(10);
 
     private readonly ServerConnectionOptions _options;
     private readonly DeviceIdentityStore _identityStore;
@@ -85,6 +91,8 @@ public sealed class GcpSignalRTransport : ISocialTransport
     private readonly object _pairingLock = new();
     private readonly Dictionary<string, OutgoingPairing> _outgoingPairings = new(StringComparer.Ordinal);
     private readonly Dictionary<string, IncomingPairing> _incomingPairings = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, DateTimeOffset> _expiredOutgoingRequestIds = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, DateTimeOffset> _expiredIncomingRequestIds = new(StringComparer.Ordinal);
     private readonly SemaphoreSlim _tokenLock = new(1, 1);
 
     private CancellationTokenSource? _cts;
@@ -98,6 +106,9 @@ public sealed class GcpSignalRTransport : ISocialTransport
     private string? _cachedAccessToken;
     private DateTimeOffset _tokenExpiresAtUtc;
     private Uri? _baseUri;
+    private volatile string? _lastAuthErrorCode;
+    private volatile string? _lastAuthErrorMessage;
+    private volatile string? _lastServerBootId;
 
     private long _lastRemoteMusicSentTickMs;
     private int _musicPublishInFlight;
@@ -202,6 +213,9 @@ public sealed class GcpSignalRTransport : ISocialTransport
             _deviceKey = null;
             _cachedAccessToken = null;
             _tokenExpiresAtUtc = DateTimeOffset.MinValue;
+            _lastAuthErrorCode = null;
+            _lastAuthErrorMessage = null;
+            _lastServerBootId = null;
             _peers.Clear();
             _musicSubscribers.Clear();
             _musicReceiveWindows.Clear();
@@ -212,6 +226,8 @@ public sealed class GcpSignalRTransport : ISocialTransport
                 foreach (var p in _incomingPairings.Values) p.Dispose();
                 _outgoingPairings.Clear();
                 _incomingPairings.Clear();
+                _expiredOutgoingRequestIds.Clear();
+                _expiredIncomingRequestIds.Clear();
             }
         }
 
@@ -325,13 +341,49 @@ public sealed class GcpSignalRTransport : ISocialTransport
             .ThenBy(p => p.PetName, StringComparer.OrdinalIgnoreCase)
             .ToList();
 
-    public async Task<bool> SendFriendRequestAsync(PeerSnapshot target, CancellationToken cancellationToken = default)
+    internal bool IsFriend(string peerPetId)
+        => !string.IsNullOrWhiteSpace(peerPetId) && _friendsByPetId.ContainsKey(peerPetId);
+
+    public bool HasPendingOutgoingRequest(string peerPetId)
     {
-        var hub = _hub;
-        if (!IsRunning || hub is not { State: HubConnectionState.Connected }
-            || target.RequiresUpdate || string.IsNullOrWhiteSpace(target.PetId))
+        if (string.IsNullOrWhiteSpace(peerPetId) || _friendsByPetId.ContainsKey(peerPetId))
         {
             return false;
+        }
+
+        lock (_pairingLock)
+        {
+            PrunePairings(DateTimeOffset.UtcNow);
+            return _outgoingPairings.Values.Any(p => p.ConfirmationKey is null && SamePetId(p.PeerId, peerPetId));
+        }
+    }
+
+    public async Task<bool> SendFriendRequestAsync(PeerSnapshot target, CancellationToken cancellationToken = default)
+        => (await SendFriendRequestDetailedAsync(target, cancellationToken).ConfigureAwait(false)).Succeeded;
+
+    public async Task<FriendOperationResult> SendFriendRequestDetailedAsync(PeerSnapshot target, CancellationToken cancellationToken = default)
+    {
+        var hub = _hub;
+        if (!IsRunning || hub is not { State: HubConnectionState.Connected })
+        {
+            var errCode = _lastAuthErrorCode ?? FriendOperationErrorCodes.GcpNotConnected;
+            var detail = _lastAuthErrorMessage ?? "GCP 중계 서버에 연결되어 있지 않습니다.";
+            return FriendOperationResult.Fail(
+                FriendOperationStage.Validation,
+                errCode,
+                FriendOperationErrorCodes.IsTransient(errCode),
+                PeerTransportKind.GcpRelay,
+                detail: detail);
+        }
+
+        if (target.RequiresUpdate)
+        {
+            return FriendOperationResult.Fail(FriendOperationStage.Validation, FriendOperationErrorCodes.ProtocolMismatch, false, PeerTransportKind.GcpRelay);
+        }
+
+        if (string.IsNullOrWhiteSpace(target.PetId))
+        {
+            return FriendOperationResult.Fail(FriendOperationStage.Validation, FriendOperationErrorCodes.InvalidRequest, false, PeerTransportKind.GcpRelay);
         }
 
         var requestId = Guid.NewGuid().ToString("N");
@@ -340,14 +392,24 @@ public sealed class GcpSignalRTransport : ISocialTransport
 
         lock (_pairingLock)
         {
-            PrunePairings(DateTimeOffset.UtcNow);
-            if (_friendsByPetId.ContainsKey(target.PetId) || _outgoingPairings.Count >= 32
-                || _outgoingPairings.Values.Any(p => SamePetId(p.PeerId, target.PetId)))
+            var now = DateTimeOffset.UtcNow;
+            PrunePairings(now);
+            if (_friendsByPetId.ContainsKey(target.PetId))
             {
-                return false;
+                return FriendOperationResult.Fail(FriendOperationStage.Validation, FriendOperationErrorCodes.AlreadyFriends, false, PeerTransportKind.GcpRelay);
             }
 
-            var pending = new OutgoingPairing(target.PetId);
+            if (_outgoingPairings.Values.Any(p => SamePetId(p.PeerId, target.PetId)))
+            {
+                return FriendOperationResult.Fail(FriendOperationStage.Validation, FriendOperationErrorCodes.DuplicatePendingRequest, false, PeerTransportKind.GcpRelay);
+            }
+
+            if (_outgoingPairings.Count >= MaxPendingPairings)
+            {
+                return FriendOperationResult.Fail(FriendOperationStage.Validation, FriendOperationErrorCodes.PendingCapacityFull, true, PeerTransportKind.GcpRelay);
+            }
+
+            var pending = new OutgoingPairing(target.PetId, now + PairingLifetime);
             payload = new FriendRequestPayload
             {
                 RequestId = requestId,
@@ -362,26 +424,52 @@ public sealed class GcpSignalRTransport : ISocialTransport
             _outgoingPairings.Add(requestId, pending);
         }
 
-        var ack = await SendControlRelayAsync(target.PetId, PacketType.FriendRequest, payload, null, cancellationToken)
-            .ConfigureAwait(false);
-        if (ack is { Accepted: true })
+        LanP2pTransport.ControlSendOutcome outcome;
+        try
         {
-            return true;
+            outcome = await SendControlRelayWithOutcomeAsync(target.PetId, PacketType.FriendRequest, payload, null, cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            CleanupOutgoingPairing(requestId);
+            return FriendOperationResult.Fail(FriendOperationStage.Sending, FriendOperationErrorCodes.NetworkError, true, PeerTransportKind.GcpRelay, requestId, ex.Message);
         }
 
-        lock (_pairingLock)
+        if (outcome.VerifiedAck is { Accepted: true })
         {
-            if (_outgoingPairings.Remove(requestId, out var pending))
-            {
-                pending.Dispose();
-            }
+            return FriendOperationResult.Ok(FriendOperationStage.Completed, PeerTransportKind.GcpRelay, requestId);
         }
 
-        return false;
+        CleanupOutgoingPairing(requestId);
+        var errorCode = outcome.ErrorCode ?? FriendOperationErrorCodes.DeliveryFailedOrTimeout;
+        var stage = errorCode is FriendOperationErrorCodes.NetworkError or FriendOperationErrorCodes.GcpNotConnected or FriendOperationErrorCodes.Cancelled
+            ? FriendOperationStage.Sending
+            : errorCode == FriendOperationErrorCodes.InvalidAckSignature
+                ? FriendOperationStage.AckVerification
+                : FriendOperationStage.RemoteReceipt;
+
+        return FriendOperationResult.Fail(stage, errorCode, outcome.IsTransient, PeerTransportKind.GcpRelay, requestId, outcome.Detail);
     }
 
     public async Task<bool> RespondFriendRequestAsync(string requestId, bool accept, CancellationToken cancellationToken = default)
+        => (await RespondFriendRequestDetailedAsync(requestId, accept, cancellationToken).ConfigureAwait(false)).Succeeded;
+
+    public async Task<FriendOperationResult> RespondFriendRequestDetailedAsync(string requestId, bool accept, CancellationToken cancellationToken = default)
     {
+        var hub = _hub;
+        if (!IsRunning || hub is not { State: HubConnectionState.Connected })
+        {
+            var errCode = _lastAuthErrorCode ?? FriendOperationErrorCodes.GcpNotConnected;
+            return FriendOperationResult.Fail(
+                FriendOperationStage.Validation,
+                errCode,
+                FriendOperationErrorCodes.IsTransient(errCode),
+                PeerTransportKind.GcpRelay,
+                requestId,
+                _lastAuthErrorMessage);
+        }
+
         IncomingPairing pending;
         string? publicKey = null;
         (string ConfirmationKey, string FriendKey)? keys = null;
@@ -389,10 +477,24 @@ public sealed class GcpSignalRTransport : ISocialTransport
         lock (_pairingLock)
         {
             PrunePairings(DateTimeOffset.UtcNow);
-            if (!_incomingPairings.TryGetValue(requestId, out var found) || found.IsResponding
-                || _friendsByPetId.ContainsKey(found.Request.RequesterPetId))
+            if (!_incomingPairings.TryGetValue(requestId, out var found))
             {
-                return false;
+                var missingCode = _expiredIncomingRequestIds.ContainsKey(requestId)
+                    ? FriendOperationErrorCodes.PairingRequestExpired
+                    : FriendOperationErrorCodes.PairingRequestUnknown;
+                return FriendOperationResult.Fail(FriendOperationStage.Validation, missingCode, false, PeerTransportKind.GcpRelay, requestId);
+            }
+
+            if (found.IsResponding)
+            {
+                return FriendOperationResult.Fail(FriendOperationStage.Validation, FriendOperationErrorCodes.RequestInProgress, false, PeerTransportKind.GcpRelay, requestId);
+            }
+
+            if (_friendsByPetId.ContainsKey(found.Request.RequesterPetId))
+            {
+                _incomingPairings.Remove(requestId);
+                found.Dispose();
+                return FriendOperationResult.Fail(FriendOperationStage.Validation, FriendOperationErrorCodes.AlreadyFriends, false, PeerTransportKind.GcpRelay, requestId);
             }
 
             pending = found;
@@ -411,7 +513,9 @@ public sealed class GcpSignalRTransport : ISocialTransport
                     pending.RequestFingerprint);
                 if (keys is null)
                 {
-                    return false;
+                    _incomingPairings.Remove(requestId);
+                    pending.Dispose();
+                    return FriendOperationResult.Fail(FriendOperationStage.Validation, FriendOperationErrorCodes.InvalidPairingRequest, false, PeerTransportKind.GcpRelay, requestId);
                 }
             }
 
@@ -421,41 +525,70 @@ public sealed class GcpSignalRTransport : ISocialTransport
         var request = pending.Request;
         var presence = _localPresence;
 
-        AckPayload? ack;
-        if (keys is { } pairKeys)
+        LanP2pTransport.ControlSendOutcome outcome;
+        try
         {
-            var acceptPayload = new FriendAcceptPayload
+            if (keys is { } pairKeys)
             {
-                RequestId = requestId,
-                PublicKey = publicKey!,
-                TcpPort = ProtocolConstants.TcpControlPort,
-                AccepterOwnerName = presence.OwnerName,
-                AccepterName = presence.PetName,
-                Appearance = presence.Appearance.Clone()
-            };
-            ack = await SendControlRelayAsync(
-                request.RequesterPetId, PacketType.FriendAccept, acceptPayload, null, cancellationToken, pairKeys.ConfirmationKey)
-                .ConfigureAwait(false);
+                var acceptPayload = new FriendAcceptPayload
+                {
+                    RequestId = requestId,
+                    PublicKey = publicKey!,
+                    TcpPort = ProtocolConstants.TcpControlPort,
+                    AccepterOwnerName = presence.OwnerName,
+                    AccepterName = presence.PetName,
+                    Appearance = presence.Appearance.Clone()
+                };
+                outcome = await SendControlRelayWithOutcomeAsync(
+                    request.RequesterPetId, PacketType.FriendAccept, acceptPayload, null, cancellationToken, pairKeys.ConfirmationKey)
+                    .ConfigureAwait(false);
+            }
+            else
+            {
+                var rejectPayload = new FriendRejectPayload { RequestId = requestId, Reason = "rejected_by_user" };
+                outcome = await SendControlRelayWithOutcomeAsync(
+                    request.RequesterPetId, PacketType.FriendReject, rejectPayload, null, cancellationToken)
+                    .ConfigureAwait(false);
+            }
         }
-        else
+        catch (Exception ex)
         {
-            var rejectPayload = new FriendRejectPayload { RequestId = requestId, Reason = "rejected_by_user" };
-            ack = await SendControlRelayAsync(
-                request.RequesterPetId, PacketType.FriendReject, rejectPayload, null, cancellationToken)
-                .ConfigureAwait(false);
+            outcome = new LanP2pTransport.ControlSendOutcome(null, FriendOperationErrorCodes.NetworkError, true, ex.Message);
+        }
+        finally
+        {
+            lock (_pairingLock)
+            {
+                pending.IsResponding = false;
+            }
         }
 
         lock (_pairingLock)
         {
             if (!_incomingPairings.TryGetValue(requestId, out var current) || !ReferenceEquals(current, pending))
             {
-                return false;
+                var lostCode = _expiredIncomingRequestIds.ContainsKey(requestId)
+                    ? FriendOperationErrorCodes.PairingRequestExpired
+                    : FriendOperationErrorCodes.PairingRequestUnknown;
+                return FriendOperationResult.Fail(FriendOperationStage.AckVerification, lostCode, false, PeerTransportKind.GcpRelay, requestId);
             }
 
-            pending.IsResponding = false;
-            if (ack is not { Accepted: true })
+            if (outcome.VerifiedAck is not { Accepted: true })
             {
-                return false;
+                var errCode = outcome.ErrorCode ?? FriendOperationErrorCodes.DeliveryFailedOrTimeout;
+                if (!outcome.IsTransient && errCode != FriendOperationErrorCodes.Cancelled)
+                {
+                    _incomingPairings.Remove(requestId);
+                    pending.Dispose();
+                }
+
+                var stage = errCode is FriendOperationErrorCodes.NetworkError or FriendOperationErrorCodes.GcpNotConnected or FriendOperationErrorCodes.Cancelled
+                    ? FriendOperationStage.Sending
+                    : errCode is FriendOperationErrorCodes.InvalidAckSignature or FriendOperationErrorCodes.PairingConfirmationFailed
+                        ? FriendOperationStage.AckVerification
+                        : FriendOperationStage.RemoteReceipt;
+
+                return FriendOperationResult.Fail(stage, errCode, outcome.IsTransient, PeerTransportKind.GcpRelay, requestId, outcome.Detail);
             }
 
             _incomingPairings.Remove(requestId);
@@ -464,17 +597,32 @@ public sealed class GcpSignalRTransport : ISocialTransport
 
         if (keys is { } confirmedKeys)
         {
-            FriendAccepted?.Invoke(this, new FriendAcceptedEventArgs(
+            var acceptedArgs = new FriendAcceptedEventArgs(
                 request.RequesterPetId,
                 request.RequesterOwnerName,
                 request.RequesterName,
                 request.Appearance,
                 confirmedKeys.FriendKey,
                 "GCP",
-                ProtocolConstants.TcpControlPort));
+                ProtocolConstants.TcpControlPort,
+                requestId,
+                isLocalAccepter: true);
+            FriendAccepted?.Invoke(this, acceptedArgs);
+            return FriendOperationResult.Ok(FriendOperationStage.LocalPersistence, PeerTransportKind.GcpRelay, requestId, acceptedArgs);
         }
 
-        return true;
+        return FriendOperationResult.Ok(FriendOperationStage.Completed, PeerTransportKind.GcpRelay, requestId);
+    }
+
+    private void CleanupOutgoingPairing(string requestId)
+    {
+        lock (_pairingLock)
+        {
+            if (_outgoingPairings.Remove(requestId, out var pending))
+            {
+                pending.Dispose();
+            }
+        }
     }
 
     public async Task<bool> SendBubbleMessageAsync(FriendEntry friend, string message, CancellationToken cancellationToken = default)
@@ -643,6 +791,14 @@ public sealed class GcpSignalRTransport : ISocialTransport
                 }
             });
 
+        hub.Reconnecting += _ =>
+        {
+            _peers.Clear();
+            _musicSubscribers.Clear();
+            RaisePeersChanged();
+            return Task.CompletedTask;
+        };
+
         hub.Reconnected += async _ =>
         {
             var token = _cts?.Token ?? CancellationToken.None;
@@ -672,7 +828,9 @@ public sealed class GcpSignalRTransport : ISocialTransport
         }
         catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested)
         {
-            TransportError?.Invoke(this, new TransportErrorEventArgs("GcpConnect", ex.Message, ex));
+            var errCode = _lastAuthErrorCode ?? FriendOperationErrorCodes.GcpNotConnected;
+            var detail = _lastAuthErrorMessage ?? ex.Message;
+            TransportError?.Invoke(this, new TransportErrorEventArgs("GcpConnect", detail, ex, errCode, PeerTransportKind.GcpRelay));
             return false;
         }
     }
@@ -705,13 +863,69 @@ public sealed class GcpSignalRTransport : ISocialTransport
     {
         try
         {
+            await RefreshServerBootInstanceAsync(ct).ConfigureAwait(false);
             var list = await hub.InvokeAsync<List<RemoteFriendStateDto>>(
                 SocialHubConstants.RegisterPresenceMethod, BuildPresenceUpdate(), ct).ConfigureAwait(false);
             ReplaceAllRemotePeers(list);
         }
         catch (Exception ex)
         {
-            TransportError?.Invoke(this, new TransportErrorEventArgs("GcpRegisterPresence", ex.Message, ex));
+            TransportError?.Invoke(this, new TransportErrorEventArgs(
+                "GcpRegisterPresence", ex.Message, ex, FriendOperationErrorCodes.NetworkError, PeerTransportKind.GcpRelay));
+        }
+    }
+
+    private async Task RefreshServerBootInstanceAsync(CancellationToken ct)
+    {
+        if (_baseUri is null)
+        {
+            return;
+        }
+
+        try
+        {
+            using var client = _httpHandlerFactory is not null
+                ? new HttpClient(_httpHandlerFactory(), disposeHandler: true) { BaseAddress = _baseUri }
+                : new HttpClient { BaseAddress = _baseUri };
+            client.Timeout = TimeSpan.FromSeconds(2);
+
+            var res = await client.GetAsync(SocialHubConstants.HealthPath, ct).ConfigureAwait(false);
+            if (!res.IsSuccessStatusCode)
+            {
+                return;
+            }
+
+            var json = await res.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
+            using var doc = JsonDocument.Parse(json);
+            if (!doc.RootElement.TryGetProperty("bootId", out var bootProp) || bootProp.ValueKind != JsonValueKind.String)
+            {
+                return;
+            }
+
+            var newBootId = bootProp.GetString();
+            if (string.IsNullOrWhiteSpace(newBootId))
+            {
+                return;
+            }
+
+            var prev = _lastServerBootId;
+            _lastServerBootId = newBootId;
+            if (prev is not null && !string.Equals(prev, newBootId, StringComparison.Ordinal))
+            {
+                // 서버 재시작으로 인메모리 대기 요청이 초기화되었으므로 미완료 발신 요청을 정리해 재신청이 가능하게 한다.
+                lock (_pairingLock)
+                {
+                    foreach (var kv in _outgoingPairings.Where(kv => kv.Value.ConfirmationKey is null).ToArray())
+                    {
+                        _outgoingPairings.Remove(kv.Key);
+                        kv.Value.Dispose();
+                    }
+                }
+            }
+        }
+        catch
+        {
+            // /health 일시 조회 실패는 프레즌스 등록 흐름을 막지 않음
         }
     }
 
@@ -743,6 +957,10 @@ public sealed class GcpSignalRTransport : ISocialTransport
 
             if (_baseUri is null || _deviceKey is null || string.IsNullOrEmpty(_devicePublicKeyBase64))
             {
+                _lastAuthErrorCode = FriendOperationErrorCodes.AuthFailed;
+                _lastAuthErrorMessage = "기기 인증 키가 준비되지 않았습니다.";
+                TransportError?.Invoke(this, new TransportErrorEventArgs(
+                    "GcpAuth", _lastAuthErrorMessage, null, _lastAuthErrorCode, PeerTransportKind.GcpRelay));
                 return null;
             }
 
@@ -763,6 +981,12 @@ public sealed class GcpSignalRTransport : ISocialTransport
 
             if (!challengeRes.IsSuccessStatusCode)
             {
+                var errCode = await TryReadServerErrorCodeAsync(challengeRes, ct).ConfigureAwait(false)
+                    ?? FriendOperationErrorCodes.AuthFailed;
+                _lastAuthErrorCode = errCode;
+                _lastAuthErrorMessage = $"GCP 인증 챌린지 요청 실패 ({(int)challengeRes.StatusCode} / {errCode})";
+                TransportError?.Invoke(this, new TransportErrorEventArgs(
+                    "GcpAuth", _lastAuthErrorMessage, null, errCode, PeerTransportKind.GcpRelay));
                 return null;
             }
 
@@ -770,6 +994,10 @@ public sealed class GcpSignalRTransport : ISocialTransport
                 ProtocolJson.PacketOptions, ct).ConfigureAwait(false);
             if (challenge is null || string.IsNullOrEmpty(challenge.Nonce))
             {
+                _lastAuthErrorCode = FriendOperationErrorCodes.AuthFailed;
+                _lastAuthErrorMessage = "GCP 서버 인증 챌린지 응답이 비어 있습니다.";
+                TransportError?.Invoke(this, new TransportErrorEventArgs(
+                    "GcpAuth", _lastAuthErrorMessage, null, _lastAuthErrorCode, PeerTransportKind.GcpRelay));
                 return null;
             }
 
@@ -796,6 +1024,12 @@ public sealed class GcpSignalRTransport : ISocialTransport
 
             if (!tokenRes.IsSuccessStatusCode)
             {
+                var errCode = await TryReadServerErrorCodeAsync(tokenRes, ct).ConfigureAwait(false)
+                    ?? FriendOperationErrorCodes.AuthFailed;
+                _lastAuthErrorCode = errCode;
+                _lastAuthErrorMessage = $"GCP 기기 인증 토큰 발급 거부 ({(int)tokenRes.StatusCode} / {errCode})";
+                TransportError?.Invoke(this, new TransportErrorEventArgs(
+                    "GcpAuth", _lastAuthErrorMessage, null, errCode, PeerTransportKind.GcpRelay));
                 return null;
             }
 
@@ -803,21 +1037,58 @@ public sealed class GcpSignalRTransport : ISocialTransport
                 ProtocolJson.PacketOptions, ct).ConfigureAwait(false);
             if (auth is null || string.IsNullOrWhiteSpace(auth.AccessToken))
             {
+                _lastAuthErrorCode = FriendOperationErrorCodes.AuthFailed;
+                _lastAuthErrorMessage = "GCP 서버에서 빈 액세스 토큰을 반환했습니다.";
+                TransportError?.Invoke(this, new TransportErrorEventArgs(
+                    "GcpAuth", _lastAuthErrorMessage, null, _lastAuthErrorCode, PeerTransportKind.GcpRelay));
                 return null;
             }
 
             _cachedAccessToken = auth.AccessToken;
             _tokenExpiresAtUtc = auth.ExpiresAtUtc;
+            _lastAuthErrorCode = null;
+            _lastAuthErrorMessage = null;
             return _cachedAccessToken;
         }
-        catch
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
+            return null;
+        }
+        catch (Exception ex)
+        {
+            _lastAuthErrorCode = FriendOperationErrorCodes.NetworkError;
+            _lastAuthErrorMessage = ex.Message;
+            TransportError?.Invoke(this, new TransportErrorEventArgs(
+                "GcpAuth", $"GCP 인증 서버 통신 오류: {ex.Message}", ex, FriendOperationErrorCodes.NetworkError, PeerTransportKind.GcpRelay));
             return null;
         }
         finally
         {
             _tokenLock.Release();
         }
+    }
+
+    private static async Task<string?> TryReadServerErrorCodeAsync(HttpResponseMessage response, CancellationToken ct)
+    {
+        try
+        {
+            var raw = await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
+            if (string.IsNullOrWhiteSpace(raw))
+            {
+                return null;
+            }
+
+            using var doc = JsonDocument.Parse(raw);
+            if (doc.RootElement.TryGetProperty("error", out var errProp) && errProp.ValueKind == JsonValueKind.String)
+            {
+                return errProp.GetString();
+            }
+        }
+        catch
+        {
+        }
+
+        return null;
     }
 
     private Task<bool> SendEncryptedFriendPacketAsync<TPayload>(
@@ -851,10 +1122,25 @@ public sealed class GcpSignalRTransport : ISocialTransport
         CancellationToken ct,
         string? confirmationKey = null)
     {
+        var outcome = await SendControlRelayWithOutcomeAsync(
+            targetPetId, packetType, payload, pairSecretBase64, ct, confirmationKey).ConfigureAwait(false);
+        return outcome.VerifiedAck;
+    }
+
+    private async Task<LanP2pTransport.ControlSendOutcome> SendControlRelayWithOutcomeAsync<TPayload>(
+        string targetPetId,
+        PacketType packetType,
+        TPayload payload,
+        string? pairSecretBase64,
+        CancellationToken ct,
+        string? confirmationKey = null)
+    {
         var hub = _hub;
         if (!IsRunning || hub is not { State: HubConnectionState.Connected })
         {
-            return null;
+            var errCode = _lastAuthErrorCode ?? FriendOperationErrorCodes.GcpNotConnected;
+            var detail = _lastAuthErrorMessage ?? "GCP 중계 서버에 연결되어 있지 않습니다.";
+            return new LanP2pTransport.ControlSendOutcome(null, errCode, FriendOperationErrorCodes.IsTransient(errCode), detail);
         }
 
         try
@@ -900,26 +1186,69 @@ public sealed class GcpSignalRTransport : ISocialTransport
                 }
             }
 
+            using var invokeTimeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            invokeTimeoutCts.CancelAfter(RelayInvokeTimeout);
+
             var result = await hub.InvokeAsync<RelayDeliveryResult>(
                 SocialHubConstants.RelayControlPacketMethod,
                 new RelayControlEnvelopeRequest(targetPetId, envelope),
-                ct).ConfigureAwait(false);
+                invokeTimeoutCts.Token).ConfigureAwait(false);
 
-            if (!result.Delivered || result.AckEnvelope is null)
+            if (result is null)
             {
-                return null;
+                return new LanP2pTransport.ControlSendOutcome(null, FriendOperationErrorCodes.DeliveryFailedOrTimeout, true, "GCP 중계 응답이 비어 있습니다.");
             }
 
-            return LanP2pTransport.ReadVerifiedAck(
+            if (!result.Delivered)
+            {
+                var errCode = string.IsNullOrWhiteSpace(result.ErrorCode)
+                    ? FriendOperationErrorCodes.DeliveryFailedOrTimeout
+                    : result.ErrorCode;
+                var isTransient = FriendOperationErrorCodes.IsTransient(errCode);
+                TransportError?.Invoke(this, new TransportErrorEventArgs(
+                    $"GcpSend:{packetType}",
+                    $"GCP 중계 실패 ({errCode})",
+                    null,
+                    errCode,
+                    PeerTransportKind.GcpRelay));
+                return new LanP2pTransport.ControlSendOutcome(null, errCode, isTransient, errCode);
+            }
+
+            if (result.AckEnvelope is null)
+            {
+                return new LanP2pTransport.ControlSendOutcome(null, FriendOperationErrorCodes.DeliveryFailedOrTimeout, true, "수신자 ACK 응답이 누락되었습니다.");
+            }
+
+            return LanP2pTransport.InspectAckEnvelope(
                 result.AckEnvelope,
                 header.MessageId,
                 targetPetId,
-                confirmationKey ?? pairSecretBase64);
+                confirmationKey ?? pairSecretBase64,
+                allowUnsignedRejection: packetType == PacketType.FriendAccept);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            return new LanP2pTransport.ControlSendOutcome(null, FriendOperationErrorCodes.Cancelled, false, "요청이 취소되었습니다.");
+        }
+        catch (OperationCanceledException ex)
+        {
+            TransportError?.Invoke(this, new TransportErrorEventArgs(
+                $"GcpSend:{packetType}",
+                ex.Message,
+                ex,
+                FriendOperationErrorCodes.DeliveryFailedOrTimeout,
+                PeerTransportKind.GcpRelay));
+            return new LanP2pTransport.ControlSendOutcome(null, FriendOperationErrorCodes.DeliveryFailedOrTimeout, true, "GCP 중계 응답 시간이 초과되었습니다.");
         }
         catch (Exception ex)
         {
-            TransportError?.Invoke(this, new TransportErrorEventArgs($"GcpSend:{packetType}", ex.Message, ex));
-            return null;
+            TransportError?.Invoke(this, new TransportErrorEventArgs(
+                $"GcpSend:{packetType}",
+                ex.Message,
+                ex,
+                FriendOperationErrorCodes.NetworkError,
+                PeerTransportKind.GcpRelay));
+            return new LanP2pTransport.ControlSendOutcome(null, FriendOperationErrorCodes.NetworkError, true, ex.Message);
         }
     }
 
@@ -1035,23 +1364,38 @@ public sealed class GcpSignalRTransport : ISocialTransport
         switch (header.PacketType)
         {
             case PacketType.FriendRequest:
-                if (envelope.IsEncrypted || !ReceiveFriendRequest(envelope))
+                if (envelope.IsEncrypted)
                 {
-                    return RejectAck(header.MessageId, "PAIRING_REQUEST_REJECTED");
+                    return RejectAck(header.MessageId, FriendOperationErrorCodes.InvalidPairingEnvelope);
+                }
+
+                if (!ReceiveFriendRequest(envelope, out var requestError))
+                {
+                    return RejectAck(header.MessageId, requestError);
                 }
                 break;
 
             case PacketType.FriendAccept:
-                if (envelope.IsEncrypted || !ReceiveFriendAcceptance(envelope, out ackKey))
+                if (envelope.IsEncrypted)
                 {
-                    return RejectAck(header.MessageId, "PAIRING_CONFIRMATION_FAILED");
+                    return RejectAck(header.MessageId, FriendOperationErrorCodes.InvalidPairingEnvelope);
+                }
+
+                if (!ReceiveFriendAcceptance(envelope, out ackKey, out var acceptError))
+                {
+                    return RejectAck(header.MessageId, acceptError);
                 }
                 break;
 
             case PacketType.FriendReject:
-                if (envelope.IsEncrypted || !ReceiveFriendRejection(envelope))
+                if (envelope.IsEncrypted)
                 {
-                    return RejectAck(header.MessageId, "PAIRING_REQUEST_UNKNOWN");
+                    return RejectAck(header.MessageId, FriendOperationErrorCodes.InvalidPairingEnvelope);
+                }
+
+                if (!ReceiveFriendRejection(envelope, out var rejectError))
+                {
+                    return RejectAck(header.MessageId, rejectError);
                 }
                 break;
 
@@ -1210,16 +1554,20 @@ public sealed class GcpSignalRTransport : ISocialTransport
             new MusicFrameData(packet.Bass, packet.Mid, packet.Treble, packet.IsBeat, packet.Sequence)));
     }
 
-    private bool ReceiveFriendRequest(ControlPacketEnvelope envelope)
+    private bool ReceiveFriendRequest(ControlPacketEnvelope envelope, out string errorCode)
     {
+        errorCode = string.Empty;
         var header = envelope.Header;
         var payload = JsonSerializer.Deserialize<FriendRequestPayload>(envelope.PayloadJson, ProtocolJson.PacketOptions);
         if (payload is null || !Guid.TryParseExact(payload.RequestId, "N", out _)
             || !PacketCrypto.IsPairingPublicKey(payload.PublicKey))
         {
+            errorCode = FriendOperationErrorCodes.InvalidPairingRequest;
             return false;
         }
 
+        var now = DateTimeOffset.UtcNow;
+        var expiresAt = now + PairingLifetime;
         var request = new FriendRequestReceivedEventArgs(
             payload.RequestId,
             header.SenderPetId,
@@ -1228,32 +1576,48 @@ public sealed class GcpSignalRTransport : ISocialTransport
             payload.Appearance ?? new PetAppearance(),
             payload.Level,
             "GCP",
-            ProtocolConstants.TcpControlPort);
+            ProtocolConstants.TcpControlPort,
+            PeerTransportKind.GcpRelay,
+            expiresAt);
 
         lock (_pairingLock)
         {
-            PrunePairings(DateTimeOffset.UtcNow);
-            if (_friendsByPetId.ContainsKey(header.SenderPetId) || _incomingPairings.Count >= 32
-                || _incomingPairings.ContainsKey(payload.RequestId)
-                || _incomingPairings.Values.Any(p => SamePetId(p.Request.RequesterPetId, header.SenderPetId)))
+            PrunePairings(now);
+            if (_friendsByPetId.ContainsKey(header.SenderPetId))
             {
+                errorCode = FriendOperationErrorCodes.AlreadyFriends;
                 return false;
             }
 
-            _incomingPairings.Add(payload.RequestId, new IncomingPairing(request, payload.PublicKey, Fingerprint(envelope.PayloadJson)));
+            if (_incomingPairings.ContainsKey(payload.RequestId)
+                || _incomingPairings.Values.Any(p => SamePetId(p.Request.RequesterPetId, header.SenderPetId)))
+            {
+                errorCode = FriendOperationErrorCodes.DuplicatePendingRequest;
+                return false;
+            }
+
+            if (_incomingPairings.Count >= MaxPendingPairings)
+            {
+                errorCode = FriendOperationErrorCodes.PendingCapacityFull;
+                return false;
+            }
+
+            _incomingPairings.Add(payload.RequestId, new IncomingPairing(request, payload.PublicKey, Fingerprint(envelope.PayloadJson), expiresAt));
         }
 
         FriendRequestReceived?.Invoke(this, request);
         return true;
     }
 
-    private bool ReceiveFriendAcceptance(ControlPacketEnvelope envelope, out string? confirmationKey)
+    private bool ReceiveFriendAcceptance(ControlPacketEnvelope envelope, out string? confirmationKey, out string errorCode)
     {
         confirmationKey = null;
+        errorCode = string.Empty;
         var header = envelope.Header;
         var payload = JsonSerializer.Deserialize<FriendAcceptPayload>(envelope.PayloadJson, ProtocolJson.PacketOptions);
         if (payload is null || !Guid.TryParseExact(payload.RequestId, "N", out _))
         {
+            errorCode = FriendOperationErrorCodes.InvalidPairingRequest;
             return false;
         }
 
@@ -1261,9 +1625,17 @@ public sealed class GcpSignalRTransport : ISocialTransport
         lock (_pairingLock)
         {
             PrunePairings(DateTimeOffset.UtcNow);
-            if (!_outgoingPairings.TryGetValue(payload.RequestId, out var pending)
-                || !SamePetId(pending.PeerId, header.SenderPetId))
+            if (!_outgoingPairings.TryGetValue(payload.RequestId, out var pending))
             {
+                errorCode = _expiredOutgoingRequestIds.ContainsKey(payload.RequestId)
+                    ? FriendOperationErrorCodes.PairingRequestExpired
+                    : FriendOperationErrorCodes.PairingRequestUnknown;
+                return false;
+            }
+
+            if (!SamePetId(pending.PeerId, header.SenderPetId))
+            {
+                errorCode = FriendOperationErrorCodes.PairingRequestUnknown;
                 return false;
             }
 
@@ -1271,6 +1643,7 @@ public sealed class GcpSignalRTransport : ISocialTransport
             {
                 if (pending.ConfirmedPublicKey != payload.PublicKey || !VerifyPlaintextSignature(envelope, completedKey))
                 {
+                    errorCode = FriendOperationErrorCodes.PairingConfirmationFailed;
                     return false;
                 }
 
@@ -1280,6 +1653,7 @@ public sealed class GcpSignalRTransport : ISocialTransport
 
             if (_friendsByPetId.ContainsKey(header.SenderPetId))
             {
+                errorCode = FriendOperationErrorCodes.AlreadyFriends;
                 return false;
             }
 
@@ -1289,6 +1663,7 @@ public sealed class GcpSignalRTransport : ISocialTransport
                 pending.RequestFingerprint);
             if (keys is not { } derived || !VerifyPlaintextSignature(envelope, derived.ConfirmationKey))
             {
+                errorCode = FriendOperationErrorCodes.PairingConfirmationFailed;
                 return false;
             }
 
@@ -1304,24 +1679,42 @@ public sealed class GcpSignalRTransport : ISocialTransport
             payload.Appearance ?? new PetAppearance(),
             friendKey,
             "GCP",
-            ProtocolConstants.TcpControlPort));
+            ProtocolConstants.TcpControlPort,
+            payload.RequestId,
+            isLocalAccepter: false));
         return true;
     }
 
-    private bool ReceiveFriendRejection(ControlPacketEnvelope envelope)
+    private bool ReceiveFriendRejection(ControlPacketEnvelope envelope, out string errorCode)
     {
+        errorCode = string.Empty;
         var payload = JsonSerializer.Deserialize<FriendRejectPayload>(envelope.PayloadJson, ProtocolJson.PacketOptions);
         if (payload is null || !Guid.TryParseExact(payload.RequestId, "N", out _))
         {
+            errorCode = FriendOperationErrorCodes.InvalidPairingRequest;
             return false;
         }
 
         lock (_pairingLock)
         {
             PrunePairings(DateTimeOffset.UtcNow);
-            if (!_outgoingPairings.TryGetValue(payload.RequestId, out var pending)
-                || !SamePetId(pending.PeerId, envelope.Header.SenderPetId) || pending.ConfirmationKey is not null)
+            if (!_outgoingPairings.TryGetValue(payload.RequestId, out var pending))
             {
+                errorCode = _expiredOutgoingRequestIds.ContainsKey(payload.RequestId)
+                    ? FriendOperationErrorCodes.PairingRequestExpired
+                    : FriendOperationErrorCodes.PairingRequestUnknown;
+                return false;
+            }
+
+            if (!SamePetId(pending.PeerId, envelope.Header.SenderPetId))
+            {
+                errorCode = FriendOperationErrorCodes.PairingRequestUnknown;
+                return false;
+            }
+
+            if (pending.ConfirmationKey is not null)
+            {
+                errorCode = FriendOperationErrorCodes.PairingAlreadyCompleted;
                 return false;
             }
 
@@ -1329,7 +1722,7 @@ public sealed class GcpSignalRTransport : ISocialTransport
             pending.Dispose();
         }
 
-        FriendRejected?.Invoke(this, new FriendRejectedEventArgs(envelope.Header.SenderPetId, payload.Reason));
+        FriendRejected?.Invoke(this, new FriendRejectedEventArgs(envelope.Header.SenderPetId, payload.Reason, payload.RequestId));
         return true;
     }
 
@@ -1429,12 +1822,38 @@ public sealed class GcpSignalRTransport : ISocialTransport
         {
             _outgoingPairings.Remove(item.Key);
             item.Value.Dispose();
+            RecordExpiredTombstone(_expiredOutgoingRequestIds, item.Key, now);
         }
 
         foreach (var item in _incomingPairings.Where(i => i.Value.ExpiresAt <= now && !i.Value.IsResponding).ToArray())
         {
             _incomingPairings.Remove(item.Key);
             item.Value.Dispose();
+            RecordExpiredTombstone(_expiredIncomingRequestIds, item.Key, now);
+        }
+
+        PruneExpiredTombstones(_expiredOutgoingRequestIds, now);
+        PruneExpiredTombstones(_expiredIncomingRequestIds, now);
+    }
+
+    private static void RecordExpiredTombstone(Dictionary<string, DateTimeOffset> map, string requestId, DateTimeOffset now)
+    {
+        if (map.Count >= MaxExpiredRequestTombstones)
+        {
+            foreach (var oldKey in map.OrderBy(kv => kv.Value).Take(map.Count - MaxExpiredRequestTombstones + 16).Select(kv => kv.Key).ToArray())
+            {
+                map.Remove(oldKey);
+            }
+        }
+
+        map[requestId] = now + ExpiredTombstoneLifetime;
+    }
+
+    private static void PruneExpiredTombstones(Dictionary<string, DateTimeOffset> map, DateTimeOffset now)
+    {
+        foreach (var kv in map.Where(kv => kv.Value <= now).ToArray())
+        {
+            map.Remove(kv.Key);
         }
     }
 

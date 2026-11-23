@@ -140,44 +140,113 @@ public sealed class HybridTransportRouter : ISocialTransport
             .ToList();
     }
 
+    public bool HasPendingOutgoingRequest(string peerPetId)
+        => _lan.HasPendingOutgoingRequest(peerPetId) || _gcp.HasPendingOutgoingRequest(peerPetId);
+
     public async Task<bool> SendFriendRequestAsync(PeerSnapshot target, CancellationToken cancellationToken = default)
+        => (await SendFriendRequestDetailedAsync(target, cancellationToken).ConfigureAwait(false)).Succeeded;
+
+    public async Task<FriendOperationResult> SendFriendRequestDetailedAsync(PeerSnapshot target, CancellationToken cancellationToken = default)
     {
+        if (string.IsNullOrWhiteSpace(target.PetId))
+        {
+            return FriendOperationResult.Fail(FriendOperationStage.Validation, FriendOperationErrorCodes.InvalidRequest, false);
+        }
+
+        if (_lan.IsFriend(target.PetId) || _gcp.IsFriend(target.PetId))
+        {
+            var friendRoute = target.TransportKind == PeerTransportKind.GcpRelay && _gcp.IsFriend(target.PetId)
+                ? PeerTransportKind.GcpRelay
+                : PeerTransportKind.Lan;
+            return FriendOperationResult.Fail(
+                FriendOperationStage.Validation,
+                FriendOperationErrorCodes.AlreadyFriends,
+                false,
+                friendRoute);
+        }
+
+        // LAN/GCP 양 경로 간 동일 상대 중복 발신 차단
+        if (_lan.HasPendingOutgoingRequest(target.PetId) || _gcp.HasPendingOutgoingRequest(target.PetId))
+        {
+            var pendingRoute = _lan.HasPendingOutgoingRequest(target.PetId)
+                ? PeerTransportKind.Lan
+                : PeerTransportKind.GcpRelay;
+            return FriendOperationResult.Fail(
+                FriendOperationStage.Validation,
+                FriendOperationErrorCodes.DuplicatePendingRequest,
+                false,
+                pendingRoute);
+        }
+
         if (target.TransportKind == PeerTransportKind.GcpRelay)
         {
-            return await _gcp.SendFriendRequestAsync(target, cancellationToken).ConfigureAwait(false);
+            var gcpResult = await _gcp.SendFriendRequestDetailedAsync(target, cancellationToken).ConfigureAwait(false);
+            if (gcpResult.Succeeded || !gcpResult.IsTransient)
+            {
+                return gcpResult;
+            }
+
+            var lanPeer = _lan.GetDiscoveredPeers().FirstOrDefault(p =>
+                string.Equals(p.PetId, target.PetId, StringComparison.OrdinalIgnoreCase) && !p.RequiresUpdate);
+            if (lanPeer is not null)
+            {
+                var lanFallback = await _lan.SendFriendRequestDetailedAsync(lanPeer, cancellationToken).ConfigureAwait(false);
+                return lanFallback.Succeeded ? lanFallback : gcpResult;
+            }
+
+            return gcpResult;
         }
 
-        if (await _lan.SendFriendRequestAsync(target, cancellationToken).ConfigureAwait(false))
+        var lanResult = await _lan.SendFriendRequestDetailedAsync(target, cancellationToken).ConfigureAwait(false);
+        if (lanResult.Succeeded)
         {
-            return true;
+            return lanResult;
         }
 
-        return _gcp.IsRemoteConnected
-            && await _gcp.SendFriendRequestAsync(target, cancellationToken).ConfigureAwait(false);
+        // 확정적 거부(ALREADY_FRIENDS, DUPLICATE_PENDING_REQUEST, PROTOCOL_MISMATCH 등)는 GCP로 불필요하게 재시도하지 않는다.
+        if (!lanResult.IsTransient)
+        {
+            return lanResult;
+        }
+
+        if (_gcp.IsRemoteConnected)
+        {
+            return await _gcp.SendFriendRequestDetailedAsync(target, cancellationToken).ConfigureAwait(false);
+        }
+
+        return lanResult;
     }
 
     public async Task<bool> RespondFriendRequestAsync(string requestId, bool accept, CancellationToken cancellationToken = default)
+        => (await RespondFriendRequestDetailedAsync(requestId, accept, cancellationToken).ConfigureAwait(false)).Succeeded;
+
+    public async Task<FriendOperationResult> RespondFriendRequestDetailedAsync(string requestId, bool accept, CancellationToken cancellationToken = default)
     {
         if (_incomingRequestRoutes.TryGetValue(requestId, out var route))
         {
-            var ok = route == RouteKind.Gcp
-                ? await _gcp.RespondFriendRequestAsync(requestId, accept, cancellationToken).ConfigureAwait(false)
-                : await _lan.RespondFriendRequestAsync(requestId, accept, cancellationToken).ConfigureAwait(false);
-            if (ok)
+            var result = route == RouteKind.Gcp
+                ? await _gcp.RespondFriendRequestDetailedAsync(requestId, accept, cancellationToken).ConfigureAwait(false)
+                : await _lan.RespondFriendRequestDetailedAsync(requestId, accept, cancellationToken).ConfigureAwait(false);
+            if (result.Succeeded || (!result.IsTransient && result.ErrorCode is not (FriendOperationErrorCodes.Cancelled or FriendOperationErrorCodes.RequestInProgress)))
             {
                 _incomingRequestRoutes.TryRemove(requestId, out _);
             }
 
-            return ok;
+            return result;
         }
 
-        if (await _lan.RespondFriendRequestAsync(requestId, accept, cancellationToken).ConfigureAwait(false))
+        var lanResult = await _lan.RespondFriendRequestDetailedAsync(requestId, accept, cancellationToken).ConfigureAwait(false);
+        if (lanResult.Succeeded || (lanResult.ErrorCode != FriendOperationErrorCodes.PairingRequestUnknown && !lanResult.IsTransient))
         {
-            return true;
+            return lanResult;
         }
 
-        return _gcp.IsRemoteConnected
-            && await _gcp.RespondFriendRequestAsync(requestId, accept, cancellationToken).ConfigureAwait(false);
+        if (_gcp.IsRemoteConnected)
+        {
+            return await _gcp.RespondFriendRequestDetailedAsync(requestId, accept, cancellationToken).ConfigureAwait(false);
+        }
+
+        return lanResult;
     }
 
     public Task<bool> SendBubbleMessageAsync(FriendEntry friend, string message, CancellationToken cancellationToken = default)
@@ -341,7 +410,8 @@ public sealed class HybridTransportRouter : ISocialTransport
 
     private void OnSourceFriendAccepted(object? sender, FriendAcceptedEventArgs e)
     {
-        if (_pairingOutcomeDedup.TryAccept($"acc|{e.AccepterPetId}"))
+        var reqKey = string.IsNullOrEmpty(e.RequestId) ? e.PairSecretBase64 : e.RequestId;
+        if (_pairingOutcomeDedup.TryAccept($"acc|{e.AccepterPetId}|{reqKey}|{e.IsLocalAccepter}"))
         {
             FriendAccepted?.Invoke(this, e);
         }
@@ -349,7 +419,8 @@ public sealed class HybridTransportRouter : ISocialTransport
 
     private void OnSourceFriendRejected(object? sender, FriendRejectedEventArgs e)
     {
-        if (_pairingOutcomeDedup.TryAccept($"rej|{e.ResponderPetId}"))
+        var reqKey = string.IsNullOrEmpty(e.RequestId) ? (e.Reason ?? string.Empty) : e.RequestId;
+        if (_pairingOutcomeDedup.TryAccept($"rej|{e.ResponderPetId}|{reqKey}"))
         {
             FriendRejected?.Invoke(this, e);
         }

@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.IO;
 using LabPet.Client.Solo;
@@ -8,6 +9,13 @@ using LabPet.Shared.Transport;
 
 namespace LabPet.Client.Social;
 
+public enum OutgoingFriendRequestState
+{
+    None = 0,
+    Sending = 1,
+    Pending = 2
+}
+
 public sealed record PendingFriendRequest(
     string RequestId,
     string RequesterPetId,
@@ -16,12 +24,20 @@ public sealed record PendingFriendRequest(
     PetAppearance Appearance,
     int Level,
     string RemoteIp,
-    int RemoteTcpPort)
+    int RemoteTcpPort,
+    PeerTransportKind TransportKind = PeerTransportKind.Lan,
+    DateTimeOffset ExpiresAtUtc = default)
 {
     public string DisplayName => SocialCoordinatorService.FormatDisplayName(RequesterOwnerName, RequesterName);
+    public bool IsExpired => ExpiresAtUtc != default && DateTimeOffset.UtcNow >= ExpiresAtUtc;
 }
 
-public sealed record ReceivedFriendMessage(string SenderName, string Text, PetAppearance Appearance);
+public sealed record ReceivedFriendMessage(
+    string SenderPetId,
+    string SenderName,
+    string Text,
+    PetAppearance Appearance,
+    string MessageId = "");
 
 /// <summary>
 /// ISocialTransport, friends.json 저장소, 보너스 코인, 노래 따라하기(팔로워 타임아웃·우선순위)를 조정하는 소셜 코디네이터.
@@ -36,12 +52,19 @@ public sealed class SocialCoordinatorService : IAsyncDisposable
     private readonly Stopwatch _clock = Stopwatch.StartNew();
     private readonly object _musicLock = new();
     private readonly object _friendStateLock = new();
+    private readonly object _pairingWorkflowLock = new();
     private readonly SemaphoreSlim _friendSaveLock = new(1, 1);
+
+    private readonly Dictionary<string, OutgoingFriendRequestState> _outgoingRequestStates = new(StringComparer.OrdinalIgnoreCase);
+    private readonly HashSet<string> _respondingRequestIds = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, FriendEntry> _pendingUnsavedAccepts = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, DateTimeOffset> _lastTransportNotifyAt = new(StringComparer.OrdinalIgnoreCase);
 
     private volatile PetProfile _localProfile = new();
     private volatile FriendEntry[] _friends = [];
     private uint _musicFrameSequence;
     private bool _isLocalSleeping;
+    private Task _lastRemoteAcceptPersistTask = Task.CompletedTask;
 
     // 노래 따라하기 팔로워 상태
     private string? _followingHostPetId;
@@ -55,14 +78,17 @@ public sealed class SocialCoordinatorService : IAsyncDisposable
     public bool IsLocalSleeping => _isLocalSleeping;
     public bool IsRemoteConnected => _transport.IsRemoteConnected;
     public string ConnectionSummary => _transport.ConnectionSummary;
+    public string? LastTransportErrorMessage { get; private set; }
     public string? FollowingHostPetId => _followingHostPetId;
     public IReadOnlyList<FriendEntry> Friends => Array.ConvertAll(_friends, static friend => friend.Clone());
     public IReadOnlyList<PeerSnapshot> DiscoveredPeers => _transport.GetDiscoveredPeers();
+    internal Task LastRemoteAcceptPersistTask => _lastRemoteAcceptPersistTask;
 
     public event EventHandler? StateChanged;
     public event EventHandler<PendingFriendRequest>? FriendRequestArrived;
     public event EventHandler<ReceivedFriendMessage>? FriendMessageReceived;
     public event EventHandler<string>? SocialNotification;
+    public event EventHandler<TransportErrorEventArgs>? TransportErrorReported;
     public event EventHandler? PetReactionTriggered;
     public event EventHandler<string>? NewerAppVersionDetected;
     public event EventHandler<GameEventReceivedEventArgs>? GameEventReceived;
@@ -213,8 +239,138 @@ public sealed class SocialCoordinatorService : IAsyncDisposable
         return false;
     }
 
-    public Task<bool> SendFriendRequestAsync(PeerSnapshot peer)
-        => _transport.SendFriendRequestAsync(peer);
+    public OutgoingFriendRequestState GetOutgoingFriendRequestState(string petId)
+    {
+        if (string.IsNullOrWhiteSpace(petId))
+        {
+            return OutgoingFriendRequestState.None;
+        }
+
+        lock (_pairingWorkflowLock)
+        {
+            if (!_outgoingRequestStates.TryGetValue(petId, out var state))
+            {
+                return OutgoingFriendRequestState.None;
+            }
+
+            if (state == OutgoingFriendRequestState.Pending && !_transport.HasPendingOutgoingRequest(petId))
+            {
+                _outgoingRequestStates.Remove(petId);
+                return OutgoingFriendRequestState.None;
+            }
+
+            return state;
+        }
+    }
+
+    public bool IsOutgoingFriendRequestSending(string petId)
+        => GetOutgoingFriendRequestState(petId) == OutgoingFriendRequestState.Sending;
+
+    public bool IsOutgoingFriendRequestPending(string petId)
+        => GetOutgoingFriendRequestState(petId) == OutgoingFriendRequestState.Pending;
+
+    public async Task<bool> SendFriendRequestAsync(PeerSnapshot peer)
+        => (await SendFriendRequestDetailedAsync(peer).ConfigureAwait(false)).Succeeded;
+
+    public async Task<FriendOperationResult> SendFriendRequestDetailedAsync(
+        PeerSnapshot peer,
+        CancellationToken cancellationToken = default)
+    {
+        if (peer is null || string.IsNullOrWhiteSpace(peer.PetId))
+        {
+            return FriendOperationResult.Fail(FriendOperationStage.Validation, FriendOperationErrorCodes.InvalidRequest, false);
+        }
+
+        if (peer.RequiresUpdate)
+        {
+            return FriendOperationResult.Fail(FriendOperationStage.Validation, FriendOperationErrorCodes.ProtocolMismatch, false, peer.TransportKind);
+        }
+
+        lock (_friendStateLock)
+        {
+            if (FindSharedFriend(peer.PetId) is not null)
+            {
+                return FriendOperationResult.Fail(FriendOperationStage.Validation, FriendOperationErrorCodes.AlreadyFriends, false, peer.TransportKind);
+            }
+        }
+
+        lock (_pairingWorkflowLock)
+        {
+            if (_outgoingRequestStates.TryGetValue(peer.PetId, out var existingState))
+            {
+                if (existingState == OutgoingFriendRequestState.Pending && !_transport.HasPendingOutgoingRequest(peer.PetId))
+                {
+                    _outgoingRequestStates.Remove(peer.PetId);
+                }
+                else
+                {
+                    var errCode = existingState == OutgoingFriendRequestState.Sending
+                        ? FriendOperationErrorCodes.RequestInProgress
+                        : FriendOperationErrorCodes.DuplicatePendingRequest;
+                    return FriendOperationResult.Fail(FriendOperationStage.Validation, errCode, false, peer.TransportKind);
+                }
+            }
+
+            _outgoingRequestStates[peer.PetId] = OutgoingFriendRequestState.Sending;
+        }
+
+        StateChanged?.Invoke(this, EventArgs.Empty);
+
+        var sw = Stopwatch.StartNew();
+        FriendOperationResult result;
+        try
+        {
+            result = await _transport.SendFriendRequestDetailedAsync(peer, cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            result = FriendOperationResult.Fail(FriendOperationStage.Sending, FriendOperationErrorCodes.Cancelled, false, peer.TransportKind);
+        }
+        catch (Exception ex)
+        {
+            result = FriendOperationResult.Fail(FriendOperationStage.Sending, FriendOperationErrorCodes.NetworkError, true, peer.TransportKind, detail: ex.Message);
+        }
+
+        lock (_pairingWorkflowLock)
+        {
+            if (result.Succeeded)
+            {
+                _outgoingRequestStates[peer.PetId] = OutgoingFriendRequestState.Pending;
+            }
+            else if (result.ErrorCode == FriendOperationErrorCodes.DuplicatePendingRequest)
+            {
+                _outgoingRequestStates[peer.PetId] = OutgoingFriendRequestState.Pending;
+            }
+            else
+            {
+                _outgoingRequestStates.Remove(peer.PetId);
+            }
+        }
+
+        if (result.Succeeded)
+        {
+            Trace.TraceInformation(
+                "친구 신청 전송 완료: RequestId={0}, Route={1}, Stage={2}, ElapsedMs={3}",
+                result.RequestId ?? "-",
+                result.Route?.ToString() ?? peer.TransportKind.ToString(),
+                result.Stage,
+                sw.ElapsedMilliseconds);
+        }
+        else
+        {
+            Trace.TraceWarning(
+                "친구 신청 실패: RequestId={0}, Route={1}, Stage={2}, ErrorCode={3}, Transient={4}, ElapsedMs={5}",
+                result.RequestId ?? "-",
+                result.Route?.ToString() ?? peer.TransportKind.ToString(),
+                result.Stage,
+                result.ErrorCode ?? "-",
+                result.IsTransient,
+                sw.ElapsedMilliseconds);
+        }
+
+        StateChanged?.Invoke(this, EventArgs.Empty);
+        return result;
+    }
 
     public Task<bool> SendGameEventAsync(FriendEntry friend, GameEventPayload payload)
         => _transport.SendGameEventAsync(FindFriend(friend.PetId) ?? friend, payload);
@@ -222,13 +378,252 @@ public sealed class SocialCoordinatorService : IAsyncDisposable
     public string GetFriendDisplayName(string petId) => FindFriendName(petId);
 
     public async Task<bool> RespondFriendRequestAsync(PendingFriendRequest request, bool accept)
+        => (await RespondFriendRequestDetailedAsync(request, accept).ConfigureAwait(false)).Succeeded;
+
+    public async Task<FriendOperationResult> RespondFriendRequestDetailedAsync(
+        PendingFriendRequest request,
+        bool accept,
+        CancellationToken cancellationToken = default)
     {
-        var sent = await _transport.RespondFriendRequestAsync(request.RequestId, accept).ConfigureAwait(false);
-        if (accept && !sent)
+        if (request is null || string.IsNullOrWhiteSpace(request.RequestId))
         {
-            SocialNotification?.Invoke(this, "친구 등록에 실패했습니다. 연결 상태와 신청 유효 시간을 확인해 주세요.");
+            return FriendOperationResult.Fail(FriendOperationStage.Validation, FriendOperationErrorCodes.InvalidRequest, false);
         }
-        return sent;
+
+        lock (_pairingWorkflowLock)
+        {
+            if (!_respondingRequestIds.Add(request.RequestId))
+            {
+                return FriendOperationResult.Fail(
+                    FriendOperationStage.Validation,
+                    FriendOperationErrorCodes.RequestInProgress,
+                    false,
+                    request.TransportKind,
+                    request.RequestId,
+                    "이미 친구 신청 응답을 처리 중입니다.");
+            }
+        }
+
+        var sw = Stopwatch.StartNew();
+        try
+        {
+            FriendEntry? unsavedEntry = null;
+            lock (_pairingWorkflowLock)
+            {
+                _pendingUnsavedAccepts.TryGetValue(request.RequestId, out unsavedEntry);
+            }
+
+            if (accept && unsavedEntry is not null)
+            {
+                var savedRetry = await PersistLocalAcceptedFriendAsync(unsavedEntry).ConfigureAwait(false);
+                if (!savedRetry)
+                {
+                    Trace.TraceError(
+                        "친구 수락 저장 재시도 실패: RequestId={0}, Route={1}, Stage=LocalPersistence, ErrorCode={2}, ElapsedMs={3}",
+                        request.RequestId,
+                        request.TransportKind,
+                        FriendOperationErrorCodes.LocalStorageFailed,
+                        sw.ElapsedMilliseconds);
+                    return FriendOperationResult.Fail(
+                        FriendOperationStage.LocalPersistence,
+                        FriendOperationErrorCodes.LocalStorageFailed,
+                        true,
+                        request.TransportKind,
+                        request.RequestId,
+                        "친구 목록 파일 저장에 실패했습니다.");
+                }
+
+                lock (_pairingWorkflowLock)
+                {
+                    _pendingUnsavedAccepts.Remove(request.RequestId);
+                }
+
+                var retryDisplay = FormatDisplayName(unsavedEntry.OwnerName, unsavedEntry.PetName);
+                SocialNotification?.Invoke(this, $"{retryDisplay}(이)가 친구 신청을 수락했어요!");
+                PetReactionTriggered?.Invoke(this, EventArgs.Empty);
+                return FriendOperationResult.Ok(FriendOperationStage.Completed, request.TransportKind, request.RequestId);
+            }
+
+            if (accept)
+            {
+                lock (_friendStateLock)
+                {
+                    if (FindSharedFriend(request.RequesterPetId) is not null)
+                    {
+                        return FriendOperationResult.Fail(
+                            FriendOperationStage.Validation,
+                            FriendOperationErrorCodes.AlreadyFriends,
+                            false,
+                            request.TransportKind,
+                            request.RequestId);
+                    }
+                }
+            }
+            else
+            {
+                lock (_pairingWorkflowLock)
+                {
+                    _pendingUnsavedAccepts.Remove(request.RequestId);
+                }
+            }
+
+            var transportResult = await _transport.RespondFriendRequestDetailedAsync(
+                request.RequestId, accept, cancellationToken).ConfigureAwait(false);
+
+            if (!transportResult.Succeeded)
+            {
+                Trace.TraceWarning(
+                    "친구 요청 응답 실패: RequestId={0}, Route={1}, Stage={2}, ErrorCode={3}, Transient={4}, ElapsedMs={5}",
+                    request.RequestId,
+                    transportResult.Route?.ToString() ?? request.TransportKind.ToString(),
+                    transportResult.Stage,
+                    transportResult.ErrorCode ?? "-",
+                    transportResult.IsTransient,
+                    sw.ElapsedMilliseconds);
+                return transportResult;
+            }
+
+            if (!accept)
+            {
+                Trace.TraceInformation(
+                    "친구 신청 거절 완료: RequestId={0}, Route={1}, ElapsedMs={2}",
+                    request.RequestId,
+                    transportResult.Route?.ToString() ?? request.TransportKind.ToString(),
+                    sw.ElapsedMilliseconds);
+                return FriendOperationResult.Ok(
+                    FriendOperationStage.Completed,
+                    transportResult.Route ?? request.TransportKind,
+                    request.RequestId);
+            }
+
+            var accepted = transportResult.AcceptedFriend;
+            if (accepted is null)
+            {
+                return FriendOperationResult.Fail(
+                    FriendOperationStage.AckVerification,
+                    FriendOperationErrorCodes.PairingConfirmationFailed,
+                    false,
+                    transportResult.Route ?? request.TransportKind,
+                    request.RequestId);
+            }
+
+            var entry = new FriendEntry
+            {
+                PetId = accepted.AccepterPetId,
+                OwnerName = accepted.AccepterOwnerName,
+                PetName = accepted.AccepterName,
+                LastKnownIp = accepted.RemoteIp,
+                LastKnownTcpPort = accepted.RemoteTcpPort,
+                PairSecretBase64 = accepted.PairSecretBase64,
+                CachedAppearance = accepted.Appearance.Clone(),
+                Intimacy = 1,
+                PairedAtUtc = DateTimeOffset.UtcNow,
+                LastSeenAtUtc = DateTimeOffset.UtcNow
+            };
+
+            var saved = await PersistLocalAcceptedFriendAsync(entry).ConfigureAwait(false);
+            if (!saved)
+            {
+                lock (_pairingWorkflowLock)
+                {
+                    _pendingUnsavedAccepts[request.RequestId] = entry;
+                }
+
+                Trace.TraceError(
+                    "친구 수락 후 로컬 저장 실패로 메모리 롤백: RequestId={0}, Route={1}, Stage=LocalPersistence, ErrorCode={2}, ElapsedMs={3}",
+                    request.RequestId,
+                    transportResult.Route?.ToString() ?? request.TransportKind.ToString(),
+                    FriendOperationErrorCodes.LocalStorageFailed,
+                    sw.ElapsedMilliseconds);
+                return FriendOperationResult.Fail(
+                    FriendOperationStage.LocalPersistence,
+                    FriendOperationErrorCodes.LocalStorageFailed,
+                    true,
+                    transportResult.Route ?? request.TransportKind,
+                    request.RequestId,
+                    "친구 목록 파일 저장에 실패했습니다.");
+            }
+
+            Trace.TraceInformation(
+                "친구 수락 및 로컬 저장 완료: RequestId={0}, Route={1}, Stage=Completed, ElapsedMs={2}",
+                request.RequestId,
+                transportResult.Route?.ToString() ?? request.TransportKind.ToString(),
+                sw.ElapsedMilliseconds);
+
+            var display = FormatDisplayName(entry.OwnerName, entry.PetName);
+            SocialNotification?.Invoke(this, $"{display}(이)가 친구 신청을 수락했어요!");
+            PetReactionTriggered?.Invoke(this, EventArgs.Empty);
+
+            return FriendOperationResult.Ok(
+                FriendOperationStage.Completed,
+                transportResult.Route ?? request.TransportKind,
+                request.RequestId,
+                accepted);
+        }
+        finally
+        {
+            lock (_pairingWorkflowLock)
+            {
+                _respondingRequestIds.Remove(request.RequestId);
+            }
+        }
+    }
+
+    public static string FormatFriendOperationFailure(
+        FriendOperationResult result,
+        bool isAccept,
+        string? targetDisplayName = null)
+    {
+        var routePrefix = result.Route switch
+        {
+            PeerTransportKind.Lan => "[LAN] ",
+            PeerTransportKind.GcpRelay => "[GCP] ",
+            _ => string.Empty
+        };
+
+        var target = string.IsNullOrWhiteSpace(targetDisplayName) ? "상대방" : targetDisplayName;
+        var action = isAccept ? "친구 수락" : "친구 신청";
+
+        return result.ErrorCode switch
+        {
+            FriendOperationErrorCodes.RecipientOffline
+                => $"{routePrefix}{target}이(가) 오프라인이거나 응답할 수 없어 {action}에 실패했습니다.",
+            FriendOperationErrorCodes.PairingRequestExpired
+                => isAccept
+                    ? $"{routePrefix}친구 신청 유효 시간이 만료되었습니다. {target}에게 다시 신청해 달라고 안내해 주세요."
+                    : $"{routePrefix}친구 신청 유효 시간이 만료되었습니다. 다시 신청해 주세요.",
+            FriendOperationErrorCodes.PairingRequestUnknown
+                => isAccept
+                    ? $"{routePrefix}만료되었거나 찾을 수 없는 친구 신청입니다. {target}에게 새로 신청해 달라고 안내해 주세요."
+                    : $"{routePrefix}유효하지 않은 친구 신청입니다. 다시 시도해 주세요.",
+            FriendOperationErrorCodes.DeliveryFailedOrTimeout
+                => $"{routePrefix}상대방 응답(ACK)이 시간 내에 도착하지 않았습니다. 연결 확인 후 다시 시도해 주세요.",
+            FriendOperationErrorCodes.RateLimited
+                => $"{routePrefix}요청이 너무 빠릅니다. 잠시 후 다시 시도해 주세요.",
+            FriendOperationErrorCodes.GcpNotConnected
+                => "[GCP] 중계 서버에 연결되지 않았습니다. 인터넷 상태를 확인한 후 다시 시도해 주세요.",
+            FriendOperationErrorCodes.PublicKeyMismatch or FriendOperationErrorCodes.InvalidSignature or FriendOperationErrorCodes.InvalidOrExpiredChallenge or FriendOperationErrorCodes.AuthFailed or FriendOperationErrorCodes.SenderMismatch
+                => $"{routePrefix}기기 인증 오류({result.ErrorCode})로 {action}을(를) 완료할 수 없습니다.",
+            FriendOperationErrorCodes.InvalidAckSignature or FriendOperationErrorCodes.PairingConfirmationFailed
+                => $"{routePrefix}보안 서명 검증 오류({result.ErrorCode})로 {action}을(를) 완료하지 못했습니다.",
+            FriendOperationErrorCodes.NetworkError
+                => $"{routePrefix}네트워크 오류로 {action}을(를) 완료하지 못했습니다. 연결 및 방화벽을 확인해 주세요.",
+            FriendOperationErrorCodes.LocalStorageFailed
+                => "로컬 친구 목록(friends.json) 저장에 실패해 등록을 보류했습니다. 다시 시도해 주세요.",
+            FriendOperationErrorCodes.AlreadyFriends
+                => "이미 친구로 등록된 펫입니다.",
+            FriendOperationErrorCodes.DuplicatePendingRequest
+                => $"{target}에게 이미 대기 중인 친구 신청이 있습니다.",
+            FriendOperationErrorCodes.RequestInProgress
+                => "이미 친구 요청을 처리 중입니다.",
+            FriendOperationErrorCodes.ProtocolMismatch
+                => "서로의 LabPet 버전이 달라 업데이트가 필요합니다.",
+            FriendOperationErrorCodes.PairingAlreadyCompleted
+                => "이미 처리 완료된 친구 신청입니다.",
+            FriendOperationErrorCodes.PairingRequestRejected
+                => $"{routePrefix}상대방이 현재 친구 신청을 받을 수 없습니다.",
+            _ => $"{routePrefix}{action}에 실패했습니다. ({result.ErrorCode ?? "UNKNOWN"})"
+        };
     }
 
     public async Task<bool> SendBubbleMessageAsync(FriendEntry friend, string text)
@@ -312,10 +707,51 @@ public sealed class SocialCoordinatorService : IAsyncDisposable
 
     private void OnTransportError(object? sender, TransportErrorEventArgs e)
     {
+        var routeLabel = e.Route?.ToString() ?? "-";
+        var errCode = e.ErrorCode ?? "-";
+        Trace.TraceWarning("소셜 전송 오류: Operation={0}, Route={1}, ErrorCode={2}, Message={3}", e.Operation, routeLabel, errCode, e.Message);
+
+        var formatted = FormatTransportErrorMessage(e);
+        LastTransportErrorMessage = formatted;
+        TransportErrorReported?.Invoke(this, e);
+
+        if (e.Operation is "Listen" or "GcpAuth" or "GcpConnect" or "GcpRegisterPresence")
+        {
+            var dedupKey = $"{e.Operation}|{errCode}";
+            var now = DateTimeOffset.UtcNow;
+            if (!_lastTransportNotifyAt.TryGetValue(dedupKey, out var prev) || now - prev >= TimeSpan.FromSeconds(15))
+            {
+                _lastTransportNotifyAt[dedupKey] = now;
+                SocialNotification?.Invoke(this, formatted);
+            }
+        }
+    }
+
+    private static string FormatTransportErrorMessage(TransportErrorEventArgs e)
+    {
         if (e.Operation == "Listen")
         {
-            SocialNotification?.Invoke(this, e.Message);
+            return e.Message;
         }
+
+        if (e.Operation == "GcpAuth")
+        {
+            return string.IsNullOrWhiteSpace(e.ErrorCode)
+                ? $"[GCP] 기기 인증 오류: {e.Message}"
+                : $"[GCP] 기기 인증 오류 ({e.ErrorCode}): 서버와 연결할 수 없습니다.";
+        }
+
+        if (e.Operation is "GcpConnect" or "GcpRegisterPresence")
+        {
+            return FriendOperationErrorCodes.IsAuthError(e.ErrorCode)
+                ? $"[GCP] 기기 인증 오류 ({e.ErrorCode}): 재연결 대기 중"
+                : "[GCP] 중계 서버 연결 오류: 네트워크 상태를 확인하는 중입니다.";
+        }
+
+        var prefix = e.Route == PeerTransportKind.Lan ? "[LAN] " : (e.Route == PeerTransportKind.GcpRelay ? "[GCP] " : string.Empty);
+        return string.IsNullOrWhiteSpace(e.ErrorCode)
+            ? $"{prefix}통신 오류: {e.Message}"
+            : $"{prefix}통신 오류 ({e.ErrorCode})";
     }
 
     private void OnGameEventReceived(object? sender, GameEventReceivedEventArgs e)
@@ -352,12 +788,30 @@ public sealed class SocialCoordinatorService : IAsyncDisposable
             e.Appearance,
             e.Level,
             e.RemoteIp,
-            e.RemoteTcpPort));
+            e.RemoteTcpPort,
+            e.TransportKind,
+            e.ExpiresAtUtc));
     }
 
-    private async void OnFriendAccepted(object? sender, FriendAcceptedEventArgs e)
+    private void OnFriendAccepted(object? sender, FriendAcceptedEventArgs e)
     {
-        var registered = await AddFriendAsync(new FriendEntry
+        // 수락자 본인 측은 RespondFriendRequestDetailedAsync에서 직접 저장 완료까지 대기하므로 여기서는 신청자 측만 처리한다.
+        if (e.IsLocalAccepter)
+        {
+            return;
+        }
+
+        lock (_pairingWorkflowLock)
+        {
+            _outgoingRequestStates.Remove(e.AccepterPetId);
+        }
+
+        _lastRemoteAcceptPersistTask = HandleRemoteFriendAcceptedAsync(e);
+    }
+
+    private async Task HandleRemoteFriendAcceptedAsync(FriendAcceptedEventArgs e)
+    {
+        var entry = new FriendEntry
         {
             PetId = e.AccepterPetId,
             OwnerName = e.AccepterOwnerName,
@@ -369,12 +823,26 @@ public sealed class SocialCoordinatorService : IAsyncDisposable
             Intimacy = 1,
             PairedAtUtc = DateTimeOffset.UtcNow,
             LastSeenAtUtc = DateTimeOffset.UtcNow
-        }).ConfigureAwait(false);
-        if (!registered)
+        };
+
+        var added = AddFriendToMemoryLocked(entry);
+        if (!added)
         {
             return;
         }
 
+        var saved = await TrySaveSocialStateAsync().ConfigureAwait(false);
+        if (!saved)
+        {
+            RemoveFriendFromMemoryLocked(entry.PetId);
+            Trace.TraceError("신청자 측 친구 수락 저장 실패로 메모리 등록 롤백: RequestId={0}, ErrorCode={1}", e.RequestId, FriendOperationErrorCodes.LocalStorageFailed);
+            StateChanged?.Invoke(this, EventArgs.Empty);
+            SocialNotification?.Invoke(this, $"{FormatDisplayName(entry.OwnerName, entry.PetName)} 친구 정보 저장에 실패했습니다.");
+            return;
+        }
+
+        Trace.TraceInformation("신청자 측 친구 등록 및 저장 완료: RequestId={0}, Stage=Completed", e.RequestId);
+        StateChanged?.Invoke(this, EventArgs.Empty);
         var display = FormatDisplayName(e.AccepterOwnerName, e.AccepterName);
         SocialNotification?.Invoke(this, $"{display}(이)가 친구 신청을 수락했어요!");
         PetReactionTriggered?.Invoke(this, EventArgs.Empty);
@@ -382,18 +850,32 @@ public sealed class SocialCoordinatorService : IAsyncDisposable
 
     private void OnFriendRejected(object? sender, FriendRejectedEventArgs e)
     {
+        lock (_pairingWorkflowLock)
+        {
+            _outgoingRequestStates.Remove(e.ResponderPetId);
+        }
+
+        Trace.TraceInformation("친구 신청 거절 수신: RequestId={0}, Reason={1}", e.RequestId, e.Reason ?? "-");
+        StateChanged?.Invoke(this, EventArgs.Empty);
         SocialNotification?.Invoke(this, "친구 신청이 거절되었어요.");
     }
 
     private async void OnBubbleMessageReceived(object? sender, BubbleMessageReceivedEventArgs e)
     {
-        var name = await RewardSocialBonusAsync(e.SenderPetId, coins: 2).ConfigureAwait(false);
-        var peer = DiscoveredPeers.FirstOrDefault(peer =>
-            string.Equals(peer.PetId, e.SenderPetId, StringComparison.OrdinalIgnoreCase));
-        var appearance = peer?.Appearance?.Clone() ?? FindFriend(e.SenderPetId)?.CachedAppearance ?? new PetAppearance();
+        try
+        {
+            var name = await RewardSocialBonusAsync(e.SenderPetId, coins: 2).ConfigureAwait(false);
+            var peer = DiscoveredPeers.FirstOrDefault(peer =>
+                string.Equals(peer.PetId, e.SenderPetId, StringComparison.OrdinalIgnoreCase));
+            var appearance = peer?.Appearance?.Clone() ?? FindFriend(e.SenderPetId)?.CachedAppearance ?? new PetAppearance();
 
-        FriendMessageReceived?.Invoke(this, new ReceivedFriendMessage(name, e.Text, appearance));
-        PetReactionTriggered?.Invoke(this, EventArgs.Empty);
+            FriendMessageReceived?.Invoke(this, new ReceivedFriendMessage(e.SenderPetId, name, e.Text, appearance, e.MessageId));
+            PetReactionTriggered?.Invoke(this, EventArgs.Empty);
+        }
+        catch (Exception ex)
+        {
+            Trace.TraceError("친구 메시지 수신 처리 실패: {0}", ex);
+        }
     }
 
     private async void OnQuickReactionReceived(object? sender, QuickReactionReceivedEventArgs e)
@@ -433,9 +915,9 @@ public sealed class SocialCoordinatorService : IAsyncDisposable
         }
     }
 
-    private async Task<bool> AddFriendAsync(FriendEntry entry)
+    private bool AddFriendToMemoryLocked(FriendEntry entry)
     {
-        // 수락 패킷에 응답하기 전에 인증 목록에 등록한다.
+        // 수락 패킷 응답/수신 직후 인증 목록에 반영한다.
         lock (_friendStateLock)
         {
             if (FindSharedFriend(entry.PetId) is not null)
@@ -445,9 +927,34 @@ public sealed class SocialCoordinatorService : IAsyncDisposable
 
             _friends = [.. _friends, entry];
             _transport.UpdateKnownFriends(_friends);
+            return true;
+        }
+    }
+
+    private void RemoveFriendFromMemoryLocked(string petId)
+    {
+        lock (_friendStateLock)
+        {
+            var next = _friends.Where(f => !string.Equals(f.PetId, petId, StringComparison.OrdinalIgnoreCase)).ToArray();
+            if (next.Length != _friends.Length)
+            {
+                _friends = next;
+                _transport.UpdateKnownFriends(_friends);
+            }
+        }
+    }
+
+    private async Task<bool> PersistLocalAcceptedFriendAsync(FriendEntry entry)
+    {
+        AddFriendToMemoryLocked(entry);
+        var saved = await TrySaveSocialStateAsync().ConfigureAwait(false);
+        if (!saved)
+        {
+            RemoveFriendFromMemoryLocked(entry.PetId);
+            StateChanged?.Invoke(this, EventArgs.Empty);
+            return false;
         }
 
-        await SaveSocialStateAsync().ConfigureAwait(false);
         StateChanged?.Invoke(this, EventArgs.Empty);
         return true;
     }
@@ -481,6 +988,14 @@ public sealed class SocialCoordinatorService : IAsyncDisposable
 
     private async Task SaveSocialStateAsync(PetProfile? profile = null)
     {
+        if (!await TrySaveSocialStateAsync(profile).ConfigureAwait(false))
+        {
+            SocialNotification?.Invoke(this, "친구 정보 또는 보상을 저장하지 못했어요.");
+        }
+    }
+
+    private async Task<bool> TrySaveSocialStateAsync(PetProfile? profile = null)
+    {
         await _friendSaveLock.WaitAsync().ConfigureAwait(false);
         try
         {
@@ -490,11 +1005,13 @@ public sealed class SocialCoordinatorService : IAsyncDisposable
             {
                 await _store.SaveProfileAsync(profile).ConfigureAwait(false);
             }
+
+            return true;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
             Trace.TraceError("소셜 상태 저장 실패: {0}", ex);
-            SocialNotification?.Invoke(this, "친구 정보 또는 보상을 저장하지 못했어요.");
+            return false;
         }
         finally
         {

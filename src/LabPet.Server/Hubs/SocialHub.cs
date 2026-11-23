@@ -1,9 +1,11 @@
+using System.Diagnostics;
 using System.Security.Claims;
 using System.Text.Json;
 using LabPet.Server.Options;
 using LabPet.Server.Services;
 using LabPet.Server.Storage;
 using LabPet.Shared.Protocol;
+using LabPet.Shared.Transport;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.SignalR;
 
@@ -92,57 +94,77 @@ public sealed class SocialHub(
     public async Task<RelayDeliveryResult> RelayControlPacketAsync(RelayControlEnvelopeRequest request)
     {
         var senderPetId = RequireAuthenticatedPetId();
+        var sw = Stopwatch.StartNew();
 
         if (request is null || request.Envelope?.Header is null || string.IsNullOrWhiteSpace(request.TargetPetId)
             || request.TargetPetId.Length > 64
             || string.Equals(request.TargetPetId, senderPetId, StringComparison.OrdinalIgnoreCase))
         {
-            return new RelayDeliveryResult(false, "INVALID_REQUEST");
+            logger.LogWarning("제어 패킷 중계 거부: Stage=Validation, ErrorCode=INVALID_REQUEST, ElapsedMs={ElapsedMs}", sw.ElapsedMilliseconds);
+            return new RelayDeliveryResult(false, FriendOperationErrorCodes.InvalidRequest);
         }
 
         var envelope = request.Envelope;
         var header = envelope.Header;
+        string? pairingRequestId = null;
+
+        RelayDeliveryResult RejectAndLog(string stage, string errorCode)
+        {
+            if (IsPairingPacket(header.PacketType) || errorCode is not FriendOperationErrorCodes.RateLimited)
+            {
+                logger.LogWarning(
+                    "제어 패킷 중계 거부: RequestId={RequestId}, MessageId={MessageId}, PacketType={PacketType}, Stage={Stage}, ErrorCode={ErrorCode}, ElapsedMs={ElapsedMs}",
+                    pairingRequestId ?? "-",
+                    header.MessageId,
+                    header.PacketType,
+                    stage,
+                    errorCode,
+                    sw.ElapsedMilliseconds);
+            }
+
+            return new RelayDeliveryResult(false, errorCode);
+        }
 
         // 발신자 ID 위조 차단: 반드시 인증된 토큰의 PetId와 일치해야 함
         if (!string.Equals(header.SenderPetId, senderPetId, StringComparison.OrdinalIgnoreCase))
         {
-            return new RelayDeliveryResult(false, "SENDER_MISMATCH");
+            return RejectAndLog("Validation", FriendOperationErrorCodes.SenderMismatch);
         }
 
         if (ProtocolConstants.EvaluateCompatibility(header.ProtocolVersion) != ProtocolCompatibility.Compatible)
         {
-            return new RelayDeliveryResult(false, "PROTOCOL_MISMATCH");
+            return RejectAndLog("Validation", FriendOperationErrorCodes.ProtocolMismatch);
         }
 
         if (!Guid.TryParseExact(header.MessageId, "N", out _))
         {
-            return new RelayDeliveryResult(false, "INVALID_MESSAGE_ID");
+            return RejectAndLog("Validation", "INVALID_MESSAGE_ID");
         }
 
         var now = DateTimeOffset.UtcNow;
         if ((header.TimestampUtc - now).Duration() > ControlTimestampTolerance)
         {
-            return new RelayDeliveryResult(false, "STALE_TIMESTAMP");
+            return RejectAndLog("Validation", FriendOperationErrorCodes.StaleTimestamp);
         }
 
         var payloadLen = envelope.PayloadJson?.Length ?? 0;
         if (payloadLen <= 0 || payloadLen > MaxPayloadJsonLength || payloadLen * 2 > options.MaxControlPacketBytes)
         {
-            return new RelayDeliveryResult(false, "PAYLOAD_TOO_LARGE");
+            return RejectAndLog("Validation", "PAYLOAD_TOO_LARGE");
         }
 
         if (!rateLimiter.AllowControlPacket(senderPetId))
         {
-            return new RelayDeliveryResult(false, "RATE_LIMITED");
+            return RejectAndLog("Validation", FriendOperationErrorCodes.RateLimited);
         }
 
         if (!rateLimiter.TryMarkMessageSeen(senderPetId, header.MessageId))
         {
-            return new RelayDeliveryResult(false, "DUPLICATE_MESSAGE");
+            return RejectAndLog("Validation", FriendOperationErrorCodes.DuplicateMessage);
         }
 
         var targetPetId = request.TargetPetId.Trim();
-        string? pairingRequestId = null;
+        var acceptValidation = PendingResponseValidation.Unknown;
 
         switch (header.PacketType)
         {
@@ -150,22 +172,28 @@ public sealed class SocialHub(
             {
                 if (envelope.IsEncrypted)
                 {
-                    return new RelayDeliveryResult(false, "INVALID_PAIRING_ENVELOPE");
+                    return RejectAndLog("Validation", FriendOperationErrorCodes.InvalidPairingEnvelope);
                 }
 
                 if (registry.AreMutualFriends(senderPetId, targetPetId))
                 {
-                    return new RelayDeliveryResult(false, "ALREADY_FRIENDS");
+                    return RejectAndLog("Validation", FriendOperationErrorCodes.AlreadyFriends);
                 }
 
                 var reqPayload = TryDeserialize<FriendRequestPayload>(envelope.PayloadJson!);
                 if (reqPayload is null || !Guid.TryParseExact(reqPayload.RequestId, "N", out _))
                 {
-                    return new RelayDeliveryResult(false, "INVALID_PAIRING_REQUEST");
+                    return RejectAndLog("Validation", FriendOperationErrorCodes.InvalidPairingRequest);
                 }
 
                 pairingRequestId = reqPayload.RequestId;
                 pendingRequests.RecordRequest(pairingRequestId, senderPetId, targetPetId);
+                logger.LogInformation(
+                    "친구 신청 검증 완료: RequestId={RequestId}, MessageId={MessageId}, PacketType={PacketType}, Stage=Validation, ElapsedMs={ElapsedMs}",
+                    pairingRequestId,
+                    header.MessageId,
+                    header.PacketType,
+                    sw.ElapsedMilliseconds);
                 break;
             }
 
@@ -173,17 +201,41 @@ public sealed class SocialHub(
             {
                 if (envelope.IsEncrypted)
                 {
-                    return new RelayDeliveryResult(false, "INVALID_PAIRING_ENVELOPE");
+                    return RejectAndLog("Validation", FriendOperationErrorCodes.InvalidPairingEnvelope);
                 }
 
                 var acceptPayload = TryDeserialize<FriendAcceptPayload>(envelope.PayloadJson!);
-                if (acceptPayload is null || !Guid.TryParseExact(acceptPayload.RequestId, "N", out _)
-                    || !pendingRequests.IsValidResponseTarget(acceptPayload.RequestId, senderPetId, targetPetId))
+                if (acceptPayload is null || !Guid.TryParseExact(acceptPayload.RequestId, "N", out _))
                 {
-                    return new RelayDeliveryResult(false, "PAIRING_REQUEST_UNKNOWN");
+                    return RejectAndLog("Validation", FriendOperationErrorCodes.PairingRequestUnknown);
                 }
 
                 pairingRequestId = acceptPayload.RequestId;
+                acceptValidation = pendingRequests.ValidateResponseTarget(acceptPayload.RequestId, senderPetId, targetPetId);
+                switch (acceptValidation)
+                {
+                    case PendingResponseValidation.Expired:
+                        return RejectAndLog("Validation", FriendOperationErrorCodes.PairingRequestExpired);
+                    case PendingResponseValidation.Unknown:
+                        return RejectAndLog("Validation", FriendOperationErrorCodes.PairingRequestUnknown);
+                    case PendingResponseValidation.AlreadyApproved:
+                        logger.LogInformation(
+                            "친구 수락 멱등 재시도 허용: RequestId={RequestId}, MessageId={MessageId}, PacketType={PacketType}, Stage=Validation, ElapsedMs={ElapsedMs}",
+                            pairingRequestId,
+                            header.MessageId,
+                            header.PacketType,
+                            sw.ElapsedMilliseconds);
+                        break;
+                    case PendingResponseValidation.Valid:
+                        logger.LogInformation(
+                            "친구 수락 검증 완료: RequestId={RequestId}, MessageId={MessageId}, PacketType={PacketType}, Stage=Validation, ElapsedMs={ElapsedMs}",
+                            pairingRequestId,
+                            header.MessageId,
+                            header.PacketType,
+                            sw.ElapsedMilliseconds);
+                        break;
+                }
+
                 break;
             }
 
@@ -191,17 +243,27 @@ public sealed class SocialHub(
             {
                 if (envelope.IsEncrypted)
                 {
-                    return new RelayDeliveryResult(false, "INVALID_PAIRING_ENVELOPE");
+                    return RejectAndLog("Validation", FriendOperationErrorCodes.InvalidPairingEnvelope);
                 }
 
                 var rejectPayload = TryDeserialize<FriendRejectPayload>(envelope.PayloadJson!);
-                if (rejectPayload is null || !Guid.TryParseExact(rejectPayload.RequestId, "N", out _)
-                    || !pendingRequests.IsValidResponseTarget(rejectPayload.RequestId, senderPetId, targetPetId))
+                if (rejectPayload is null || !Guid.TryParseExact(rejectPayload.RequestId, "N", out _))
                 {
-                    return new RelayDeliveryResult(false, "PAIRING_REQUEST_UNKNOWN");
+                    return RejectAndLog("Validation", FriendOperationErrorCodes.PairingRequestUnknown);
                 }
 
                 pairingRequestId = rejectPayload.RequestId;
+                var rejectValidation = pendingRequests.ValidateResponseTarget(rejectPayload.RequestId, senderPetId, targetPetId);
+                switch (rejectValidation)
+                {
+                    case PendingResponseValidation.Expired:
+                        return RejectAndLog("Validation", FriendOperationErrorCodes.PairingRequestExpired);
+                    case PendingResponseValidation.Unknown:
+                        return RejectAndLog("Validation", FriendOperationErrorCodes.PairingRequestUnknown);
+                    case PendingResponseValidation.AlreadyApproved:
+                        return RejectAndLog("Validation", FriendOperationErrorCodes.PairingAlreadyCompleted);
+                }
+
                 break;
             }
 
@@ -215,17 +277,17 @@ public sealed class SocialHub(
                 // 비친구 중계 및 비암호화 제어 패킷 원천 차단 (메시지 내용은 서버도 열람/저장하지 않음)
                 if (!registry.AreMutualFriends(senderPetId, targetPetId))
                 {
-                    return new RelayDeliveryResult(false, "NOT_MUTUAL_FRIEND");
+                    return RejectAndLog("Validation", "NOT_MUTUAL_FRIEND");
                 }
 
                 if (!envelope.IsEncrypted)
                 {
-                    return new RelayDeliveryResult(false, "ENCRYPTION_REQUIRED");
+                    return RejectAndLog("Validation", "ENCRYPTION_REQUIRED");
                 }
                 break;
 
             default:
-                return new RelayDeliveryResult(false, "UNSUPPORTED_PACKET_TYPE");
+                return RejectAndLog("Validation", "UNSUPPORTED_PACKET_TYPE");
         }
 
         // 수신자 오프라인 시 메시지 보관 없이 즉시 실패 반환
@@ -237,7 +299,7 @@ public sealed class SocialHub(
                 pendingRequests.Remove(pairingRequestId);
             }
 
-            return new RelayDeliveryResult(false, "RECIPIENT_OFFLINE");
+            return RejectAndLog("RemoteDelivery", FriendOperationErrorCodes.RecipientOffline);
         }
 
         var delivery = new RelayControlEnvelopeDelivery(senderPetId, envelope);
@@ -269,29 +331,122 @@ public sealed class SocialHub(
                 pendingRequests.Remove(pairingRequestId);
             }
 
-            return new RelayDeliveryResult(false, "DELIVERY_FAILED_OR_TIMEOUT");
+            return RejectAndLog("RemoteDelivery", FriendOperationErrorCodes.DeliveryFailedOrTimeout);
         }
 
-        // 수락 ACK 확인 시 서버 인증 테이블에도 친구 관계 영속 등록 및 양측 온라인 상태 동기화
-        if (header.PacketType == PacketType.FriendAccept && pairingRequestId is not null)
+        // 수신된 ACK 기본 헤더/메시지ID 교차 검증
+        var ack = TryDeserialize<AckPayload>(ackEnvelope.PayloadJson);
+        var ackHeaderValid = ackEnvelope.Header is { PacketType: PacketType.Ack } ackHeader
+            && string.Equals(ackHeader.SenderPetId, targetPetId, StringComparison.OrdinalIgnoreCase)
+            && ack is not null
+            && string.Equals(ack.AckMessageId, header.MessageId, StringComparison.Ordinal);
+
+        if (!ackHeaderValid || ack is null)
         {
-            var ack = TryDeserialize<AckPayload>(ackEnvelope.PayloadJson);
-            if (ack is { Accepted: true })
+            if (header.PacketType == PacketType.FriendRequest && pairingRequestId is not null)
             {
-                registry.ApproveFriendship(senderPetId, targetPetId);
                 pendingRequests.Remove(pairingRequestId);
-                await NotifyPresenceChangedAsync(senderPetId, includeNonFriends: false).ConfigureAwait(false);
-                await NotifyPresenceChangedAsync(targetPetId, includeNonFriends: false).ConfigureAwait(false);
+            }
+
+            return RejectAndLog("AckVerification", FriendOperationErrorCodes.DeliveryFailedOrTimeout);
+        }
+
+        if (header.PacketType == PacketType.FriendRequest && pairingRequestId is not null)
+        {
+            if (!ack.Accepted)
+            {
+                pendingRequests.Remove(pairingRequestId);
+                logger.LogWarning(
+                    "친구 신청 상대 거부 ACK 수신: RequestId={RequestId}, MessageId={MessageId}, PacketType={PacketType}, Stage=RemoteAck, ErrorCode={ErrorCode}, ElapsedMs={ElapsedMs}",
+                    pairingRequestId,
+                    header.MessageId,
+                    header.PacketType,
+                    ack.ErrorCode ?? FriendOperationErrorCodes.PairingRequestRejected,
+                    sw.ElapsedMilliseconds);
+            }
+            else
+            {
+                logger.LogInformation(
+                    "친구 신청 수신 및 ACK 전달 완료: RequestId={RequestId}, MessageId={MessageId}, PacketType={PacketType}, Stage=RemoteAck, ElapsedMs={ElapsedMs}",
+                    pairingRequestId,
+                    header.MessageId,
+                    header.PacketType,
+                    sw.ElapsedMilliseconds);
+            }
+        }
+        // 수락 ACK 확인 시 서버 인증 테이블에도 친구 관계 영속 등록 및 양측 온라인 상태 동기화
+        else if (header.PacketType == PacketType.FriendAccept && pairingRequestId is not null)
+        {
+            if (ack.Accepted)
+            {
+                var registryPersisted = registry.ApproveFriendship(senderPetId, targetPetId);
+                pendingRequests.MarkApproved(pairingRequestId);
+                logger.LogInformation(
+                    "친구 수락 ACK 확인 및 서버 관계 등록: RequestId={RequestId}, MessageId={MessageId}, PacketType={PacketType}, Stage=FriendshipRegistered, RegistryPersisted={RegistryPersisted}, ElapsedMs={ElapsedMs}",
+                    pairingRequestId,
+                    header.MessageId,
+                    header.PacketType,
+                    registryPersisted,
+                    sw.ElapsedMilliseconds);
+
+                try
+                {
+                    await NotifyPresenceChangedAsync(senderPetId, includeNonFriends: false).ConfigureAwait(false);
+                    await NotifyPresenceChangedAsync(targetPetId, includeNonFriends: false).ConfigureAwait(false);
+                }
+                catch (Exception ex)
+                {
+                    logger.LogWarning(
+                        ex,
+                        "친구 승인 후 프레즌스 동기화 알림 실패: RequestId={RequestId}, MessageId={MessageId}, Stage=PresenceNotify, ElapsedMs={ElapsedMs}",
+                        pairingRequestId,
+                        header.MessageId,
+                        sw.ElapsedMilliseconds);
+                }
+            }
+            else
+            {
+                if (acceptValidation != PendingResponseValidation.AlreadyApproved
+                    && ack.ErrorCode is FriendOperationErrorCodes.PairingRequestExpired or FriendOperationErrorCodes.PairingRequestUnknown)
+                {
+                    pendingRequests.Remove(pairingRequestId);
+                }
+
+                logger.LogWarning(
+                    "친구 수락 ACK 거부: RequestId={RequestId}, MessageId={MessageId}, PacketType={PacketType}, Stage=AckVerification, ErrorCode={ErrorCode}, ElapsedMs={ElapsedMs}",
+                    pairingRequestId,
+                    header.MessageId,
+                    header.PacketType,
+                    ack.ErrorCode ?? FriendOperationErrorCodes.PairingConfirmationFailed,
+                    sw.ElapsedMilliseconds);
             }
         }
         else if (header.PacketType == PacketType.FriendReject && pairingRequestId is not null)
         {
-            pendingRequests.Remove(pairingRequestId);
+            if (ack.Accepted)
+            {
+                pendingRequests.Remove(pairingRequestId);
+                logger.LogInformation(
+                    "친구 거절 ACK 완료: RequestId={RequestId}, MessageId={MessageId}, PacketType={PacketType}, Stage=Rejected, ElapsedMs={ElapsedMs}",
+                    pairingRequestId,
+                    header.MessageId,
+                    header.PacketType,
+                    sw.ElapsedMilliseconds);
+            }
+            else
+            {
+                logger.LogWarning(
+                    "친구 거절 ACK 거부: RequestId={RequestId}, MessageId={MessageId}, PacketType={PacketType}, Stage=AckVerification, ErrorCode={ErrorCode}, ElapsedMs={ElapsedMs}",
+                    pairingRequestId,
+                    header.MessageId,
+                    header.PacketType,
+                    ack.ErrorCode ?? FriendOperationErrorCodes.PairingRequestUnknown,
+                    sw.ElapsedMilliseconds);
+            }
         }
         else if (header.PacketType == PacketType.MusicFollowOn)
         {
-            var ack = TryDeserialize<AckPayload>(ackEnvelope.PayloadJson);
-            if (ack is { Accepted: true })
+            if (ack.Accepted)
             {
                 presence.SetMusicSubscription(hostPetId: targetPetId, followerPetId: senderPetId, enable: true);
             }
@@ -301,8 +456,13 @@ public sealed class SocialHub(
             presence.SetMusicSubscription(hostPetId: targetPetId, followerPetId: senderPetId, enable: false);
         }
 
-        return new RelayDeliveryResult(true, null, ackEnvelope);
+        return new RelayDeliveryResult(true, ack.Accepted ? null : ack.ErrorCode, ackEnvelope);
     }
+
+    private static bool IsPairingPacket(PacketType type) => type is
+        PacketType.FriendRequest or
+        PacketType.FriendAccept or
+        PacketType.FriendReject;
 
     public async Task RelayMusicFrameAsync(MusicFramePacket packet)
     {

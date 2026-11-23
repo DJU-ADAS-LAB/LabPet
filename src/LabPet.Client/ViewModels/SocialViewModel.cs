@@ -5,10 +5,11 @@ using CommunityToolkit.Mvvm.Input;
 using LabPet.Client.Social;
 using LabPet.Shared.Models;
 using LabPet.Shared.Protocol;
+using LabPet.Shared.Transport;
 
 namespace LabPet.Client.ViewModels;
 
-public sealed class PeerListItemViewModel
+public sealed partial class PeerListItemViewModel : ObservableObject
 {
     public PeerSnapshot Snapshot { get; }
     public string DisplayTitle => SocialCoordinatorService.FormatDisplayName(Snapshot.OwnerName, Snapshot.PetName);
@@ -20,7 +21,20 @@ public sealed class PeerListItemViewModel
     public bool IsMusicActive => Snapshot.IsMusicActive;
     public bool IsSleeping => Snapshot.IsSleeping;
     public bool RequiresUpdate => Snapshot.RequiresUpdate;
-    public bool CanSendFriendRequest => !Snapshot.IsFriend && !Snapshot.RequiresUpdate;
+
+    [ObservableProperty, NotifyPropertyChangedFor(nameof(CanSendFriendRequest), nameof(FriendRequestButtonText))]
+    private bool _isSendingFriendRequest;
+    [ObservableProperty, NotifyPropertyChangedFor(nameof(CanSendFriendRequest), nameof(FriendRequestButtonText))]
+    private bool _isFriendRequestPending;
+    [ObservableProperty, NotifyPropertyChangedFor(nameof(FriendRequestButtonText))]
+    private bool _canRetryFriendRequest;
+
+    public bool CanSendFriendRequest => !Snapshot.IsFriend && !Snapshot.RequiresUpdate && !IsSendingFriendRequest && !IsFriendRequestPending;
+    public string FriendRequestButtonText => IsSendingFriendRequest
+        ? "전송 중..."
+        : IsFriendRequestPending
+            ? "신청 완료"
+            : CanRetryFriendRequest ? "다시 신청" : "친구 신청";
 
     public string UpdateBadgeText => Snapshot.Compatibility switch
     {
@@ -36,9 +50,15 @@ public sealed class PeerListItemViewModel
         _ => "프로토콜 호환"
     };
 
-    public PeerListItemViewModel(PeerSnapshot snapshot)
+    public PeerListItemViewModel(
+        PeerSnapshot snapshot,
+        OutgoingFriendRequestState outgoingState = OutgoingFriendRequestState.None,
+        bool canRetry = false)
     {
         Snapshot = snapshot;
+        _isSendingFriendRequest = outgoingState == OutgoingFriendRequestState.Sending;
+        _isFriendRequestPending = outgoingState == OutgoingFriendRequestState.Pending;
+        _canRetryFriendRequest = canRetry;
     }
 }
 
@@ -112,10 +132,11 @@ public sealed class FriendListItemViewModel
 /// </summary>
 public sealed partial class SocialViewModel : ObservableObject
 {
-    private const string DefaultStatusBanner = "같은 로컬 네트워크(LAN)의 LabPet을 자동 탐색 중입니다.";
+    private const string DefaultStatusBanner = "같은 로컬 네트워크(LAN) 및 인터넷(GCP)의 LabPet을 탐색 중입니다.";
     private const string MessageSendFailureStatus = "메시지 전송에 실패했습니다.";
 
     private readonly SocialCoordinatorService _social;
+    private readonly HashSet<string> _retryableFailedPeerIds = new(StringComparer.OrdinalIgnoreCase);
     private Func<string, bool>? _isVisitorActivePredicate;
 
     public event EventHandler<(FriendEntry Friend, PetAppearance Appearance)>? ToggleVisitDesktopRequested;
@@ -136,6 +157,7 @@ public sealed partial class SocialViewModel : ObservableObject
         _social = social;
         _preferLocalMusicWhenActive = _social.PreferLocalMusicWhenActive;
         _social.StateChanged += OnSocialStateChanged;
+        _social.TransportErrorReported += OnTransportErrorReported;
         RefreshLists();
     }
 
@@ -157,7 +179,35 @@ public sealed partial class SocialViewModel : ObservableObject
 
     private void OnSocialStateChanged(object? sender, EventArgs e)
     {
-        Application.Current?.Dispatcher.BeginInvoke(RefreshLists);
+        if (Application.Current?.Dispatcher is { } dispatcher)
+        {
+            dispatcher.BeginInvoke(RefreshLists);
+        }
+        else
+        {
+            RefreshLists();
+        }
+    }
+
+    private void OnTransportErrorReported(object? sender, TransportErrorEventArgs e)
+    {
+        void Apply()
+        {
+            OnPropertyChanged(nameof(RemoteConnectionStatusText));
+            if (e.Operation is "Listen" or "GcpAuth" or "GcpConnect" or "GcpRegisterPresence")
+            {
+                StatusBanner = _social.LastTransportErrorMessage ?? e.Message;
+            }
+        }
+
+        if (Application.Current?.Dispatcher is { } dispatcher)
+        {
+            dispatcher.BeginInvoke(Apply);
+        }
+        else
+        {
+            Apply();
+        }
     }
 
     public void RefreshLists()
@@ -174,10 +224,13 @@ public sealed partial class SocialViewModel : ObservableObject
         {
             if (peer.IsFriend || friendPetIds.Contains(peer.PetId))
             {
+                _retryableFailedPeerIds.Remove(peer.PetId);
                 continue;
             }
 
-            NearbyPeers.Add(new PeerListItemViewModel(peer));
+            var outgoingState = _social.GetOutgoingFriendRequestState(peer.PetId);
+            var canRetry = outgoingState == OutgoingFriendRequestState.None && _retryableFailedPeerIds.Contains(peer.PetId);
+            NearbyPeers.Add(new PeerListItemViewModel(peer, outgoingState, canRetry));
         }
 
         Friends.Clear();
@@ -209,10 +262,41 @@ public sealed partial class SocialViewModel : ObservableObject
             return;
         }
 
-        var ok = await _social.SendFriendRequestAsync(peer.Snapshot);
-        StatusBanner = ok
-            ? $"{peer.DisplayTitle}에게 친구 신청을 보냈습니다."
-            : $"{peer.DisplayTitle}에게 친구 신청을 보내지 못했습니다. (방화벽/네트워크 확인)";
+        var routeLabel = peer.Snapshot.TransportKind == PeerTransportKind.GcpRelay ? "인터넷(GCP)" : "LAN";
+        peer.IsSendingFriendRequest = true;
+        StatusBanner = $"{peer.DisplayTitle}에게 [{routeLabel}] 경로로 친구 신청 전송 중...";
+
+        try
+        {
+            var result = await _social.SendFriendRequestDetailedAsync(peer.Snapshot);
+            if (result.Succeeded)
+            {
+                _retryableFailedPeerIds.Remove(peer.Snapshot.PetId);
+                peer.CanRetryFriendRequest = false;
+                peer.IsFriendRequestPending = true;
+                var actualRoute = result.Route == PeerTransportKind.GcpRelay ? "인터넷(GCP)" : "LAN";
+                StatusBanner = $"{peer.DisplayTitle}에게 [{actualRoute}] 친구 신청을 보냈습니다. 상대방 수락 대기 중...";
+            }
+            else
+            {
+                peer.IsFriendRequestPending = result.ErrorCode == FriendOperationErrorCodes.DuplicatePendingRequest;
+                peer.CanRetryFriendRequest = result.IsTransient;
+                if (result.IsTransient)
+                {
+                    _retryableFailedPeerIds.Add(peer.Snapshot.PetId);
+                }
+                else
+                {
+                    _retryableFailedPeerIds.Remove(peer.Snapshot.PetId);
+                }
+
+                StatusBanner = SocialCoordinatorService.FormatFriendOperationFailure(result, isAccept: false, peer.DisplayTitle);
+            }
+        }
+        finally
+        {
+            peer.IsSendingFriendRequest = false;
+        }
     }
 
     [RelayCommand]
@@ -305,5 +389,6 @@ public sealed partial class SocialViewModel : ObservableObject
     public void Detach()
     {
         _social.StateChanged -= OnSocialStateChanged;
+        _social.TransportErrorReported -= OnTransportErrorReported;
     }
 }

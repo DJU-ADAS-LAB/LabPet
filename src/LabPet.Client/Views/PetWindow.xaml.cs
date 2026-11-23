@@ -19,24 +19,15 @@ using LabPet.Shared.Models;
 
 namespace LabPet.Client.Views;
 
-public partial class PetWindow : Window
+public partial class PetWindow : Window, IMessageBubbleTarget
 {
     private static readonly TimeSpan ActiveFrameInterval = TimeSpan.FromMilliseconds(16);
     private static readonly TimeSpan IdleFrameInterval = TimeSpan.FromMilliseconds(40);
     public static readonly TimeSpan SleepIdleThreshold = TimeSpan.FromMinutes(5);
     private const double DragThresholdPixels = 5.0;
-    private const double BaseWindowWidth = 214.0;
-    private const double BaseViewportHeight = 224.0;
-    private const double NameplateGap = 4.0;
     private const double FriendOverlayGap = 4.0;
     private const double FriendOverlayTopInset = 12.0;
     private const double SpeechBubbleBottomOverlap = 8.0;
-
-    /// <summary>
-    /// 타이핑 미니 키보드(Y=-0.80, Z=1.04)와 바닥 회전 링 오라(Y=-0.78, Z=1.24)의 앞쪽 하단 기준점.
-    /// 네임태그가 캐릭터 발바닥뿐 아니라 키보드·오라 효과도 가리지 않도록 함께 비교한다.
-    /// </summary>
-    private static readonly Point3D KeyboardAuraAnchor = new(0, -0.81, 1.12);
 
     /// <summary>
     /// 친구 메시지·소셜 알림 말풍선 줄의 표시 시간(ms). 새 메시지가 와도 기존 줄은 이 시간 동안 유지된다.
@@ -76,6 +67,9 @@ public partial class PetWindow : Window
     private int _shakeReversalCount;
     private double _shakeWindowStartSeconds;
     private bool _dizzyTriggeredDuringDrag;
+    private bool _isClosingOrClosed;
+
+    public bool IsAvailableForMessages => !_isClosingOrClosed && IsVisible;
 
     public PetWindow(
         PetWindowViewModel viewModel,
@@ -135,13 +129,11 @@ public partial class PetWindow : Window
         _viewModel.ClickThroughChanged += OnClickThroughChanged;
         _viewModel.ResetPositionRequested += OnResetPositionRequested;
         _viewModel.ExitRequested += OnExitRequested;
-        _viewModel.FriendRequestResponded += OnFriendRequestResponded;
         _activityHook.KeyTyped += OnGlobalKeyTyped;
         _pomodoro.FocusCompleted += OnPomodoroFocusCompleted;
         _pomodoro.BreakCompleted += OnPomodoroBreakCompleted;
         _social.StateChanged += OnSocialStateChanged;
         _social.FriendRequestArrived += OnSocialFriendRequestArrived;
-        _social.FriendMessageReceived += OnFriendMessageReceived;
         _social.SocialNotification += OnSocialNotification;
         _social.PetReactionTriggered += OnSocialPetReactionTriggered;
 
@@ -181,8 +173,11 @@ public partial class PetWindow : Window
         _uptimeTimer.Tick += OnUptimeTick;
         _uptimeTimer.Start();
 
+        Closing += (_, _) => _isClosingOrClosed = true;
+
         Closed += (_, _) =>
         {
+            _isClosingOrClosed = true;
             _frameTimer.Stop();
             _activityFlushTimer.Stop();
             _uptimeTimer.Stop();
@@ -195,18 +190,17 @@ public partial class PetWindow : Window
             LightsVisual.Content = null;
             _portraitRenderer.ClearCache();
             _currentRig = null;
+            _viewModel.DisposeBubbles();
             _viewModel.ProfileUpdated -= OnProfileUpdated;
             _viewModel.PetScaleChanged -= OnPetScaleChanged;
             _viewModel.ClickThroughChanged -= OnClickThroughChanged;
             _viewModel.ResetPositionRequested -= OnResetPositionRequested;
             _viewModel.ExitRequested -= OnExitRequested;
-            _viewModel.FriendRequestResponded -= OnFriendRequestResponded;
             _activityHook.KeyTyped -= OnGlobalKeyTyped;
             _pomodoro.FocusCompleted -= OnPomodoroFocusCompleted;
             _pomodoro.BreakCompleted -= OnPomodoroBreakCompleted;
             _social.StateChanged -= OnSocialStateChanged;
             _social.FriendRequestArrived -= OnSocialFriendRequestArrived;
-            _social.FriendMessageReceived -= OnFriendMessageReceived;
             _social.SocialNotification -= OnSocialNotification;
             _social.PetReactionTriggered -= OnSocialPetReactionTriggered;
         };
@@ -243,32 +237,21 @@ public partial class PetWindow : Window
     }
 
     internal static Size ComputeViewportSize(double scale)
-    {
-        var clamped = PetProfile.NormalizePetScale(scale);
-        return new Size(Math.Round(BaseWindowWidth * clamped), Math.Round(BaseViewportHeight * clamped));
-    }
+        => PetDisplayLayoutHelper.ComputeViewportSize(scale);
 
     private void OnPetScaleChanged(object? sender, double scale)
     {
-        var viewportSize = ComputeViewportSize(scale);
-        var previousWidth = Width;
-        var previousHeight = Height;
-
-        // 모든 배율에서 동일한 3D 뷰포트 종횡비를 유지해 상단(모자)·하단(키보드)이 잘리지 않도록 한다.
-        PetViewport.Width = viewportSize.Width;
-        PetViewport.Height = viewportSize.Height;
-        Width = Math.Max(180.0, viewportSize.Width);
-        Height = viewportSize.Height + PetNameplateRow.Height.Value;
+        // 슬라이더를 끌 때는 가운데를 유지하고, 메뉴에서 변경할 때는 우하단을 유지한다.
+        var isDraggingSlider = IsLoaded && (FriendOverlayCard.IsMouseCaptureWithin || PetControls.IsMouseCaptureWithin);
+        PetDisplayLayoutHelper.ApplyScaleAndSize(
+            this,
+            PetViewport,
+            scale,
+            _viewModel.PetOpacity,
+            PetNameplateRow.Height.Value,
+            horizontalAnchorRatio: isDraggingSlider ? 0.5 : 1.0);
         UpdateNameplatePosition();
         RepositionSpeechBubblePopup();
-
-        // 슬라이더를 끌 때는 가운데를 유지하고, 메뉴에서 변경할 때는 우하단을 유지한다.
-        if (IsLoaded)
-        {
-            var isDraggingSlider = FriendOverlayCard.IsMouseCaptureWithin || PetControls.IsMouseCaptureWithin;
-            Left += (previousWidth - Width) * (isDraggingSlider ? 0.5 : 1.0);
-            Top += previousHeight - Height;
-        }
     }
 
     private static CustomPopupPlacement[] GetSpeechBubblePlacements(Size popupSize, Size targetSize, DpiScale dpi)
@@ -300,20 +283,9 @@ public partial class PetWindow : Window
 
     private void UpdateNameplatePosition()
     {
-        if (PetViewport.ActualHeight > 0 && PetVisual.Content is not null)
+        if (PetDisplayLayoutHelper.TryComputeNameplateOffsetY(PetViewport, PetVisual, _nameplateAnchor, out var offsetDip))
         {
-            var transform = PetVisual.TransformToAncestor(PetViewport);
-            if (transform.TryTransform(_nameplateAnchor, out var bodyAnchor))
-            {
-                var lowestY = bodyAnchor.Y;
-                if (transform.TryTransform(KeyboardAuraAnchor, out var effectAnchor))
-                {
-                    lowestY = Math.Max(lowestY, effectAnchor.Y);
-                }
-
-                var offsetDip = Math.Min(0, lowestY + NameplateGap - PetViewport.ActualHeight);
-                PetNameplateOffset.Y = offsetDip;
-            }
+            PetNameplateOffset.Y = offsetDip;
         }
     }
 
@@ -573,17 +545,27 @@ public partial class PetWindow : Window
 
     private void OnSocialFriendRequestArrived(object? sender, PendingFriendRequest request)
     {
-        Dispatcher.BeginInvoke(() => _viewModel.PendingFriendRequest = request);
+        Dispatcher.BeginInvoke(() => _viewModel.EnqueueFriendRequest(request));
     }
 
-    private void OnFriendMessageReceived(object? sender, ReceivedFriendMessage message)
+    public bool TryShowFriendMessage(ReceivedFriendMessage message)
     {
-        Dispatcher.BeginInvoke(() =>
+        if (_isClosingOrClosed || !IsVisible || Dispatcher.HasShutdownStarted)
         {
-            var portrait = _portraitRenderer.GetPortrait(message.Appearance);
-            _viewModel.ShowBubble(new FriendMessageBubble(message.Text, message.SenderName, portrait),
-                SocialNotificationBubbleDurationMs);
-        });
+            return false;
+        }
+
+        if (!Dispatcher.CheckAccess())
+        {
+            Dispatcher.BeginInvoke(() => TryShowFriendMessage(message));
+            return true;
+        }
+
+        var portrait = _portraitRenderer.GetPortrait(message.Appearance);
+        _viewModel.ShowBubble(
+            new FriendMessageBubble(message.Text, message.SenderName, portrait),
+            SocialNotificationBubbleDurationMs);
+        return true;
     }
 
     private void OnSocialNotification(object? sender, string message)
@@ -594,15 +576,6 @@ public partial class PetWindow : Window
     private void OnSocialPetReactionTriggered(object? sender, EventArgs e)
     {
         Dispatcher.BeginInvoke(() => _animator.TriggerPetReaction());
-    }
-
-    private async void OnFriendRequestResponded(object? sender, (PendingFriendRequest Request, bool Accept) args)
-    {
-        var ok = await _social.RespondFriendRequestAsync(args.Request, args.Accept);
-        if (args.Accept && !ok)
-        {
-            _viewModel.PendingFriendRequest ??= args.Request;
-        }
     }
 
     private void OnFrameTick(object? sender, EventArgs e)
@@ -844,7 +817,7 @@ public partial class PetWindow : Window
         var workArea = SystemParameters.WorkArea;
         var viewportHeight = double.IsFinite(PetViewport.Height) && PetViewport.Height > 0
             ? PetViewport.Height
-            : BaseViewportHeight;
+            : PetDisplayLayoutHelper.BaseViewportHeight;
         Left = workArea.Right - Width - 28;
         Top = workArea.Bottom - viewportHeight - 8;
     }

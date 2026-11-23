@@ -276,15 +276,26 @@
                                    TextAlignment="Center"
                                    TextWrapping="Wrap"
                                    MaxWidth="188" />
+                        <TextBlock Text="{Binding PendingFriendRequestStatusText}"
+                                   FontSize="10.5"
+                                   FontWeight="SemiBold"
+                                   Foreground="#FFDC2626"
+                                   TextAlignment="Center"
+                                   TextWrapping="Wrap"
+                                   MaxWidth="188"
+                                   Margin="0,3,0,0"
+                                   Visibility="{Binding HasPendingFriendRequestStatus, Converter={StaticResource BoolToVis}}" />
                         <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Margin="0,6,0,0">
-                            <Button Content="수락"
+                            <Button Content="{Binding AcceptButtonText}"
                                     Style="{StaticResource PrimaryButtonStyle}"
                                     Command="{Binding AcceptFriendRequestCommand}"
+                                    IsEnabled="{Binding CanClickFriendRequestAction}"
                                     Padding="12,4"
                                     FontSize="11"
                                     Margin="0,0,6,0" />
                             <Button Content="거절"
                                     Command="{Binding RejectFriendRequestCommand}"
+                                    IsEnabled="{Binding CanClickFriendRequestAction}"
                                     Padding="12,4"
                                     FontSize="11" />
                         </StackPanel>
@@ -543,15 +554,16 @@
                                                         CommandParameter="{Binding}" />
                                             </StackPanel>
 
-                                            <!-- 주변 미등록 LAN 피어인 경우: + 신청 -->
+                                            <!-- 주변 미등록 피어인 경우: + 신청 -->
                                             <Button DockPanel.Dock="Right"
-                                                    Content="+ 신청"
+                                                    Content="{Binding FriendRequestButtonText}"
+                                                    IsEnabled="{Binding CanSendFriendRequest}"
                                                     Padding="7,2"
                                                     FontSize="10.5"
                                                     Height="22"
                                                     Command="{Binding DataContext.QuickSendFriendRequestCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
                                                     CommandParameter="{Binding}"
-                                                    Visibility="{Binding CanSendFriendRequest, Converter={StaticResource BoolToVis}}" />
+                                                    Visibility="{Binding CanShowFriendRequestButton, Converter={StaticResource BoolToVis}}" />
                                         </DockPanel>
                                         <DockPanel Margin="0,6,0,1"
                                                    Background="Transparent"

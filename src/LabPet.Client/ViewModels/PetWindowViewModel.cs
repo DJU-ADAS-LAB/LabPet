@@ -4,7 +4,9 @@ using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using LabPet.Client.Social;
 using LabPet.Client.Storage;
+using LabPet.Client.Views;
 using LabPet.Shared.Models;
+using LabPet.Shared.Transport;
 
 namespace LabPet.Client.ViewModels;
 
@@ -18,7 +20,7 @@ public sealed partial class QuickOverlayEntry : ObservableObject
 
     public string PetId { get; init; } = string.Empty;
     [ObservableProperty] private string _displayTitle = string.Empty;
-    [ObservableProperty, NotifyPropertyChangedFor(nameof(CanFollowMusic), nameof(CanSendFriendRequest))]
+    [ObservableProperty, NotifyPropertyChangedFor(nameof(CanFollowMusic), nameof(CanShowFriendRequestButton), nameof(CanSendFriendRequest))]
     private bool _isFriend;
     [ObservableProperty, NotifyPropertyChangedFor(nameof(CanFollowMusic), nameof(MusicTooltip), nameof(MusicButtonIcon))]
     private bool _isMusicActive;
@@ -26,11 +28,17 @@ public sealed partial class QuickOverlayEntry : ObservableObject
     private bool _isSleeping;
     [ObservableProperty, NotifyPropertyChangedFor(nameof(CanFollowMusic), nameof(MusicTooltip), nameof(MusicButtonIcon))]
     private bool _isFollowingMusic;
-    [ObservableProperty, NotifyPropertyChangedFor(nameof(CanSendFriendRequest))]
+    [ObservableProperty, NotifyPropertyChangedFor(nameof(CanShowFriendRequestButton), nameof(CanSendFriendRequest))]
     private bool _requiresUpdate;
+    [ObservableProperty, NotifyPropertyChangedFor(nameof(CanSendFriendRequest), nameof(FriendRequestButtonText))]
+    private bool _isSendingFriendRequest;
+    [ObservableProperty, NotifyPropertyChangedFor(nameof(CanSendFriendRequest), nameof(FriendRequestButtonText))]
+    private bool _isFriendRequestPending;
     [ObservableProperty] private bool _isComposingMessage;
     public bool CanFollowMusic => IsFriend && (IsMusicActive || IsFollowingMusic);
-    public bool CanSendFriendRequest => !IsFriend && !RequiresUpdate;
+    public bool CanShowFriendRequestButton => !IsFriend && !RequiresUpdate;
+    public bool CanSendFriendRequest => !IsFriend && !RequiresUpdate && !IsSendingFriendRequest && !IsFriendRequestPending;
+    public string FriendRequestButtonText => IsSendingFriendRequest ? "전송 중..." : (IsFriendRequestPending ? "대기 중" : "+ 신청");
     public bool HasSleepBadge => IsSleeping;
     public Brush StatusDotBrush => IsSleeping ? SleepingDotBrush : OnlineDotBrush;
     public FriendEntry? Friend { get; set; }
@@ -71,6 +79,7 @@ public sealed partial class PetWindowViewModel : ObservableObject
 {
     private readonly IAppDataStore _store;
     private readonly SocialCoordinatorService _social;
+    private readonly BubbleMessageStack _bubbleStack = new(MaxBubbleLines);
 
     public event EventHandler? OpenCustomizationRequested;
     public event EventHandler? OpenSoloHubRequested;
@@ -86,7 +95,6 @@ public sealed partial class PetWindowViewModel : ObservableObject
     public event EventHandler<PetProfile>? ProfileUpdated;
     public event EventHandler<double>? PetScaleChanged;
     public event EventHandler<double>? PetOpacityChanged;
-    public event EventHandler<(PendingFriendRequest Request, bool Accept)>? FriendRequestResponded;
     public event EventHandler<(FriendEntry Friend, PetAppearance Appearance)>? ToggleVisitFriendRequested;
 
     public PetProfile CurrentProfile { get; private set; } = new();
@@ -115,9 +123,16 @@ public sealed partial class PetWindowViewModel : ObservableObject
     /// 말풍선에 쌓여 표시 중인 메시지 줄 목록(오래된 순 → 최신 순).
     /// 각 줄은 자신의 표시 시간이 끝나면 개별적으로 사라진다.
     /// </summary>
-    public ObservableCollection<BubbleLine> BubbleLines { get; } = [];
-    [ObservableProperty, NotifyPropertyChangedFor(nameof(HasAnyBubble))]
+    public ObservableCollection<BubbleLine> BubbleLines => _bubbleStack.Items;
+    private readonly Queue<PendingFriendRequest> _pendingFriendRequestQueue = new();
+    [ObservableProperty, NotifyPropertyChangedFor(nameof(HasPendingFriendRequest), nameof(PendingFriendRequestText), nameof(HasAnyBubble), nameof(CanClickFriendRequestAction))]
     private PendingFriendRequest? _pendingFriendRequest;
+    [ObservableProperty, NotifyPropertyChangedFor(nameof(CanClickFriendRequestAction), nameof(AcceptButtonText))]
+    private bool _isRespondingFriendRequest;
+    [ObservableProperty, NotifyPropertyChangedFor(nameof(HasPendingFriendRequestStatus))]
+    private string _pendingFriendRequestStatusText = string.Empty;
+    [ObservableProperty, NotifyPropertyChangedFor(nameof(AcceptButtonText))]
+    private bool _canRetryPendingFriendRequest;
     [ObservableProperty] private string _trayTooltip = "LabPet";
     [ObservableProperty] private double _petScale = PetProfile.DefaultPetScale;
     [ObservableProperty] private double _petOpacity = 1.0;
@@ -130,6 +145,11 @@ public sealed partial class PetWindowViewModel : ObservableObject
     [ObservableProperty] private string _quickMessageText = string.Empty;
 
     public bool HasPendingFriendRequest => PendingFriendRequest is not null;
+    public bool HasPendingFriendRequestStatus => !string.IsNullOrWhiteSpace(PendingFriendRequestStatusText);
+    public bool CanClickFriendRequestAction => PendingFriendRequest is not null && !IsRespondingFriendRequest;
+    public string AcceptButtonText => IsRespondingFriendRequest
+        ? "처리 중..."
+        : (CanRetryPendingFriendRequest ? "다시 시도" : "수락");
     public bool HasAnyBubble => IsUpdateBubbleVisible || HasPendingFriendRequest || IsBubbleVisible;
     public bool HasNoQuickOverlayEntries => QuickOverlayEntries.Count == 0;
     public string QuickOverlayHeaderText => $"주변 · 온라인 친구 ({QuickOverlayEntries.Count})";
@@ -166,6 +186,7 @@ public sealed partial class PetWindowViewModel : ObservableObject
     {
         _store = store;
         _social = social;
+        _bubbleStack.Changed += (_, _) => IsBubbleVisible = _bubbleStack.HasItems;
     }
 
     public void ApplyProfile(PetProfile profile)
@@ -178,7 +199,8 @@ public sealed partial class PetWindowViewModel : ObservableObject
         try
         {
             PetScale = PetProfile.NormalizePetScale(profile.PetScale);
-            PetOpacity = Math.Clamp(profile.PetOpacity <= 0 ? 1.0 : profile.PetOpacity, 0.25, 1.0);
+            PetOpacity = PetDisplayLayoutHelper.NormalizeOpacity(
+                profile.PetOpacity <= 0 ? PetDisplayLayoutHelper.MaxPetOpacity : profile.PetOpacity);
         }
         finally
         {
@@ -208,7 +230,7 @@ public sealed partial class PetWindowViewModel : ObservableObject
         OnPropertyChanged(nameof(PetOpacityPercentText));
         if (_suppressSliderSideEffects) return;
 
-        var clamped = Math.Clamp(value, 0.25, 1.0);
+        var clamped = PetDisplayLayoutHelper.NormalizeOpacity(value);
         CurrentProfile.PetOpacity = clamped;
         PetOpacityChanged?.Invoke(this, clamped);
         ScheduleDebouncedProfileSave();
@@ -287,6 +309,8 @@ public sealed partial class PetWindowViewModel : ObservableObject
                 IsMusicActive = p.IsMusicActive,
                 IsSleeping = p.IsSleeping,
                 RequiresUpdate = p.RequiresUpdate,
+                IsSendingFriendRequest = _social.IsOutgoingFriendRequestSending(p.PetId),
+                IsFriendRequestPending = _social.IsOutgoingFriendRequestPending(p.PetId),
                 Peer = p
             });
         }
@@ -309,6 +333,8 @@ public sealed partial class PetWindowViewModel : ObservableObject
             existing.IsSleeping = item.IsSleeping;
             existing.IsFollowingMusic = item.IsFollowingMusic;
             existing.RequiresUpdate = item.RequiresUpdate;
+            existing.IsSendingFriendRequest = item.IsSendingFriendRequest;
+            existing.IsFriendRequestPending = item.IsFriendRequestPending;
             existing.Friend = item.Friend;
             existing.Peer = item.Peer;
             var oldIndex = QuickOverlayEntries.IndexOf(existing);
@@ -348,22 +374,12 @@ public sealed partial class PetWindowViewModel : ObservableObject
     public void ShowBubble(string message, int durationMs = 2600)
         => ShowBubble(new BubbleLine(message), durationMs);
 
-    public async void ShowBubble(BubbleLine line, int durationMs)
+    public void ShowBubble(BubbleLine line, int durationMs)
     {
-        BubbleLines.Add(line);
-        while (BubbleLines.Count > MaxBubbleLines)
-        {
-            BubbleLines.RemoveAt(0);
-        }
-
-        IsBubbleVisible = true;
-
-        await Task.Delay(durationMs);
-
-        // 이미 밀려난 줄이면 Remove는 아무 일도 하지 않는다.
-        BubbleLines.Remove(line);
-        IsBubbleVisible = BubbleLines.Count > 0;
+        _bubbleStack.Add(line, durationMs);
     }
+
+    public void DisposeBubbles() => _bubbleStack.Dispose();
 
     partial void OnIsClickThroughEnabledChanged(bool value)
     {
@@ -536,8 +552,90 @@ public sealed partial class PetWindowViewModel : ObservableObject
             return;
         }
 
-        var ok = await _social.SendFriendRequestAsync(entry.Peer);
-        ShowBubble(ok ? $"{entry.DisplayTitle}에게 친구 신청!" : "친구 신청 전송 실패", 2200);
+        entry.IsSendingFriendRequest = true;
+        try
+        {
+            var result = await _social.SendFriendRequestDetailedAsync(entry.Peer);
+            if (result.Succeeded)
+            {
+                entry.IsFriendRequestPending = true;
+                var routeLabel = result.Route == PeerTransportKind.GcpRelay ? "인터넷(GCP)" : "LAN";
+                ShowBubble($"{entry.DisplayTitle}에게 [{routeLabel}] 친구 신청 완료!", 2400);
+            }
+            else
+            {
+                entry.IsFriendRequestPending = result.ErrorCode == FriendOperationErrorCodes.DuplicatePendingRequest;
+                ShowBubble(SocialCoordinatorService.FormatFriendOperationFailure(result, isAccept: false, entry.DisplayTitle), 4200);
+            }
+        }
+        finally
+        {
+            entry.IsSendingFriendRequest = false;
+            RefreshQuickOverlayEntries();
+        }
+    }
+
+    public void EnqueueFriendRequest(PendingFriendRequest request)
+    {
+        if (request is null || string.IsNullOrWhiteSpace(request.RequestId))
+        {
+            return;
+        }
+
+        if (_social.Friends.Any(f => string.Equals(f.PetId, request.RequesterPetId, StringComparison.OrdinalIgnoreCase)))
+        {
+            return;
+        }
+
+        if (PendingFriendRequest is not null)
+        {
+            if (string.Equals(PendingFriendRequest.RequestId, request.RequestId, StringComparison.Ordinal)
+                || string.Equals(PendingFriendRequest.RequesterPetId, request.RequesterPetId, StringComparison.OrdinalIgnoreCase))
+            {
+                return;
+            }
+
+            if (_pendingFriendRequestQueue.Any(q =>
+                string.Equals(q.RequestId, request.RequestId, StringComparison.Ordinal)
+                || string.Equals(q.RequesterPetId, request.RequesterPetId, StringComparison.OrdinalIgnoreCase)))
+            {
+                return;
+            }
+
+            _pendingFriendRequestQueue.Enqueue(request);
+            return;
+        }
+
+        PendingFriendRequest = request;
+        PendingFriendRequestStatusText = string.Empty;
+        CanRetryPendingFriendRequest = false;
+    }
+
+    private void MoveToNextPendingFriendRequest()
+    {
+        var currentFriends = _social.Friends;
+        while (_pendingFriendRequestQueue.Count > 0)
+        {
+            var next = _pendingFriendRequestQueue.Dequeue();
+            if (next.IsExpired)
+            {
+                continue;
+            }
+
+            if (currentFriends.Any(f => string.Equals(f.PetId, next.RequesterPetId, StringComparison.OrdinalIgnoreCase)))
+            {
+                continue;
+            }
+
+            PendingFriendRequest = next;
+            PendingFriendRequestStatusText = string.Empty;
+            CanRetryPendingFriendRequest = false;
+            return;
+        }
+
+        PendingFriendRequest = null;
+        PendingFriendRequestStatusText = string.Empty;
+        CanRetryPendingFriendRequest = false;
     }
 
     [RelayCommand]
@@ -556,21 +654,80 @@ public sealed partial class PetWindowViewModel : ObservableObject
     private void OpenSocial() => OpenSocialRequested?.Invoke(this, EventArgs.Empty);
 
     [RelayCommand]
-    private void AcceptFriendRequest()
+    private async Task AcceptFriendRequestAsync()
     {
-        if (PendingFriendRequest is null) return;
         var req = PendingFriendRequest;
-        PendingFriendRequest = null;
-        FriendRequestResponded?.Invoke(this, (req, true));
+        if (req is null || IsRespondingFriendRequest)
+        {
+            return;
+        }
+
+        IsRespondingFriendRequest = true;
+        CanRetryPendingFriendRequest = false;
+        PendingFriendRequestStatusText = "수락 처리 중...";
+
+        FriendOperationResult result;
+        try
+        {
+            result = await _social.RespondFriendRequestDetailedAsync(req, accept: true);
+        }
+        finally
+        {
+            IsRespondingFriendRequest = false;
+        }
+
+        if (!ReferenceEquals(PendingFriendRequest, req))
+        {
+            return;
+        }
+
+        if (result.Succeeded)
+        {
+            MoveToNextPendingFriendRequest();
+            return;
+        }
+
+        var errorText = SocialCoordinatorService.FormatFriendOperationFailure(result, isAccept: true, req.DisplayName);
+        if (result.IsTransient)
+        {
+            CanRetryPendingFriendRequest = true;
+            PendingFriendRequestStatusText = "수락 실패 · 다시 시도 가능";
+            ShowBubble(errorText, 4500);
+            return;
+        }
+
+        // 만료되었거나 알 수 없는 신청, 이미 친구, 확정적 인증 오류는 재수락하지 않고 요청을 정리한 뒤 안내한다.
+        MoveToNextPendingFriendRequest();
+        ShowBubble(errorText, 4500);
     }
 
     [RelayCommand]
-    private void RejectFriendRequest()
+    private async Task RejectFriendRequestAsync()
     {
-        if (PendingFriendRequest is null) return;
         var req = PendingFriendRequest;
-        PendingFriendRequest = null;
-        FriendRequestResponded?.Invoke(this, (req, false));
+        if (req is null || IsRespondingFriendRequest)
+        {
+            return;
+        }
+
+        IsRespondingFriendRequest = true;
+        PendingFriendRequestStatusText = "거절 처리 중...";
+        try
+        {
+            var result = await _social.RespondFriendRequestDetailedAsync(req, accept: false);
+            if (!result.Succeeded && !FriendOperationErrorCodes.IsExpiredOrUnknown(result.ErrorCode))
+            {
+                ShowBubble(SocialCoordinatorService.FormatFriendOperationFailure(result, isAccept: false, req.DisplayName), 3200);
+            }
+        }
+        finally
+        {
+            IsRespondingFriendRequest = false;
+            if (ReferenceEquals(PendingFriendRequest, req))
+            {
+                MoveToNextPendingFriendRequest();
+            }
+        }
     }
 
     [RelayCommand]

@@ -716,6 +716,8 @@ public sealed class SocialCoordinatorTests : IAsyncLifetime
 
         Assert.Equal(text, message.Text);
         Assert.Equal("친구 (게스트)", message.SenderName);
+        Assert.False(string.IsNullOrWhiteSpace(message.SenderPetId));
+        Assert.False(string.IsNullOrWhiteSpace(message.MessageId));
         Assert.Equal(PetSpeciesIds.FluffyPuppy, message.Appearance.SpeciesId);
         Assert.Equal("#C4905E", message.Appearance.BodyColorHex);
         message.Appearance.SpeciesId = PetSpeciesIds.ChibiCat;

@@ -404,7 +404,7 @@
                                             </StackPanel>
 
                                             <Button DockPanel.Dock="Right"
-                                                    Content="친구 신청"
+                                                    Content="{Binding FriendRequestButtonText}"
                                                     Style="{StaticResource PrimaryButtonStyle}"
                                                     Command="{Binding DataContext.SendFriendRequestCommand, RelativeSource={RelativeSource AncestorType=Window}}"
                                                     CommandParameter="{Binding}"
