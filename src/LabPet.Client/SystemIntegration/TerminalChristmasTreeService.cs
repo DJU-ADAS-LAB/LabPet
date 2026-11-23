@@ -2752,8 +2752,56 @@ $engine.RunLoop($PetName, $vtEnabled)
     }
 
     /// <summary>
-    /// 크리스마스 트리 애니메이션 창 실행용 ProcessStartInfo를 생성한다. 모든 인자는 ArgumentList로 전달해 쉘 인젝션을 방지한다.
-    /// conhost.exe가 있으면 단일 창으로 열어 처음부터 11px 고밀도(164x48)로 렌더링한다.
+    /// Windows CommandLineToArgvW 규칙에 맞게 단일 명령줄 인자를 따옴표로 안전하게 이스케이프한다.
+    /// </summary>
+    internal static string QuoteCommandLineArgument(string value)
+    {
+        if (string.IsNullOrEmpty(value))
+        {
+            return "\"\"";
+        }
+
+        var sb = new StringBuilder(value.Length + 4);
+        sb.Append('"');
+        var backslashes = 0;
+
+        foreach (var ch in value)
+        {
+            if (ch == '\\')
+            {
+                backslashes++;
+                continue;
+            }
+
+            if (ch == '"')
+            {
+                sb.Append('\\', backslashes * 2 + 1);
+                sb.Append('"');
+                backslashes = 0;
+                continue;
+            }
+
+            if (backslashes > 0)
+            {
+                sb.Append('\\', backslashes);
+                backslashes = 0;
+            }
+
+            sb.Append(ch);
+        }
+
+        if (backslashes > 0)
+        {
+            sb.Append('\\', backslashes * 2);
+        }
+
+        sb.Append('"');
+        return sb.ToString();
+    }
+
+    /// <summary>
+    /// 크리스마스 트리 애니메이션 창 실행용 ProcessStartInfo를 생성한다.
+    /// WinExe GUI 프로세스에서도 독립 콘솔 창(conhost.exe)이 정상 생성되도록 UseShellExecute=true를 사용한다.
     /// </summary>
     public static ProcessStartInfo BuildLaunchStartInfo(
         string scriptPath,
@@ -2761,49 +2809,31 @@ $engine.RunLoop($PetName, $vtEnabled)
         string? consoleHostPath)
     {
         var safeName = SanitizePetName(petName);
+        var scriptArgs = $"-NoLogo -NoProfile -ExecutionPolicy Bypass -File {QuoteCommandLineArgument(scriptPath)} -PetName {QuoteCommandLineArgument(safeName)}";
 
         if (!string.IsNullOrWhiteSpace(consoleHostPath))
         {
-            var conhostStart = new ProcessStartInfo
+            return new ProcessStartInfo
             {
                 FileName = consoleHostPath,
-                UseShellExecute = false,
-                CreateNoWindow = false
+                Arguments = $"powershell.exe {scriptArgs}",
+                UseShellExecute = true,
+                WindowStyle = ProcessWindowStyle.Normal
             };
-
-            conhostStart.ArgumentList.Add("powershell.exe");
-            conhostStart.ArgumentList.Add("-NoLogo");
-            conhostStart.ArgumentList.Add("-NoProfile");
-            conhostStart.ArgumentList.Add("-ExecutionPolicy");
-            conhostStart.ArgumentList.Add("Bypass");
-            conhostStart.ArgumentList.Add("-File");
-            conhostStart.ArgumentList.Add(scriptPath);
-            conhostStart.ArgumentList.Add("-PetName");
-            conhostStart.ArgumentList.Add(safeName);
-            return conhostStart;
         }
 
-        var psStart = new ProcessStartInfo
+        return new ProcessStartInfo
         {
             FileName = "powershell.exe",
-            UseShellExecute = false,
-            CreateNoWindow = false
+            Arguments = scriptArgs,
+            UseShellExecute = true,
+            WindowStyle = ProcessWindowStyle.Normal
         };
-
-        psStart.ArgumentList.Add("-NoLogo");
-        psStart.ArgumentList.Add("-NoProfile");
-        psStart.ArgumentList.Add("-ExecutionPolicy");
-        psStart.ArgumentList.Add("Bypass");
-        psStart.ArgumentList.Add("-File");
-        psStart.ArgumentList.Add(scriptPath);
-        psStart.ArgumentList.Add("-PetName");
-        psStart.ArgumentList.Add(safeName);
-        return psStart;
     }
 
     /// <summary>
     /// 초기 고밀도 픽셀(164x48 셀, 11px 고정폭 폰트) 창 모드에서 크리스마스 트리를 실행한다.
-    /// conhost.exe 실행에 실패하면 powershell.exe 단독 창으로 자동 폴백한다.
+    /// conhost.exe 실행이 실패하거나 즉시 종료되면 powershell.exe 단독 창으로 자동 폴백한다.
     /// </summary>
     public (bool Success, string Message) Launch(string? petName)
     {
@@ -2824,7 +2854,7 @@ $engine.RunLoop($PetName, $vtEnabled)
             {
                 var conhostInfo = BuildLaunchStartInfo(scriptPath, petName, conhostPath);
                 using var proc = Process.Start(conhostInfo);
-                if (proc is not null)
+                if (proc is not null && !proc.WaitForExit(150))
                 {
                     return (true, "크리스마스 트리를 띄웠어요! (Space: 조명 | F: 폭죽 | S: 눈 | Q: 종료)");
                 }
@@ -2839,7 +2869,7 @@ $engine.RunLoop($PetName, $vtEnabled)
         {
             var psInfo = BuildLaunchStartInfo(scriptPath, petName, consoleHostPath: null);
             using var proc = Process.Start(psInfo);
-            return proc is not null
+            return proc is not null && !proc.WaitForExit(150)
                 ? (true, "크리스마스 트리를 띄웠어요! (Space: 조명 | F: 폭죽 | S: 눈 | Q: 종료)")
                 : (false, "크리스마스 트리 창을 실행하지 못했습니다.");
         }

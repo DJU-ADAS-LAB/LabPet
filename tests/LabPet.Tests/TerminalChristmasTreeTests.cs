@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.IO;
 using LabPet.Client.Storage;
 using LabPet.Client.SystemIntegration;
@@ -86,31 +87,33 @@ public sealed class TerminalChristmasTreeTests
     [Fact]
     public void BuildLaunchStartInfo_UsesConsoleHostWhenAvailableAndFallsBackToPowerShell()
     {
-        const string scriptPath = @"C:\Users\Test\AppData\Roaming\LabPet\scripts\christmas_tree.ps1";
+        const string scriptPath = @"C:\Users\Test User\AppData\Roaming\LabPet\scripts\christmas_tree.ps1";
         const string conhostPath = @"C:\Windows\System32\conhost.exe";
 
         var conhostInfo = TerminalChristmasTreeService.BuildLaunchStartInfo(scriptPath, "모찌\r\n", conhostPath);
         Assert.Equal(conhostPath, conhostInfo.FileName);
-        Assert.False(conhostInfo.UseShellExecute);
+        Assert.True(conhostInfo.UseShellExecute);
+        Assert.Equal(ProcessWindowStyle.Normal, conhostInfo.WindowStyle);
         Assert.Equal(
-            [
-                "powershell.exe",
-                "-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass",
-                "-File", scriptPath,
-                "-PetName", "모찌"
-            ],
-            conhostInfo.ArgumentList);
+            $"powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File \"{scriptPath}\" -PetName \"모찌\"",
+            conhostInfo.Arguments);
 
         var psInfo = TerminalChristmasTreeService.BuildLaunchStartInfo(scriptPath, "초코", consoleHostPath: null);
         Assert.Equal("powershell.exe", psInfo.FileName);
-        Assert.False(psInfo.UseShellExecute);
+        Assert.True(psInfo.UseShellExecute);
+        Assert.Equal(ProcessWindowStyle.Normal, psInfo.WindowStyle);
         Assert.Equal(
-            [
-                "-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass",
-                "-File", scriptPath,
-                "-PetName", "초코"
-            ],
-            psInfo.ArgumentList);
+            $"-NoLogo -NoProfile -ExecutionPolicy Bypass -File \"{scriptPath}\" -PetName \"초코\"",
+            psInfo.Arguments);
+    }
+
+    [Theory]
+    [InlineData(@"C:\My Folder\scripts\", @"""C:\My Folder\scripts\\""")]
+    [InlineData("""이름 "모찌" \펫""", @"""이름 \""모찌\"" \펫""")]
+    [InlineData("", @"""""")]
+    public void QuoteCommandLineArgument_EscapesQuotesAndTrailingBackslashes(string raw, string expected)
+    {
+        Assert.Equal(expected, TerminalChristmasTreeService.QuoteCommandLineArgument(raw));
     }
 
     [Theory]
