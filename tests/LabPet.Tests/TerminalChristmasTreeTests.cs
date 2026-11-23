@@ -116,6 +116,54 @@ public sealed class TerminalChristmasTreeTests
         Assert.Equal(expected, TerminalChristmasTreeService.QuoteCommandLineArgument(raw));
     }
 
+    [Fact]
+    public void BuildNativeLaunchStartInfo_UsesConhostCmdWrapperAndFallsBackToDirectExe()
+    {
+        const string clientExe = @"C:\Users\Test User\AppData\Local\LabPet\current\LabPet.Client.exe";
+        const string conhostPath = @"C:\Windows\System32\conhost.exe";
+
+        var conhostInfo = TerminalChristmasTreeService.BuildNativeLaunchStartInfo(clientExe, "모찌\r\n", conhostPath);
+        Assert.Equal(conhostPath, conhostInfo.FileName);
+        Assert.True(conhostInfo.UseShellExecute);
+        Assert.Equal(ProcessWindowStyle.Normal, conhostInfo.WindowStyle);
+        Assert.Equal(
+            $"cmd.exe /c \"\"{clientExe}\" --christmas-tree \"모찌\"\"",
+            conhostInfo.Arguments);
+
+        var directInfo = TerminalChristmasTreeService.BuildNativeLaunchStartInfo(clientExe, "똥개", consoleHostPath: null);
+        Assert.Equal(clientExe, directInfo.FileName);
+        Assert.True(directInfo.UseShellExecute);
+        Assert.Equal(ProcessWindowStyle.Normal, directInfo.WindowStyle);
+        Assert.Equal("--christmas-tree \"똥개\"", directInfo.Arguments);
+    }
+
+    [Fact]
+    public void NativeChristmasEngine_RendersHighDensityFrameWithoutPowerShell()
+    {
+        var engine = new LabPetChristmasEngine();
+        var bytesWritten = engine.RenderFrameBytes(
+            TerminalChristmasTreeService.DefaultWindowColumns,
+            TerminalChristmasTreeService.DefaultWindowRows,
+            "똥개",
+            frame: 0,
+            lightMode: 0,
+            snowLevel: 1,
+            vtEnabled: true,
+            forceFullRedraw: true);
+
+        Assert.True(bytesWritten > 50_000);
+        var renderedPlain = engine.RenderFrame(
+            TerminalChristmasTreeService.DefaultWindowColumns,
+            TerminalChristmasTreeService.DefaultWindowRows,
+            "똥개",
+            frame: 1,
+            lightMode: 0,
+            snowLevel: 1,
+            vtEnabled: false,
+            forceFullRedraw: true);
+        Assert.Contains("Merry Christmas, 똥개!", renderedPlain, StringComparison.Ordinal);
+    }
+
     [Theory]
     [InlineData(null, "LabPet")]
     [InlineData("", "LabPet")]

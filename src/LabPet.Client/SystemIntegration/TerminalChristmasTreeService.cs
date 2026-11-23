@@ -15,6 +15,7 @@ public sealed class TerminalChristmasTreeService
 {
     public const string ScriptsDirectoryName = "scripts";
     public const string ScriptFileName = "christmas_tree.ps1";
+    public const string NativeCliFlag = "--christmas-tree";
     public const string DefaultPetName = "LabPet";
     public const int MaxPetNameLength = 32;
     public const int DefaultWindowColumns = 164;
@@ -245,8 +246,10 @@ public static class LabPetConsoleNative
         try
         {
             Thread.Sleep(45);
-            int maxW = Math.Max(60, Console.LargestWindowWidth - 4);
-            int maxH = Math.Max(24, Console.LargestWindowHeight - 4);
+            int largestW = Console.LargestWindowWidth;
+            int largestH = Console.LargestWindowHeight;
+            int maxW = (largestW > 4) ? Math.Max(60, largestW - 4) : targetCols;
+            int maxH = (largestH > 4) ? Math.Max(24, largestH - 4) : targetRows;
             int w = Math.Min(targetCols, maxW);
             int h = Math.Min(targetRows, maxH);
 
@@ -648,6 +651,12 @@ public sealed class LabPetChristmasEngine
         _prevFg = new int[cellTotal];
         _prevBg = new int[cellTotal];
         _prevBold = new bool[cellTotal];
+
+        int minOutBuf = (cellTotal * 28) + 65536;
+        if (_outBuf.Length < minOutBuf)
+        {
+            _outBuf = new byte[minOutBuf];
+        }
 
         int pxTotal = pw * ph;
         _baseR = new float[pxTotal];
@@ -1955,7 +1964,7 @@ public sealed class LabPetChristmasEngine
                 {
                     char ch = _currChars[y * _w + x];
                     if (ch == (char)1) continue;
-                    WriteByte((byte)((ch == '\u2580') ? '#' : ch));
+                    WriteUtf8Char((ch == '\u2580') ? '#' : ch);
                 }
                 if (y < _h - 1) WriteByte((byte)'\n');
             }
@@ -2832,11 +2841,157 @@ $engine.RunLoop($PetName, $vtEnabled)
     }
 
     /// <summary>
+    /// 외부 PowerShell이나 .ps1 스크립트 없이 LabPet.Client.exe 내장 C# 엔진(--christmas-tree)을 실행하는 ProcessStartInfo를 생성한다.
+    /// conhost.exe가 있으면 cmd.exe /c 래퍼로 클래식 콘솔 창에 연결하고, 없으면 LabPet.Client.exe가 자체 AllocConsole()로 창을 생성한다.
+    /// </summary>
+    public static ProcessStartInfo BuildNativeLaunchStartInfo(
+        string clientExePath,
+        string? petName,
+        string? consoleHostPath)
+    {
+        var safeName = SanitizePetName(petName);
+        var exeAndArgs = $"{QuoteCommandLineArgument(clientExePath)} {NativeCliFlag} {QuoteCommandLineArgument(safeName)}";
+
+        if (!string.IsNullOrWhiteSpace(consoleHostPath))
+        {
+            return new ProcessStartInfo
+            {
+                FileName = consoleHostPath,
+                Arguments = $"cmd.exe /c \"{exeAndArgs}\"",
+                UseShellExecute = true,
+                WindowStyle = ProcessWindowStyle.Normal
+            };
+        }
+
+        return new ProcessStartInfo
+        {
+            FileName = clientExePath,
+            Arguments = $"{NativeCliFlag} {QuoteCommandLineArgument(safeName)}",
+            UseShellExecute = true,
+            WindowStyle = ProcessWindowStyle.Normal
+        };
+    }
+
+    /// <summary>
+    /// 현재 프로세스의 LabPet.Client.exe 실행 파일 경로를 확인한다. (dotnet test 호스트 등에서는 null 반환)
+    /// </summary>
+    public static string? ResolveCurrentClientExecutablePath()
+    {
+        var processPath = Environment.ProcessPath;
+        if (!string.IsNullOrWhiteSpace(processPath)
+            && File.Exists(processPath)
+            && string.Equals(Path.GetFileName(processPath), "LabPet.Client.exe", StringComparison.OrdinalIgnoreCase))
+        {
+            return processPath;
+        }
+
+        var candidate = Path.Combine(AppContext.BaseDirectory, "LabPet.Client.exe");
+        return File.Exists(candidate) ? candidate : null;
+    }
+
+    /// <summary>
+    /// LabPet.Client.exe --christmas-tree [PetName] 진입점에서 호출되어 PowerShell 없이 내장 C# 크리스마스 트리 엔진을 즉시 실행한다.
+    /// </summary>
+    public static int RunNativeConsoleMode(IReadOnlyList<string> args)
+    {
+        string? rawName = null;
+        for (var i = 0; i < args.Count; i++)
+        {
+            if (string.Equals(args[i], NativeCliFlag, StringComparison.OrdinalIgnoreCase))
+            {
+                if (i + 1 < args.Count)
+                {
+                    rawName = args[i + 1];
+                }
+                break;
+            }
+        }
+
+        var safeName = SanitizePetName(rawName);
+        if (!LabPetConsoleNative.EnsureConsoleAttachedOrAllocated())
+        {
+            return 1;
+        }
+
+        try
+        {
+            var utf8NoBom = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
+            Console.OutputEncoding = utf8NoBom;
+            Console.InputEncoding = utf8NoBom;
+        }
+        catch
+        {
+        }
+
+        try
+        {
+            Console.Title = "LabPet - Merry Christmas!";
+        }
+        catch
+        {
+        }
+
+        var vtEnabled = LabPetConsoleNative.TryEnableVirtualTerminal();
+        LabPetConsoleNative.TryDisableQuickEditMode();
+        if (string.IsNullOrEmpty(Environment.GetEnvironmentVariable("WT_SESSION")))
+        {
+            LabPetConsoleNative.TryConfigureHighDensityWindow(
+                DefaultWindowColumns,
+                DefaultWindowRows,
+                DefaultFontPixelHeight);
+        }
+
+        var engine = new LabPetChristmasEngine();
+        engine.RunLoop(safeName, vtEnabled);
+        return 0;
+    }
+
+    /// <summary>
     /// 초기 고밀도 픽셀(164x48 셀, 11px 고정폭 폰트) 창 모드에서 크리스마스 트리를 실행한다.
-    /// conhost.exe 실행이 실패하거나 즉시 종료되면 powershell.exe 단독 창으로 자동 폴백한다.
+    /// 1순위: conhost.exe + LabPet.Client.exe --christmas-tree (외부 PowerShell/ExecutionPolicy/백신 차단 무관)
+    /// 2순위: LabPet.Client.exe --christmas-tree 자체 AllocConsole()
+    /// 3순위: powershell.exe 스크립트 폴백
     /// </summary>
     public (bool Success, string Message) Launch(string? petName)
     {
+        const string successMessage = "크리스마스 트리를 띄웠어요! (Space: 조명 | F: 폭죽 | S: 눈 | Q: 종료)";
+        var conhostPath = ResolveConsoleHostPath();
+        var clientExePath = ResolveCurrentClientExecutablePath();
+
+        if (!string.IsNullOrWhiteSpace(clientExePath))
+        {
+            if (!string.IsNullOrWhiteSpace(conhostPath))
+            {
+                try
+                {
+                    var nativeConhostInfo = BuildNativeLaunchStartInfo(clientExePath, petName, conhostPath);
+                    using var proc = Process.Start(nativeConhostInfo);
+                    if (proc is not null && !proc.WaitForExit(150))
+                    {
+                        return (true, successMessage);
+                    }
+                }
+                catch
+                {
+                    // conhost 래퍼 실패 시 직접 실행으로 폴백
+                }
+            }
+
+            try
+            {
+                var nativeDirectInfo = BuildNativeLaunchStartInfo(clientExePath, petName, consoleHostPath: null);
+                using var proc = Process.Start(nativeDirectInfo);
+                if (proc is not null && !proc.WaitForExit(150))
+                {
+                    return (true, successMessage);
+                }
+            }
+            catch
+            {
+                // 네이티브 실행 실패 시 스크립트 폴백으로 진행
+            }
+        }
+
         string scriptPath;
         try
         {
@@ -2847,7 +3002,6 @@ $engine.RunLoop($PetName, $vtEnabled)
             return (false, "크리스마스 트리 스크립트를 준비하지 못했습니다.");
         }
 
-        var conhostPath = ResolveConsoleHostPath();
         if (!string.IsNullOrWhiteSpace(conhostPath))
         {
             try
@@ -2856,7 +3010,7 @@ $engine.RunLoop($PetName, $vtEnabled)
                 using var proc = Process.Start(conhostInfo);
                 if (proc is not null && !proc.WaitForExit(150))
                 {
-                    return (true, "크리스마스 트리를 띄웠어요! (Space: 조명 | F: 폭죽 | S: 눈 | Q: 종료)");
+                    return (true, successMessage);
                 }
             }
             catch
@@ -2870,7 +3024,7 @@ $engine.RunLoop($PetName, $vtEnabled)
             var psInfo = BuildLaunchStartInfo(scriptPath, petName, consoleHostPath: null);
             using var proc = Process.Start(psInfo);
             return proc is not null && !proc.WaitForExit(150)
-                ? (true, "크리스마스 트리를 띄웠어요! (Space: 조명 | F: 폭죽 | S: 눈 | Q: 종료)")
+                ? (true, successMessage)
                 : (false, "크리스마스 트리 창을 실행하지 못했습니다.");
         }
         catch

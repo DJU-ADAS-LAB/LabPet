@@ -262,10 +262,11 @@ public partial class PetWindow : Window
         UpdateNameplatePosition();
         RepositionSpeechBubblePopup();
 
-        // 슬라이더를 끌 때는 조절바 가운데를 유지하고, 메뉴에서 변경할 때는 우하단을 유지한다.
+        // 슬라이더를 끌 때는 가운데를 유지하고, 메뉴에서 변경할 때는 우하단을 유지한다.
         if (IsLoaded)
         {
-            Left += (previousWidth - Width) * (PetControls.IsMouseCaptureWithin ? 0.5 : 1.0);
+            var isDraggingSlider = FriendOverlayCard.IsMouseCaptureWithin || PetControls.IsMouseCaptureWithin;
+            Left += (previousWidth - Width) * (isDraggingSlider ? 0.5 : 1.0);
             Top += previousHeight - Height;
         }
     }
@@ -311,24 +312,6 @@ public partial class PetWindow : Window
                 }
 
                 var offsetDip = Math.Min(0, lowestY + NameplateGap - PetViewport.ActualHeight);
-
-                // 펫을 작업표시줄 바로 위까지 내린 경우 호버 시 이름표·크기·투명 조절바가 작업표시줄 아래로 가리지 않게 위로 보정한다.
-                if (IsLoaded && Win32WindowHelper.TryGetNearestWorkArea(this, out var workArea))
-                {
-                    var dpi = VisualTreeHelper.GetDpi(this);
-                    var viewportBottomPhysical = PetLayout.PointToScreen(new Point(0, PetViewport.ActualHeight)).Y;
-                    var controlsHeightDip = PetControls.ActualHeight > 0
-                        ? PetControls.ActualHeight
-                        : PetNameplateRow.Height.Value;
-                    var controlsBottomPhysical = viewportBottomPhysical + (offsetDip + controlsHeightDip) * dpi.DpiScaleY;
-                    var overflowPhysical = controlsBottomPhysical - workArea.Bottom;
-                    if (overflowPhysical > 0)
-                    {
-                        var minOffsetDip = Math.Min(offsetDip, -PetViewport.ActualHeight * 0.65);
-                        offsetDip = Math.Max(minOffsetDip, offsetDip - (overflowPhysical / dpi.DpiScaleY) - 4.0);
-                    }
-                }
-
                 PetNameplateOffset.Y = offsetDip;
             }
         }
