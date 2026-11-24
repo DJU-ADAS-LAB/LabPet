@@ -1297,13 +1297,15 @@ public sealed partial class CoinGamesViewModel
             .ToArray();
 
         var refunded = _ladderPaidCoins;
+        _ladderPaidCoins = 0;
         var finalMessage = refunded > 0 && !statusMessage.Contains("반환", StringComparison.Ordinal)
             ? $"{statusMessage} (참가 {refunded} 코인 반환)"
             : statusMessage;
 
-        CloseLadderRoomState(finalMessage);
         if (refunded > 0)
             await SettleMultiplayerWagerAsync(sessionId, refunded);
+
+        CloseLadderRoomState(finalMessage);
 
         if (!string.IsNullOrEmpty(sessionId))
         {

@@ -319,10 +319,20 @@ public sealed class SocialCoordinatorTests : IAsyncLifetime
         await hostGames.ConfirmLadderParticipantsCommand.ExecuteAsync(null);
         await picking.WaitAsync(TimeSpan.FromSeconds(5));
 
+        long? coinsAtRoomClose = null;
+        hostGames.PropertyChanged += (_, args) =>
+        {
+            if (args.PropertyName == nameof(CoinGamesViewModel.IsLadderRoomOpen) && !hostGames.IsLadderRoomOpen && coinsAtRoomClose is null)
+            {
+                coinsAtRoomClose = harness.HostProfile.SoloProgress.Coins;
+            }
+        };
+
         var hostClosed = WaitUntilPropertyAsync(hostGames, nameof(CoinGamesViewModel.IsLadderRoomOpen), () => !hostGames.IsLadderRoomOpen);
         await guestGames.CancelLadderRoomCommand.ExecuteAsync(null);
         await hostClosed.WaitAsync(TimeSpan.FromSeconds(5));
 
+        Assert.Equal(100, coinsAtRoomClose);
         Assert.Equal(100, harness.GuestProfile.SoloProgress.Coins);
         Assert.Equal(100, (await harness.HostStore.LoadProfileAsync()).SoloProgress.Coins);
 
