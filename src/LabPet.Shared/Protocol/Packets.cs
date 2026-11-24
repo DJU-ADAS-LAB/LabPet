@@ -163,7 +163,7 @@ public sealed class GameEventPayload
     /// <summary>게임 세션 고유 ID.</summary>
     public string SessionId { get; set; } = string.Empty;
 
-    /// <summary>동작: "invite", "accept", "decline", "move", "progress", "finish", "cancel".</summary>
+    /// <summary>게임 초대 수명주기 또는 게임 진행 동작.</summary>
     public string Action { get; set; } = string.Empty;
 
     /// <summary>배팅/참가 코인.</summary>
@@ -171,4 +171,10 @@ public sealed class GameEventPayload
 
     /// <summary>선택값(rock/paper/scissors), 타이핑 점수, 사다리 결과 요약 등 부가 데이터.</summary>
     public string Data { get; set; } = string.Empty;
+
+    /// <summary>발신자가 정한 초대 만료 시각. 진행 패킷에는 포함하지 않는다.</summary>
+    public DateTimeOffset? InviteExpiresAtUtc { get; set; }
+
+    /// <summary>초대 거절·취소의 정형화된 이유.</summary>
+    public string? InviteReason { get; set; }
 }

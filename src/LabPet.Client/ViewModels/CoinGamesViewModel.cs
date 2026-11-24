@@ -93,8 +93,11 @@ public sealed partial class CoinGamesViewModel : ObservableObject, IDisposable
 
     private readonly CoinHiLowGame _hiLow = new();
     private readonly DispatcherTimer _typingTimer;
-    private CancellationTokenSource? _rpsInviteTimeoutCts;
-    private CancellationTokenSource? _typingInviteTimeoutCts;
+    private string? _rpsInviteTargetId;
+    private string? _typingInviteTargetId;
+    private bool _refreshingOnlineFriends;
+    private readonly Dictionary<string, bool> _ladderInviteSelection = new(StringComparer.OrdinalIgnoreCase);
+    private bool _hasInitializedLadderSelection;
     private CancellationTokenSource? _typingCountdownCts;
     private CancellationTokenSource? _incomingInviteCountdownCts;
 
@@ -229,9 +232,9 @@ public sealed partial class CoinGamesViewModel : ObservableObject, IDisposable
     [ObservableProperty] private string _incomingInviteFeedbackMessage = string.Empty;
 
     public bool HasIncomingInvite => IncomingInvite is not null
-        && IncomingInviteStatus is GameInviteStatus.Pending or GameInviteStatus.Accepting;
+        && IncomingInviteStatus is GameInviteStatus.Pending or GameInviteStatus.Accepting or GameInviteStatus.Ready;
 
-    public bool IsAcceptingIncomingInvite => IncomingInviteStatus == GameInviteStatus.Accepting;
+    public bool IsAcceptingIncomingInvite => IncomingInviteStatus is GameInviteStatus.Accepting or GameInviteStatus.Ready;
     public bool CanRespondToIncomingInvite => IncomingInvite is not null && IncomingInviteStatus == GameInviteStatus.Pending;
     public string IncomingInviteText => IncomingInvite?.SummaryText ?? string.Empty;
 
@@ -380,13 +383,10 @@ public sealed partial class CoinGamesViewModel : ObservableObject, IDisposable
     private readonly Dictionary<string, FriendEntry> _ladderJoinedFriends = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> _startedLadderSessions = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> _settledLadderSessions = new(StringComparer.OrdinalIgnoreCase);
-    private CancellationTokenSource? _ladderInviteTimeoutCts;
     private int _ladderActiveWager;
     private int _ladderPaidCoins;
     private bool _ladderStarting;
     private PendingLadderRun? _pendingLadderRun;
-    private readonly Dictionary<(string Sender, string Session), DateTimeOffset> _seenInvitations = [];
-    private readonly HashSet<string> _canceledInviteSessions = new(StringComparer.OrdinalIgnoreCase);
     private const int RecentInvitationCapacity = 256;
 
     public bool HasOnlineFriends => OnlineFriends.Count > 0;
@@ -418,6 +418,7 @@ public sealed partial class CoinGamesViewModel : ObservableObject, IDisposable
         _progression = progression;
         _social = social;
         _portraitRenderer = portraitRenderer;
+        _inviteToken = _inviteLifetime.Token;
 
         _typingTimer = new DispatcherTimer
         {
@@ -446,10 +447,11 @@ public sealed partial class CoinGamesViewModel : ObservableObject, IDisposable
         _social.GameEventReceived -= OnSocialGameEvent;
         _typingTimer.Stop();
         _typingTimer.Tick -= OnTypingTimerTick;
-        CancelRpsInviteTimeout();
-        CancelTypingInviteTimeout();
+        _inviteLifetime.Cancel();
+        _inviteLifetime.Dispose();
+        foreach (var exchange in _inviteExchanges.Values)
+            exchange.Completion.TrySetResult();
         CancelTypingCountdown();
-        CancelLadderInviteTimeout();
         CancelIncomingInviteCountdown();
         _rpsSessionId = null;
         _typingSessionId = null;
@@ -458,6 +460,7 @@ public sealed partial class CoinGamesViewModel : ObservableObject, IDisposable
     public void BindProfile(PetProfile profile)
     {
         _profile = profile;
+        RecoverInterruptedGameWagers(profile);
         RefreshOnlineFriends();
         if (string.IsNullOrWhiteSpace(LadderParticipantsText) || LadderParticipantsText == "나, 친구1, 친구2")
         {
@@ -471,10 +474,6 @@ public sealed partial class CoinGamesViewModel : ObservableObject, IDisposable
 
     public void RefreshOnlineFriends()
     {
-        var prevRpsId = SelectedRpsFriend?.Friend.PetId;
-        var prevTypingId = SelectedTypingFriend?.Friend.PetId;
-        var previousSelection = LadderInviteCandidates.ToDictionary(c => c.Friend.PetId, c => c.IsSelected, StringComparer.OrdinalIgnoreCase);
-
         var peers = _social.DiscoveredPeers;
         var list = new List<OnlineFriendChoice>();
         foreach (var f in _social.Friends)
@@ -491,41 +490,85 @@ public sealed partial class CoinGamesViewModel : ObservableObject, IDisposable
             list.Add(new OnlineFriendChoice(f, name));
         }
 
-        OnlineFriends.Clear();
-        foreach (var item in list)
+        _refreshingOnlineFriends = true;
+        try
         {
-            OnlineFriends.Add(item);
+            for (var i = 0; i < list.Count; i++)
+            {
+                var item = list[i];
+                var current = OnlineFriends.Skip(i).FirstOrDefault(choice => SameFriend(choice.Friend, item.Friend));
+                if (current is null)
+                {
+                    OnlineFriends.Insert(i, item);
+                    continue;
+                }
+
+                var oldIndex = OnlineFriends.IndexOf(current);
+                if (oldIndex != i)
+                    OnlineFriends.Move(oldIndex, i);
+                if (current.DisplayName != item.DisplayName)
+                    OnlineFriends[i] = item;
+            }
+
+            while (OnlineFriends.Count > list.Count)
+                OnlineFriends.RemoveAt(OnlineFriends.Count - 1);
+
+            _rpsInviteTargetId ??= OnlineFriends.FirstOrDefault()?.Friend.PetId;
+            _typingInviteTargetId ??= OnlineFriends.FirstOrDefault()?.Friend.PetId;
+            SelectedRpsFriend = FindOnlineInviteChoice(_rpsInviteTargetId);
+            SelectedTypingFriend = FindOnlineInviteChoice(_typingInviteTargetId);
+        }
+        finally
+        {
+            _refreshingOnlineFriends = false;
         }
 
-        foreach (var oldCandidate in LadderInviteCandidates)
+        if (!LadderInviteCandidates.Select(x => (x.Friend.PetId, x.DisplayName))
+                .SequenceEqual(list.Select(x => (x.Friend.PetId, x.DisplayName))))
         {
-            oldCandidate.PropertyChanged -= OnLadderInviteCandidatePropertyChanged;
+            foreach (var oldCandidate in LadderInviteCandidates)
+                oldCandidate.PropertyChanged -= OnLadderInviteCandidatePropertyChanged;
+            LadderInviteCandidates.Clear();
+            foreach (var item in list)
+            {
+                var selected = _ladderInviteSelection.GetValueOrDefault(item.Friend.PetId, !_hasInitializedLadderSelection);
+                _ladderInviteSelection[item.Friend.PetId] = selected;
+                var candidate = new LadderFriendInviteOption(item.Friend, item.DisplayName,
+                    TryGetPortrait(ResolveFriendAppearance(item.Friend.PetId, item.Friend)), selected);
+                candidate.PropertyChanged += OnLadderInviteCandidatePropertyChanged;
+                LadderInviteCandidates.Add(candidate);
+            }
+            _hasInitializedLadderSelection |= list.Count != 0;
         }
-
-        LadderInviteCandidates.Clear();
-        foreach (var item in list)
-        {
-            var selected = previousSelection.TryGetValue(item.Friend.PetId, out var prev) ? prev : true;
-            var appearance = ResolveFriendAppearance(item.Friend.PetId, item.Friend);
-            var candidate = new LadderFriendInviteOption(item.Friend, item.DisplayName, TryGetPortrait(appearance), selected);
-            candidate.PropertyChanged += OnLadderInviteCandidatePropertyChanged;
-            LadderInviteCandidates.Add(candidate);
-        }
-
-        SelectedRpsFriend = OnlineFriends.FirstOrDefault(x => string.Equals(x.Friend.PetId, prevRpsId, StringComparison.OrdinalIgnoreCase))
-            ?? OnlineFriends.FirstOrDefault();
-        SelectedTypingFriend = OnlineFriends.FirstOrDefault(x => string.Equals(x.Friend.PetId, prevTypingId, StringComparison.OrdinalIgnoreCase))
-            ?? OnlineFriends.FirstOrDefault();
 
         OnPropertyChanged(nameof(HasOnlineFriends));
         OnPropertyChanged(nameof(SelectedLadderInviteeCount));
         OnPropertyChanged(nameof(CanOpenLadderRoom));
     }
 
+    private static bool SameFriend(FriendEntry a, FriendEntry b)
+        => string.Equals(a.PetId, b.PetId, StringComparison.OrdinalIgnoreCase);
+
+    private OnlineFriendChoice? FindOnlineInviteChoice(string? petId)
+        => OnlineFriends.FirstOrDefault(choice => string.Equals(choice.Friend.PetId, petId, StringComparison.OrdinalIgnoreCase));
+
+    partial void OnSelectedRpsFriendChanged(OnlineFriendChoice? value)
+    {
+        if (!_refreshingOnlineFriends && value is not null)
+            _rpsInviteTargetId = value.Friend.PetId;
+    }
+
+    partial void OnSelectedTypingFriendChanged(OnlineFriendChoice? value)
+    {
+        if (!_refreshingOnlineFriends && value is not null)
+            _typingInviteTargetId = value.Friend.PetId;
+    }
+
     private void OnLadderInviteCandidatePropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
     {
-        if (e.PropertyName == nameof(LadderFriendInviteOption.IsSelected))
+        if (e.PropertyName == nameof(LadderFriendInviteOption.IsSelected) && sender is LadderFriendInviteOption candidate)
         {
+            _ladderInviteSelection[candidate.Friend.PetId] = candidate.IsSelected;
             OnPropertyChanged(nameof(SelectedLadderInviteeCount));
             OnPropertyChanged(nameof(CanOpenLadderRoom));
         }
@@ -579,7 +622,7 @@ public sealed partial class CoinGamesViewModel : ObservableObject, IDisposable
     [RelayCommand]
     private async Task StartHiLowAsync()
     {
-        if (IsHiLowActive)
+        if (IsAcceptingIncomingInvite || IsAnyGameBusy)
         {
             return;
         }
@@ -723,7 +766,7 @@ public sealed partial class CoinGamesViewModel : ObservableObject, IDisposable
     // 2. 친구 가위바위보 배틀 초대 송수신
     // ══════════════════════════════════════════════════════════════════════
 
-    [RelayCommand]
+    [RelayCommand(AllowConcurrentExecutions = true)]
     private async Task SendRpsInviteAsync()
     {
         if (IsRpsInMatch)
@@ -733,13 +776,20 @@ public sealed partial class CoinGamesViewModel : ObservableObject, IDisposable
 
         if (IsRpsWaitingResponse)
         {
-            await CancelRpsInviteInternalAsync(isTimeout: false);
+            if (_rpsSessionId is { } session && _rpsOpponent is { } opponent)
+                await CancelTrackedInviteAsync(session, opponent);
+            return;
+        }
+
+        if (IsAnyGameBusy || HasIncomingInvite)
+        {
+            RpsStatusText = DescribeInviteReason("busy");
             return;
         }
 
         if (SelectedRpsFriend is null)
         {
-            RpsStatusText = "대결할 온라인 친구를 먼저 선택해 주세요.";
+            RpsStatusText = _rpsInviteTargetId is null ? "대결할 온라인 친구를 먼저 선택해 주세요." : DescribeInviteReason("offline");
             return;
         }
 
@@ -750,6 +800,11 @@ public sealed partial class CoinGamesViewModel : ObservableObject, IDisposable
         }
 
         var target = SelectedRpsFriend;
+        if (!IsOnlineInviteTarget(target.Friend.PetId))
+        {
+            RpsStatusText = DescribeInviteReason("offline");
+            return;
+        }
         var sessionId = Guid.NewGuid().ToString("N");
 
         // 상대방이 초대를 받자마자 즉시 수락해도 유실되지 않도록 세션 상태를 먼저 등록한다.
@@ -764,92 +819,9 @@ public sealed partial class CoinGamesViewModel : ObservableObject, IDisposable
         RpsOpponentPortrait = TryGetPortrait(ResolveFriendAppearance(target.Friend.PetId, target.Friend));
         RpsMyMoveText = "?";
         RpsOpponentMoveText = "?";
-        RpsStatusText = $"{target.DisplayName}의 수락을 기다리는 중... ({RpsWager} 코인 · {InviteWaitTimeoutSeconds}초 제한)";
+        RpsStatusText = $"{target.DisplayName}에게 초대를 보내는 중입니다.";
 
-        var ok = await _social.SendGameEventAsync(target.Friend, new GameEventPayload
-        {
-            GameType = RpsGameEngine.GameTypeId,
-            SessionId = sessionId,
-            Action = "invite",
-            WagerCoins = RpsWager
-        });
-
-        if (!ok)
-        {
-            if (_rpsSessionId == sessionId)
-            {
-                _rpsSessionId = null;
-                _rpsOpponent = null;
-                IsRpsWaitingResponse = false;
-                RpsPhase = RpsPhase.Setup;
-                RpsStatusText = $"{target.DisplayName}에게 도전을 보내지 못했습니다. (연결/방화벽 확인)";
-            }
-
-            return;
-        }
-
-        StartRpsInviteTimeout(sessionId);
-    }
-
-    private void StartRpsInviteTimeout(string sessionId)
-    {
-        CancelRpsInviteTimeout();
-        var cts = new CancellationTokenSource();
-        _rpsInviteTimeoutCts = cts;
-        _ = Task.Run(async () =>
-        {
-            try
-            {
-                await Task.Delay(TimeSpan.FromSeconds(InviteWaitTimeoutSeconds), cts.Token);
-                if (!cts.Token.IsCancellationRequested)
-                {
-                    RunOnUi(() =>
-                    {
-                        if (IsRpsWaitingResponse && _rpsSessionId == sessionId)
-                        {
-                            _ = CancelRpsInviteInternalAsync(isTimeout: true);
-                        }
-                    });
-                }
-            }
-            catch (TaskCanceledException)
-            {
-            }
-        }, cts.Token);
-    }
-
-    private void CancelRpsInviteTimeout()
-    {
-        _rpsInviteTimeoutCts?.Cancel();
-        _rpsInviteTimeoutCts?.Dispose();
-        _rpsInviteTimeoutCts = null;
-    }
-
-    private async Task CancelRpsInviteInternalAsync(bool isTimeout)
-    {
-        CancelRpsInviteTimeout();
-        var sessionId = _rpsSessionId;
-        var opponent = _rpsOpponent;
-        var wager = _rpsActiveWager;
-
-        _rpsSessionId = null;
-        _rpsOpponent = null;
-        IsRpsWaitingResponse = false;
-        RpsPhase = RpsPhase.Setup;
-        RpsStatusText = isTimeout
-            ? $"수락 대기 시간({InviteWaitTimeoutSeconds}초)이 초과되어 도전이 자동 취소되었습니다."
-            : "가위바위보 도전을 취소했습니다.";
-
-        if (opponent is not null && sessionId is not null)
-        {
-            _ = await _social.SendGameEventAsync(opponent, new GameEventPayload
-            {
-                GameType = RpsGameEngine.GameTypeId,
-                SessionId = sessionId,
-                Action = "cancel",
-                WagerCoins = wager
-            });
-        }
+        await SendTrackedOfferAsync(target.Friend, RpsGameEngine.GameTypeId, sessionId, _rpsActiveWager, NewInviteDeadline());
     }
 
     // ══════════════════════════════════════════════════════════════════════
@@ -859,205 +831,61 @@ public sealed partial class CoinGamesViewModel : ObservableObject, IDisposable
     [RelayCommand]
     public async Task AcceptIncomingInviteAsync()
     {
-        var invite = IncomingInvite;
-        if (invite is null || IncomingInviteStatus != GameInviteStatus.Pending)
+        InviteExchange? exchange = null;
+        await _inviteGate.WaitAsync();
+        try
         {
-            return;
-        }
+            if (IncomingInvite is not { } invite || IncomingInviteStatus != GameInviteStatus.Pending
+                || !_inviteExchanges.TryGetValue(InviteKey(invite.SenderPetId, invite.SessionId), out exchange)
+                || exchange.Status != GameInviteStatus.Pending)
+                return;
 
-        if (_canceledInviteSessions.Contains(invite.SessionId) || DateTimeOffset.UtcNow > invite.ExpiresAtUtc && invite.ExpiresAtUtc != default)
-        {
-            CancelIncomingInviteCountdown();
-            var expired = invite.ExpiresAtUtc != default && DateTimeOffset.UtcNow > invite.ExpiresAtUtc;
-            IncomingInviteStatus = expired ? GameInviteStatus.Expired : GameInviteStatus.None;
-            IncomingInvite = null;
-            IncomingInviteFeedbackMessage = expired ? "수락 제한 시간이 만료되었습니다." : "이미 취소된 초대입니다.";
-            return;
-        }
-
-        if ((invite.GameType == RpsGameEngine.GameTypeId && (IsRpsInMatch || IsRpsWaitingResponse))
-            || (invite.GameType == TypingSprintEngine.GameTypeId && (IsTypingRunning || IsTypingCountdown || IsTypingWaitingResponse || _typingSessionId is not null))
-            || (invite.GameType == LabLadderEngine.GameTypeId && (IsLadderRoomOpen || IsLadderAnimating)))
-        {
-            IncomingInviteFeedbackMessage = "이미 진행 중인 게임이 있어 초대를 수락할 수 없습니다.";
-            await DeclineIncomingInviteAsync();
-            return;
-        }
-
-        LadderRoomStateDto? initialRoom = null;
-        if (invite.GameType == LabLadderEngine.GameTypeId
-            && (!TryReadLadderPayload(invite.Data, out initialRoom) || initialRoom is null
-                || initialRoom.Phase != LadderRoomPhase.WaitingInvites
-                || !LabLadderEngine.IsValidRoom(initialRoom, invite.SessionId, invite.SenderPetId, invite.WagerCoins)))
-        {
-            IncomingInviteFeedbackMessage = "유효하지 않은 사다리 초대 정보입니다.";
-            await DeclineIncomingInviteAsync();
-            return;
-        }
-
-        // 중복 클릭 및 만료 타이머 차단
-        CancelIncomingInviteCountdown();
-        IncomingInviteStatus = GameInviteStatus.Accepting;
-        IncomingInviteFeedbackMessage = string.Empty;
-
-        if (invite.WagerCoins > 0)
-        {
-            var (ok, msg) = _progression.TrySpendCoins(_profile, invite.WagerCoins);
-            if (!ok)
+            if (DateTimeOffset.UtcNow >= exchange.Deadline)
             {
-                IncomingInviteFeedbackMessage = $"도전 수락 실패: {msg}";
-                GameNotification?.Invoke(this, $"도전 수락 실패: {msg}");
-                IncomingInviteStatus = GameInviteStatus.Declined;
-                IncomingInvite = null;
-                _ = await _social.SendGameEventAsync(invite.Friend, new GameEventPayload
-                {
-                    GameType = invite.GameType,
-                    SessionId = invite.SessionId,
-                    Action = "decline",
-                    WagerCoins = invite.WagerCoins
-                });
+                await EndInviteAsync(exchange, GameInviteStatus.Expired, "expired", Decline);
+                return;
+            }
+            if (IsAnyGameBusy)
+            {
+                await EndInviteAsync(exchange, GameInviteStatus.Declined, "busy", Decline);
                 return;
             }
 
-            NotifyCoinsChanged();
-        }
-
-        if (invite.GameType == RpsGameEngine.GameTypeId)
-        {
-            _rpsSessionId = invite.SessionId;
-            _rpsOpponent = invite.Friend;
-            _rpsActiveWager = invite.WagerCoins;
-            BeginRpsRound(invite.SessionId);
-            CanChooseRpsMove = false;
-        }
-        else if (invite.GameType == TypingSprintEngine.GameTypeId)
-        {
-            BeginTypingSprint(isSoloPractice: false, invite.Friend, invite.SessionId, invite.WagerCoins);
-        }
-        else if (initialRoom is not null)
-        {
-            _ladderHostFriend = invite.Friend;
-            _ladderActiveWager = invite.WagerCoins;
-            _ladderPaidCoins = invite.WagerCoins;
-            _ladderInitialPrizes.Clear();
-            _ladderInitialPrizes.AddRange(initialRoom.Prizes);
-            _ladderRoom = initialRoom;
-            IsLadderHost = false;
-            IsLadderRoomOpen = true;
-            IsLadderMultiplayerMode = true;
-            LadderStage = LadderStage.Lobby;
-            LadderResultLines.Clear();
-            LadderResultCards.Clear();
-            RefreshLadderLobbyUi();
-        }
-
-        if (invite.WagerCoins > 0)
-        {
-            await PersistProfileAsync();
-        }
-
-        var sent = await _social.SendGameEventAsync(invite.Friend, new GameEventPayload
-        {
-            GameType = invite.GameType,
-            SessionId = invite.SessionId,
-            Action = "accept",
-            WagerCoins = invite.WagerCoins
-        });
-
-        var canceledMidFlight = _canceledInviteSessions.Contains(invite.SessionId);
-        if (!sent || canceledMidFlight)
-        {
-            await RollbackFailedOrCanceledInviteAcceptAsync(invite, canceledMidFlight);
-            return;
-        }
-
-        IncomingInviteStatus = GameInviteStatus.Accepted;
-        IncomingInvite = null;
-
-        GameScreen targetScreen;
-        if (invite.GameType == RpsGameEngine.GameTypeId)
-        {
-            if (!IsRpsInMatch || _rpsSessionId != invite.SessionId)
+            exchange.Status = GameInviteStatus.Accepting;
+            IncomingInviteFeedbackMessage = string.Empty;
+            IncomingInviteStatus = GameInviteStatus.Accepting;
+            var failure = await ReserveInviteCoinsAsync(exchange);
+            if (failure is not null || DateTimeOffset.UtcNow >= exchange.Deadline)
             {
+                await EndInviteAsync(exchange, failure is null ? GameInviteStatus.Expired : GameInviteStatus.Failed,
+                    failure ?? "expired", Decline);
                 return;
             }
-
-            CanChooseRpsMove = true;
-            RpsPhase = RpsPhase.Choosing;
-            RpsStatusText = $"{invite.SenderName}와 대결 시작! ({invite.WagerCoins} 코인) 아래에서 선택하세요!";
-            targetScreen = GameScreen.Rps;
+            _ = SendInvitePacketAsync(exchange, Accept);
         }
-        else if (invite.GameType == TypingSprintEngine.GameTypeId)
+        finally
         {
-            targetScreen = GameScreen.Typing;
-        }
-        else
-        {
-            if (_ladderRoom?.SessionId != invite.SessionId)
-            {
-                return;
-            }
-
-            RefreshLadderLobbyUi();
-            if (_ladderRoom.Phase == LadderRoomPhase.WaitingInvites)
-            {
-                LadderStatusText = $"{invite.SenderName}의 사다리방에 입장했습니다. 방장이 참가자를 확정한 뒤 위치를 선택할 수 있습니다.";
-            }
-
-            targetScreen = GameScreen.Ladder;
+            _inviteGate.Release();
         }
 
-        ActiveGameScreen = targetScreen;
-        OpenGameScreenRequested?.Invoke(this, targetScreen);
-        OpenGameTabRequested?.Invoke(this, EventArgs.Empty);
-    }
-
-    private async Task RollbackFailedOrCanceledInviteAcceptAsync(IncomingGameInvite invite, bool canceledMidFlight)
-    {
-        var failMessage = canceledMidFlight
-            ? "상대가 초대를 이미 취소해 참가를 되돌렸습니다."
-            : "상대와 연결이 끊겨 초대를 수락하지 못했습니다.";
-
-        if (invite.GameType == RpsGameEngine.GameTypeId && _rpsSessionId == invite.SessionId)
-        {
-            await RefundRpsRoundAsync(failMessage);
-        }
-        else if (invite.GameType == TypingSprintEngine.GameTypeId && _typingSessionId == invite.SessionId)
-        {
-            await RefundTypingRoundAsync(failMessage);
-        }
-        else if (invite.GameType == LabLadderEngine.GameTypeId && _ladderRoom?.SessionId == invite.SessionId)
-        {
-            var refunded = await RefundLadderEntryFeeIfPaidAsync();
-            var ladderMsg = refunded > 0 ? $"{failMessage} (참가 코인 반환)" : failMessage;
-            CloseLadderRoomState(ladderMsg);
-        }
-
-        IncomingInviteStatus = GameInviteStatus.None;
-        IncomingInvite = null;
-        IncomingInviteFeedbackMessage = failMessage;
-        GameNotification?.Invoke(this, failMessage);
+        if (exchange is not null)
+            await exchange.Completion.Task;
     }
 
     [RelayCommand]
     public async Task DeclineIncomingInviteAsync()
     {
-        var invite = IncomingInvite;
-        if (invite is null || IncomingInviteStatus != GameInviteStatus.Pending)
+        await _inviteGate.WaitAsync();
+        try
         {
-            return;
+            if (IncomingInvite is { } invite && IncomingInviteStatus == GameInviteStatus.Pending
+                && _inviteExchanges.TryGetValue(InviteKey(invite.SenderPetId, invite.SessionId), out var exchange))
+                await EndInviteAsync(exchange, GameInviteStatus.Declined, "declined", Decline);
         }
-
-        CancelIncomingInviteCountdown();
-        IncomingInviteStatus = GameInviteStatus.Declined;
-        IncomingInvite = null;
-        await _social.SendGameEventAsync(invite.Friend, new GameEventPayload
+        finally
         {
-            GameType = invite.GameType,
-            SessionId = invite.SessionId,
-            Action = "decline",
-            WagerCoins = invite.WagerCoins
-        });
+            _inviteGate.Release();
+        }
     }
 
     internal async Task HandleGameEventAsync(GameEventReceivedEventArgs e)
@@ -1076,127 +904,15 @@ public sealed partial class CoinGamesViewModel : ObservableObject, IDisposable
 
         var senderName = _social.GetFriendDisplayName(e.SenderPetId);
 
-        if (p.Action == "invite")
-        {
-            if (_canceledInviteSessions.Contains(p.SessionId))
-            {
-                return;
-            }
-
-            LadderRoomStateDto? ladderInviteRoom = null;
-            var payloadValid = p.GameType switch
-            {
-                RpsGameEngine.GameTypeId => WagerOptions.Contains(p.WagerCoins),
-                TypingSprintEngine.GameTypeId => WagerOptions.Contains(p.WagerCoins),
-                LabLadderEngine.GameTypeId => LadderFeeOptions.Contains(p.WagerCoins)
-                    && TryReadLadderPayload(p.Data, out ladderInviteRoom) && ladderInviteRoom is not null
-                    && ladderInviteRoom.Phase == LadderRoomPhase.WaitingInvites
-                    && LabLadderEngine.IsValidRoom(ladderInviteRoom, p.SessionId, e.SenderPetId, p.WagerCoins),
-                _ => false
-            };
-            if (!payloadValid || !TryRecordInvite(e.SenderPetId, p.SessionId))
-            {
-                return;
-            }
-
-            // 다른 게임이 실행 중이거나 대기 중인 초대가 이미 있으면 현재 게임을 방해하지 않고 조용히 거절한다.
-            if (IsAnyGameBusy || HasIncomingInvite)
-            {
-                _ = await _social.SendGameEventAsync(friend, new GameEventPayload
-                {
-                    GameType = p.GameType,
-                    SessionId = p.SessionId,
-                    Action = "decline",
-                    WagerCoins = p.WagerCoins
-                });
-                return;
-            }
-
-            var prizeSummary = ladderInviteRoom is not null
-                ? LabLadderEngine.FormatPrizeSummary(ladderInviteRoom.Prizes)
-                : string.Empty;
-
-            var totalSeconds = Math.Max(0.2, InviteExpireSeconds);
-            var now = DateTimeOffset.UtcNow;
-            var expiresAt = now.AddSeconds(totalSeconds);
-            var senderAppearance = ResolveFriendAppearance(e.SenderPetId, friend);
-
-            var invite = new IncomingGameInvite(
-                e.SenderPetId,
-                senderName,
-                friend,
-                p.GameType,
-                p.SessionId,
-                p.WagerCoins,
-                p.Data ?? string.Empty,
-                prizeSummary,
-                senderAppearance,
-                now,
-                expiresAt);
-
-            IncomingInvitePortrait = TryGetPortrait(senderAppearance);
-            IncomingInviteFeedbackMessage = string.Empty;
-            IncomingInviteRemainingSeconds = Math.Max(1, (int)Math.Ceiling(totalSeconds));
-            IncomingInviteProgressRatio = 1.0;
-            IncomingInviteStatus = GameInviteStatus.Pending;
-            IncomingInvite = invite;
-            StartIncomingInviteCountdown(invite);
+        if (await HandleInviteHandshakeAsync(friend, senderName, p))
             return;
-        }
-
-        if (p.Action == "cancel")
-        {
-            RecordCanceledInviteSession(p.SessionId);
-            if (IncomingInvite is not null &&
-                IncomingInvite.SessionId == p.SessionId && IncomingInvite.GameType == p.GameType &&
-                string.Equals(IncomingInvite.SenderPetId, e.SenderPetId, StringComparison.OrdinalIgnoreCase))
-            {
-                var wasAccepting = IncomingInviteStatus == GameInviteStatus.Accepting;
-                CancelIncomingInviteCountdown();
-                IncomingInviteStatus = GameInviteStatus.None;
-                IncomingInvite = null;
-                if (!wasAccepting)
-                {
-                    IncomingInviteFeedbackMessage = $"{senderName}(이)가 게임 초대를 취소했습니다.";
-                    GameNotification?.Invoke(this, $"{senderName}(이)가 게임 초대를 취소했습니다.");
-                }
-
-                return;
-            }
-        }
+        await ObserveStartedMatchAsync(friend, senderName, p);
 
         if (p.GameType == RpsGameEngine.GameTypeId && p.SessionId == _rpsSessionId && p.WagerCoins == _rpsActiveWager
             && string.Equals(_rpsOpponent?.PetId, e.SenderPetId, StringComparison.OrdinalIgnoreCase))
         {
             switch (p.Action)
             {
-                case "accept" when IsRpsWaitingResponse:
-                    CancelRpsInviteTimeout();
-                    IsRpsWaitingResponse = false;
-                    var (ok, msg) = _progression.TrySpendCoins(_profile, _rpsActiveWager);
-                    if (!ok)
-                    {
-                        RpsPhase = RpsPhase.Setup;
-                        RpsStatusText = msg;
-                        return;
-                    }
-
-                    NotifyCoinsChanged();
-                    BeginRpsRound(p.SessionId);
-                    RpsStatusText = $"{senderName} 수락! ({_rpsActiveWager} 코인) 가위 · 바위 · 보 중 선택하세요!";
-                    await PersistProfileAsync();
-                    break;
-
-                case "decline" when IsRpsWaitingResponse:
-                    CancelRpsInviteTimeout();
-                    IsRpsWaitingResponse = false;
-                    IsRpsInMatch = false;
-                    CanChooseRpsMove = false;
-                    _rpsSessionId = null;
-                    RpsPhase = RpsPhase.Setup;
-                    RpsStatusText = $"{senderName}(이)가 가위바위보 도전을 거절했어요.";
-                    break;
-
                 case "commit":
                 case "reveal":
                 case "cancel":
@@ -1210,29 +926,8 @@ public sealed partial class CoinGamesViewModel : ObservableObject, IDisposable
         {
             switch (p.Action)
             {
-                case "accept" when IsTypingWaitingResponse:
-                    CancelTypingInviteTimeout();
-                    IsTypingWaitingResponse = false;
-                    var (ok, msg) = _progression.TrySpendCoins(_profile, _typingActiveWager);
-                    if (!ok)
-                    {
-                        _typingSessionId = null;
-                        TypingPhase = TypingPhase.Setup;
-                        TypingStatusText = msg;
-                        return;
-                    }
-
-                    NotifyCoinsChanged();
-                    BeginTypingSprint(isSoloPractice: false, friend, _typingSessionId, _typingActiveWager);
-                    await PersistProfileAsync();
-                    break;
-
-                case "decline" when IsTypingWaitingResponse:
-                    CancelTypingInviteTimeout();
-                    IsTypingWaitingResponse = false;
-                    _typingSessionId = null;
-                    TypingPhase = TypingPhase.Setup;
-                    TypingStatusText = $"{senderName}(이)가 타이핑 대결 도전을 거절했어요.";
+                case "cancel" when !IsTypingWaitingResponse:
+                    await RefundTypingRoundAsync("상대가 타이핑 대결을 취소해 배팅 코인을 반환했습니다.");
                     break;
 
                 case "progress" when !IsTypingWaitingResponse && !_typingOpponentFinished:
@@ -1257,7 +952,14 @@ public sealed partial class CoinGamesViewModel : ObservableObject, IDisposable
         }
         else if (p.GameType == LabLadderEngine.GameTypeId)
         {
-            if (p.Action == "cancel"
+            if (p.Action == "start" && p.InviteExpiresAtUtc is not null && _ladderAppliedStart == p.Data
+                && _pendingLadderRun is { IsMultiplayer: true } startedRun && startedRun.SessionId == p.SessionId
+                && p.WagerCoins == startedRun.WagerCoins
+                && string.Equals(startedRun.HostFriend?.PetId, e.SenderPetId, StringComparison.OrdinalIgnoreCase))
+            {
+                ReplyToAppliedLadderStart(friend, p);
+            }
+            else if (p.Action == "cancel"
                 && _pendingLadderRun is { IsCompleted: false, IsMultiplayer: true } activeRun
                 && activeRun.SessionId == p.SessionId
                 && p.WagerCoins == activeRun.WagerCoins
@@ -1278,7 +980,7 @@ public sealed partial class CoinGamesViewModel : ObservableObject, IDisposable
                 });
             }
             else if (_ladderRoom is not null && p.SessionId == _ladderRoom.SessionId && p.WagerCoins == _ladderActiveWager
-                && (!_ladderStarting || p.Action is "decline" or "cancel"))
+                && (!_ladderStarting || p.Action is "decline" or "cancel" or "ready-start" or "started-start"))
             {
                 await HandleLadderEventAsync(e.SenderPetId, senderName, friend, p);
             }
@@ -1308,7 +1010,6 @@ public sealed partial class CoinGamesViewModel : ObservableObject, IDisposable
                     var remaining = (invite.ExpiresAtUtc - DateTimeOffset.UtcNow).TotalSeconds;
                     if (remaining <= 0)
                     {
-                        RunOnUi(() => _ = ExpireIncomingInviteAsync(invite.SessionId));
                         break;
                     }
 
@@ -1316,7 +1017,7 @@ public sealed partial class CoinGamesViewModel : ObservableObject, IDisposable
                     var ratio = Math.Clamp(remaining / totalSeconds, 0.0, 1.0);
                     RunOnUi(() =>
                     {
-                        if (IncomingInvite?.SessionId == invite.SessionId && IncomingInviteStatus == GameInviteStatus.Pending)
+                        if (IncomingInvite?.SessionId == invite.SessionId && HasIncomingInvite)
                         {
                             if (IncomingInviteRemainingSeconds != sec)
                             {
@@ -1341,65 +1042,20 @@ public sealed partial class CoinGamesViewModel : ObservableObject, IDisposable
         _incomingInviteCountdownCts = null;
     }
 
-    private async Task ExpireIncomingInviteAsync(string sessionId)
-    {
-        if (IncomingInvite is not { } invite
-            || invite.SessionId != sessionId
-            || IncomingInviteStatus != GameInviteStatus.Pending)
-        {
-            return;
-        }
-
-        CancelIncomingInviteCountdown();
-        IncomingInviteRemainingSeconds = 0;
-        IncomingInviteProgressRatio = 0.0;
-        IncomingInviteStatus = GameInviteStatus.Expired;
-        IncomingInvite = null;
-        IncomingInviteFeedbackMessage = $"{invite.SenderName}의 초대가 시간 초과로 만료되었습니다.";
-
-        _ = await _social.SendGameEventAsync(invite.Friend, new GameEventPayload
-        {
-            GameType = invite.GameType,
-            SessionId = invite.SessionId,
-            Action = "decline",
-            WagerCoins = invite.WagerCoins
-        });
-    }
-
-    private void RecordCanceledInviteSession(string sessionId)
-    {
-        if (_canceledInviteSessions.Count >= RecentInvitationCapacity)
-        {
-            _canceledInviteSessions.Clear();
-        }
-
-        _canceledInviteSessions.Add(sessionId);
-    }
-
-    private bool TryRecordInvite(string senderId, string sessionId)
-    {
-        var now = DateTimeOffset.UtcNow;
-        foreach (var expired in _seenInvitations.Where(item => now >= item.Value).Select(item => item.Key).ToArray())
-        {
-            _seenInvitations.Remove(expired);
-        }
-
-        return _seenInvitations.Count < RecentInvitationCapacity &&
-            _seenInvitations.TryAdd((senderId.ToUpperInvariant(), sessionId), now.AddMinutes(5));
-    }
-
-    private async Task PersistProfileAsync()
+    private async Task<bool> PersistProfileAsync()
     {
         try
         {
             await _store.SaveProfileAsync(_profile);
             NotifyCoinsChanged();
             ProfileChanged?.Invoke(this, _profile);
+            return true;
         }
         catch (Exception ex) when (ex is System.IO.IOException or UnauthorizedAccessException)
         {
             System.Diagnostics.Trace.TraceError("게임 코인 저장 실패: {0}", ex);
             GameNotification?.Invoke(this, "게임 변경을 저장하지 못했습니다.");
+            return false;
         }
     }
 

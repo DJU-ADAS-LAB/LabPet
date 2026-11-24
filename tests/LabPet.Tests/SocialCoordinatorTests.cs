@@ -128,18 +128,24 @@ public sealed class SocialCoordinatorTests : IAsyncLifetime
             ]
         };
 
+        var inviteDeadline = DateTimeOffset.UtcNow.AddSeconds(20);
         Task Receive(string action, int wager, object data) => games.HandleGameEventAsync(new GameEventReceivedEventArgs(
             friend.PetId, new GameEventPayload
             {
                 GameType = LabLadderEngine.GameTypeId, SessionId = session, Action = action, WagerCoins = wager,
-                Data = JsonSerializer.Serialize(data, ProtocolJson.PacketOptions)
+                Data = JsonSerializer.Serialize(data, ProtocolJson.PacketOptions),
+                InviteExpiresAtUtc = action is "offer" or "ready" or "begin" ? inviteDeadline
+                    : action == "prepare-start" ? DateTimeOffset.UtcNow.AddSeconds(8) : null
             }));
 
         var notifications = new List<string>();
         games.GameNotification += (_, msg) => notifications.Add(msg);
 
-        await Receive("invite", 10, initialRoom);
-        await games.AcceptIncomingInviteAsync();
+        await Receive("offer", 10, initialRoom);
+        var accept = games.AcceptIncomingInviteAsync();
+        await Receive("ready", 10, initialRoom);
+        await Receive("begin", 10, initialRoom);
+        await accept;
         Assert.Equal(90, _hostProfile.SoloProgress.Coins);
 
         var pickingRoom = new LadderRoomStateDto
@@ -167,6 +173,7 @@ public sealed class SocialCoordinatorTests : IAsyncLifetime
         Assert.Equal(90, _hostProfile.SoloProgress.Coins);
 
         // 유효한 start 수신 시에는 하단 도착 전까지 결과가 숨겨지고 정산되지 않는다
+        await Receive("prepare-start", 10, start);
         await Receive("start", 10, start);
         Assert.True(games.IsLadderAnimating);
         Assert.All(games.LadderResultLines, line => Assert.EndsWith("→  ?", line));

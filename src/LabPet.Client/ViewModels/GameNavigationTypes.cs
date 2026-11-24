@@ -36,7 +36,12 @@ public enum GameInviteStatus
     Accepting = 2,
     Accepted = 3,
     Declined = 4,
-    Expired = 5
+    Expired = 5,
+    Sending = 6,
+    Ready = 7,
+    Starting = 8,
+    Canceled = 9,
+    Failed = 10
 }
 
 /// <summary>

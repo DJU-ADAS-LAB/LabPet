@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Text.Json;
 using System.Windows.Media;
 using CommunityToolkit.Mvvm.Input;
@@ -30,6 +31,12 @@ public sealed partial class CoinGamesViewModel
     {
         if (IsLadderRoomOpen || IsLadderAnimating)
         {
+            return;
+        }
+
+        if (IsAnyGameBusy || HasIncomingInvite)
+        {
+            LadderStatusText = DescribeInviteReason("busy");
             return;
         }
 
@@ -71,19 +78,18 @@ public sealed partial class CoinGamesViewModel
             return;
         }
 
+        var sessionId = Guid.NewGuid().ToString("N");
         if (wager > 0)
         {
-            var (ok, msg) = _progression.TrySpendCoins(_profile, wager);
-            if (!ok)
+            if (!TryReserveMultiplayerWager(sessionId, wager))
             {
-                LadderStatusText = msg;
+                LadderStatusText = DescribeInviteReason("coins");
                 return;
             }
 
             NotifyCoinsChanged();
         }
 
-        var sessionId = Guid.NewGuid().ToString("N");
         var myName = string.IsNullOrWhiteSpace(_profile.OwnerName) ? _profile.PetName : _profile.OwnerName;
 
         _ladderPendingInviteeIds.Clear();
@@ -132,77 +138,21 @@ public sealed partial class CoinGamesViewModel
         LadderBoardPrizesSummaryText = $"공개 상품: {LabLadderEngine.FormatPrizeSummary(initialPrizes)}";
         RefreshLadderLobbyUi();
 
-        if (wager > 0)
+        if (wager > 0 && !await PersistProfileAsync())
         {
-            await PersistProfileAsync();
-        }
-
-        if (_ladderRoom?.SessionId != sessionId)
-        {
+            await AbortLadderRoomAsHostAsync(DescribeInviteReason("storage"));
             return;
         }
 
+        if (_ladderRoom?.SessionId != sessionId)
+            return;
+
+        _ = WatchLadderConnectionsAsync(sessionId);
         var initialRoomJson = JsonSerializer.Serialize(_ladderRoom, ProtocolJson.PacketOptions);
-        var sendTasks = invitees.Select(async choice =>
-        {
-            var sent = await _social.SendGameEventAsync(choice.Friend, new GameEventPayload
-            {
-                GameType = LabLadderEngine.GameTypeId,
-                SessionId = sessionId,
-                Action = "invite",
-                WagerCoins = wager,
-                Data = initialRoomJson
-            });
-            return (choice.Friend.PetId, sent);
-        }).ToList();
-
-        var results = await Task.WhenAll(sendTasks);
-        if (_ladderRoom is null || _ladderRoom.SessionId != sessionId)
-        {
-            return;
-        }
-
-        var sentCount = 0;
-        foreach (var (petId, sent) in results)
-        {
-            if (sent)
-            {
-                sentCount++;
-            }
-            else
-            {
-                _ladderPendingInviteeIds.Remove(petId);
-                _ladderPendingInvitees.Remove(petId);
-            }
-        }
-
-        if (sentCount == 0 && _ladderJoinedFriends.Count == 0)
-        {
-            var refunded = await RefundLadderEntryFeeIfPaidAsync();
-            CloseLadderRoomState(refunded > 0
-                ? "온라인 친구에게 초대를 전송하지 못해 참가 코인을 반환했습니다."
-                : "온라인 친구에게 초대를 전송하지 못했습니다.");
-            return;
-        }
-
-        _ladderRoom.PendingInviteCount = _ladderPendingInviteeIds.Count;
-        RecalculateHostSlotCountAndPrizes();
-        RefreshLadderLobbyUi();
-        await BroadcastLadderStateOrAbortAsync();
-        if (_ladderRoom?.SessionId != sessionId)
-        {
-            return;
-        }
-
-        if (_ladderRoom.PendingInviteCount > 0)
-        {
-            StartLadderInviteTimeout(sessionId);
-            LadderStatusText = $"친구 {sentCount}명에게 초대를 보냈습니다. 응답 완료 후 '참가자 확정'을 눌러 주세요.";
-        }
-        else
-        {
-            LadderStatusText = "모든 초대에 대한 응답이 완료되었습니다. '참가자 확정'을 눌러 주세요.";
-        }
+        var deadline = NewInviteDeadline();
+        LadderStatusText = "친구에게 사다리 초대를 보내는 중입니다.";
+        await Task.WhenAll(invitees.Select(choice => SendTrackedOfferAsync(
+            choice.Friend, LabLadderEngine.GameTypeId, sessionId, wager, deadline, initialRoomJson)));
     }
 
     [RelayCommand]
@@ -221,7 +171,6 @@ public sealed partial class CoinGamesViewModel
             return;
         }
 
-        CancelLadderInviteTimeout();
         if (!LabLadderEngine.TryConfirmParticipants(_ladderRoom, _ladderInitialPrizes))
         {
             return;
@@ -335,24 +284,29 @@ public sealed partial class CoinGamesViewModel
             _ladderRoom.Prizes);
         var startDto = LabLadderEngine.CreateStartDto(_ladderRoom, board);
         var startJson = JsonSerializer.Serialize(startDto, ProtocolJson.PacketOptions);
-
-        var startSendTasks = _ladderJoinedFriends.Values.ToArray().Select(friend => _social.SendGameEventAsync(friend, new GameEventPayload
+        var targets = _ladderJoinedFriends.Values.ToArray();
+        var readiness = new LadderStartReadiness(sessionId, targets, "ready-start");
+        _ladderStartReadiness = readiness;
+        LadderStatusText = "참가자별 사다리판 확인을 기다리는 중입니다.";
+        if (!await WaitForLadderStartRepliesAsync(readiness, startDto.WagerCoins, startJson, "prepare-start"))
         {
-            GameType = LabLadderEngine.GameTypeId,
-            SessionId = sessionId,
-            Action = "start",
-            WagerCoins = startDto.WagerCoins,
-            Data = startJson
-        })).ToList();
+            if (_ladderRoom?.SessionId == sessionId)
+                await AbortLadderRoomAsHostAsync("일부 참가자의 준비를 확인하지 못해 사다리 게임을 취소했습니다.");
+            return;
+        }
+        if (_ladderRoom?.SessionId != sessionId)
+            return;
 
-        var startResults = await Task.WhenAll(startSendTasks);
+        var startReplies = new LadderStartReadiness(sessionId, targets, "started-start");
+        _ladderStartReadiness = startReplies;
+        var started = await WaitForLadderStartRepliesAsync(startReplies, startDto.WagerCoins, startJson, "start");
         if (_ladderRoom is null || _ladderRoom.SessionId != sessionId)
         {
             _ladderStarting = false;
             return;
         }
 
-        if (startResults.Any(sent => !sent))
+        if (!started)
         {
             await AbortLadderRoomAsHostAsync("일부 참가자에게 사다리판을 전송하지 못해 게임을 취소했습니다.");
             return;
@@ -364,10 +318,135 @@ public sealed partial class CoinGamesViewModel
         await ApplyStartedMultiplayerLadderAsync(startDto, abortRefundCoins);
     }
 
+    private sealed class LadderStartReadiness(string session, IReadOnlyList<FriendEntry> targets, string replyAction)
+    {
+        public string Session { get; } = session;
+        public IReadOnlyList<FriendEntry> Targets { get; } = targets;
+        public string ReplyAction { get; } = replyAction;
+        public DateTimeOffset Deadline { get; } = DateTimeOffset.UtcNow.AddSeconds(8);
+        public ConcurrentDictionary<string, byte> Ready { get; } = new(StringComparer.OrdinalIgnoreCase);
+        public TaskCompletionSource<bool> Completion { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    }
+
+    private LadderStartReadiness? _ladderStartReadiness;
+    private string? _ladderPreparedStart;
+    private string? _ladderAppliedStart;
+
+    private async Task<bool> WaitForLadderStartRepliesAsync(LadderStartReadiness readiness, int wager, string start, string action)
+    {
+        var payload = new GameEventPayload
+        {
+            GameType = LabLadderEngine.GameTypeId, SessionId = readiness.Session, Action = action,
+            WagerCoins = wager, Data = start, InviteExpiresAtUtc = readiness.Deadline
+        };
+        while (_ladderStartReadiness == readiness && DateTimeOffset.UtcNow < readiness.Deadline)
+        {
+            if (readiness.Completion.Task.IsCompleted)
+                return await readiness.Completion.Task;
+
+            var attempts = readiness.Targets.Where(friend => !readiness.Ready.ContainsKey(friend.PetId))
+                .Select(friend => _social.SendGameEventAsync(friend, payload)).ToArray();
+            if (attempts.Length == 0)
+                return true;
+            var batch = Task.WhenAll(attempts);
+            if (await Task.WhenAny(batch, readiness.Completion.Task) == readiness.Completion.Task)
+                return await readiness.Completion.Task;
+            await batch;
+            await Task.WhenAny(Task.Delay(InviteRetryInterval), readiness.Completion.Task);
+        }
+        return false;
+    }
+
+    private void ReceiveLadderReadiness(string sender, GameEventPayload packet)
+    {
+        if (_ladderStartReadiness is not { } readiness || readiness.Session != packet.SessionId
+            || readiness.ReplyAction != packet.Action
+            || readiness.Deadline != packet.InviteExpiresAtUtc
+            || !readiness.Targets.Any(friend => string.Equals(friend.PetId, sender, StringComparison.OrdinalIgnoreCase)))
+            return;
+        if (packet.Data != "ready")
+            readiness.Completion.TrySetResult(false);
+        else if (readiness.Ready.TryAdd(sender, 0) && readiness.Ready.Count == readiness.Targets.Count)
+            readiness.Completion.TrySetResult(true);
+    }
+
+    private void ReceiveLadderPrepare(FriendEntry host, GameEventPayload packet)
+    {
+        if (_ladderRoom is not { } room || packet.InviteExpiresAtUtc is not { } deadline
+            || deadline <= DateTimeOffset.UtcNow || deadline > DateTimeOffset.UtcNow.AddSeconds(12))
+            return;
+        var ready = room.WagerCoins == _ladderPaidCoins
+            && TryReadLadderPayload<LadderStartDto>(packet.Data, out var start) && start is not null
+            && LabLadderEngine.TryValidateStart(start, room, _profile.PetId, out _, out _);
+        if (ready && _ladderPreparedStart is null)
+        {
+            _ladderPreparedStart = packet.Data;
+            _ = WaitForLadderStartDecisionAsync(room.SessionId, deadline);
+        }
+
+        _ = _social.SendGameEventAsync(host, new GameEventPayload
+        {
+            GameType = LabLadderEngine.GameTypeId, SessionId = room.SessionId, Action = "ready-start",
+            WagerCoins = room.WagerCoins, Data = ready && _ladderPreparedStart == packet.Data ? "ready" : "rejected",
+            InviteExpiresAtUtc = deadline
+        });
+    }
+
+    private async Task WaitForLadderStartDecisionAsync(string session, DateTimeOffset deadline)
+    {
+        var delay = deadline - DateTimeOffset.UtcNow + TimeSpan.FromSeconds(1);
+        if (delay > TimeSpan.Zero)
+            await Task.Delay(delay);
+        RunOnUi(() =>
+        {
+            if (!_disposed && !IsLadderHost && _ladderRoom?.SessionId == session && _ladderPreparedStart is not null)
+                _ = CancelLadderRoomAsync();
+        });
+    }
+
+    private async Task WatchLadderConnectionsAsync(string session)
+    {
+        DateTimeOffset? disconnectedSince = null;
+        try
+        {
+            while (!_disposed && _ladderRoom?.SessionId == session)
+            {
+                await Task.Delay(TimeSpan.FromSeconds(1), _inviteToken);
+                if (_ladderRoom?.SessionId != session)
+                    return;
+                var disconnected = IsLadderHost
+                    ? _ladderJoinedFriends.Values.ToArray().Any(friend => !IsOnlineInviteTarget(friend.PetId))
+                    : _ladderHostFriend is { } host && !IsOnlineInviteTarget(host.PetId);
+                if (!disconnected)
+                {
+                    disconnectedSince = null;
+                    continue;
+                }
+                disconnectedSince ??= DateTimeOffset.UtcNow;
+                if (DateTimeOffset.UtcNow - disconnectedSince < TimeSpan.FromSeconds(8))
+                    continue;
+                if (IsLadderHost)
+                    await AbortLadderRoomAsHostAsync("참가자와의 연결이 복구되지 않아 사다리방을 종료했습니다.");
+                else
+                {
+                    var refunded = await RefundLadderEntryFeeIfPaidAsync();
+                    if (_ladderRoom?.SessionId == session)
+                        CloseLadderRoomState(refunded > 0
+                            ? "방장과의 연결이 복구되지 않아 참가 코인을 반환했습니다."
+                            : "방장과의 연결이 복구되지 않아 사다리방을 종료했습니다.");
+                }
+                return;
+            }
+        }
+        catch (OperationCanceledException)
+        {
+        }
+    }
+
     [RelayCommand]
     private async Task CancelLadderRoomAsync()
     {
-        if (!IsLadderRoomOpen || _ladderStarting || _ladderRoom is null)
+        if (!IsLadderRoomOpen || _ladderRoom is null)
         {
             return;
         }
@@ -388,6 +467,12 @@ public sealed partial class CoinGamesViewModel
 
         if (host is not null)
         {
+            if (_inviteExchanges.TryGetValue(InviteKey(host.PetId, sessionId), out var exchange))
+            {
+                exchange.Reason = "canceled";
+                await SendInvitePacketAsync(exchange, Cancel);
+                return;
+            }
             _ = await _social.SendGameEventAsync(host, new GameEventPayload
             {
                 GameType = LabLadderEngine.GameTypeId,
@@ -426,6 +511,10 @@ public sealed partial class CoinGamesViewModel
         {
             switch (p.Action)
             {
+                case "ready-start" or "started-start":
+                    ReceiveLadderReadiness(senderPetId, p);
+                    break;
+
                 case "accept" when _ladderRoom.Phase == LadderRoomPhase.WaitingInvites && _ladderPendingInviteeIds.Remove(senderPetId):
                 {
                     _ladderPendingInvitees.Remove(senderPetId);
@@ -446,7 +535,6 @@ public sealed partial class CoinGamesViewModel
                     RefreshLadderLobbyUi();
                     if (_ladderRoom.PendingInviteCount == 0)
                     {
-                        CancelLadderInviteTimeout();
                         LadderStatusText = "모든 응답이 완료되었습니다. '참가자 확정' 버튼을 눌러 주세요.";
                     }
 
@@ -479,8 +567,7 @@ public sealed partial class CoinGamesViewModel
                     RefreshLadderLobbyUi();
                     if (_ladderRoom.PendingInviteCount == 0)
                     {
-                        CancelLadderInviteTimeout();
-                        LadderStatusText = "응답이 완료되었습니다. '참가자 확정' 버튼을 눌러 주세요.";
+                                        LadderStatusText = "응답이 완료되었습니다. '참가자 확정' 버튼을 눌러 주세요.";
                     }
 
                     await BroadcastLadderStateOrAbortAsync();
@@ -508,6 +595,10 @@ public sealed partial class CoinGamesViewModel
         {
             switch (p.Action)
             {
+                case "prepare-start":
+                    ReceiveLadderPrepare(friend, p);
+                    break;
+
                 case "state":
                 {
                     if (TryReadLadderPayload<LadderRoomStateDto>(p.Data, out var state) && state is not null
@@ -531,11 +622,16 @@ public sealed partial class CoinGamesViewModel
                     break;
                 }
 
-                case "start":
+                case "start" when _ladderPreparedStart == p.Data:
                 {
                     if (TryReadLadderPayload<LadderStartDto>(p.Data, out var startDto) && startDto is not null)
                     {
                         await ApplyStartedMultiplayerLadderAsync(startDto);
+                        if (_pendingLadderRun?.SessionId == p.SessionId)
+                        {
+                            _ladderAppliedStart = p.Data;
+                            ReplyToAppliedLadderStart(friend, p);
+                        }
                     }
 
                     break;
@@ -555,75 +651,15 @@ public sealed partial class CoinGamesViewModel
         }
     }
 
-    private void StartLadderInviteTimeout(string sessionId)
+    private void ReplyToAppliedLadderStart(FriendEntry host, GameEventPayload packet)
     {
-        CancelLadderInviteTimeout();
-        var cts = new CancellationTokenSource();
-        _ladderInviteTimeoutCts = cts;
-        _ = Task.Run(async () =>
-        {
-            try
-            {
-                await Task.Delay(TimeSpan.FromSeconds(InviteWaitTimeoutSeconds), cts.Token);
-                if (!cts.Token.IsCancellationRequested)
-                {
-                    RunOnUi(() => _ = ExpirePendingLadderInvitesAsync(sessionId));
-                }
-            }
-            catch (TaskCanceledException)
-            {
-            }
-        }, cts.Token);
-    }
-
-    private void CancelLadderInviteTimeout()
-    {
-        _ladderInviteTimeoutCts?.Cancel();
-        _ladderInviteTimeoutCts?.Dispose();
-        _ladderInviteTimeoutCts = null;
-    }
-
-    private async Task ExpirePendingLadderInvitesAsync(string sessionId)
-    {
-        if (!IsLadderRoomOpen || !IsLadderHost || _ladderStarting || _ladderRoom is null
-            || _ladderRoom.SessionId != sessionId || _ladderRoom.Phase != LadderRoomPhase.WaitingInvites
-            || _ladderPendingInvitees.Count == 0)
-        {
+        if (packet.InviteExpiresAtUtc is not { } deadline)
             return;
-        }
-
-        var timedOut = _ladderPendingInvitees.Values.ToArray();
-        var wager = _ladderActiveWager;
-        _ladderPendingInvitees.Clear();
-        _ladderPendingInviteeIds.Clear();
-        _ladderRoom.PendingInviteCount = 0;
-
-        foreach (var friend in timedOut)
+        _ = _social.SendGameEventAsync(host, new GameEventPayload
         {
-            _ = await _social.SendGameEventAsync(friend, new GameEventPayload
-            {
-                GameType = LabLadderEngine.GameTypeId,
-                SessionId = sessionId,
-                Action = "cancel",
-                WagerCoins = wager
-            });
-        }
-
-        if (_ladderRoom is null || _ladderRoom.SessionId != sessionId)
-        {
-            return;
-        }
-
-        if (_ladderRoom.Members.Count < LabLadderEngine.MinParticipants)
-        {
-            await AbortLadderRoomAsHostAsync($"수락 대기 시간({InviteWaitTimeoutSeconds}초)이 지나 참가 인원이 부족하여 방을 종료했습니다.");
-            return;
-        }
-
-        RecalculateHostSlotCountAndPrizes();
-        RefreshLadderLobbyUi();
-        LadderStatusText = "응답 대기 시간이 종료되었습니다. 현재 입장 인원으로 '참가자 확정'을 눌러 주세요.";
-        await BroadcastLadderStateOrAbortAsync();
+            GameType = LabLadderEngine.GameTypeId, SessionId = packet.SessionId, Action = "started-start",
+            WagerCoins = packet.WagerCoins, Data = "ready", InviteExpiresAtUtc = deadline
+        });
     }
 
     private async Task BroadcastLadderStateOrAbortAsync()
@@ -671,18 +707,28 @@ public sealed partial class CoinGamesViewModel
             .Select(g => g.First())
             .ToArray();
 
-        CancelLadderInviteTimeout();
-        var refunded = await RefundLadderEntryFeeIfPaidAsync();
+        var refunded = _ladderPaidCoins;
         var finalMessage = refunded > 0 && !statusMessage.Contains("반환", StringComparison.Ordinal)
             ? $"{statusMessage} (참가 {refunded} 코인 반환)"
             : statusMessage;
 
         CloseLadderRoomState(finalMessage);
+        if (refunded > 0)
+            await SettleMultiplayerWagerAsync(sessionId, refunded);
 
         if (!string.IsNullOrEmpty(sessionId))
         {
             foreach (var friend in notifyTargets)
             {
+                if (_inviteExchanges.TryGetValue(InviteKey(friend.PetId, sessionId), out var exchange))
+                {
+                    exchange.Status = GameInviteStatus.Canceled;
+                    exchange.Reason = "canceled";
+                    exchange.TerminalPacket = Cancel;
+                    _ = SendTerminalInvitePacketAsync(exchange, Cancel);
+                    continue;
+                }
+
                 _ = await _social.SendGameEventAsync(friend, new GameEventPayload
                 {
                     GameType = LabLadderEngine.GameTypeId,
@@ -712,9 +758,7 @@ public sealed partial class CoinGamesViewModel
         {
             var refund = run.AbortRefundCoins;
             run.AbortRefundCoins = 0;
-            _progression.AddCoins(_profile, refund);
-            NotifyCoinsChanged();
-            await PersistProfileAsync();
+            await SettleMultiplayerWagerAsync(run.SessionId, refund);
             var fullMsg = $"{reasonMessage} ({refund} 코인 반환)";
             LadderStatusText = fullMsg;
             GameNotification?.Invoke(this, fullMsg);
@@ -738,9 +782,7 @@ public sealed partial class CoinGamesViewModel
         }
 
         _ladderPaidCoins = 0;
-        _progression.AddCoins(_profile, refund);
-        NotifyCoinsChanged();
-        await PersistProfileAsync();
+        await SettleMultiplayerWagerAsync(_ladderRoom?.SessionId, refund);
         return refund;
     }
 
@@ -983,9 +1025,14 @@ public sealed partial class CoinGamesViewModel
             if (settledNow)
             {
                 var jackpot = run.WagerCoins * run.Traces.Count;
-                _progression.AddCoins(_profile, jackpot);
-                NotifyCoinsChanged();
-                await PersistProfileAsync();
+                if (run.IsMultiplayer)
+                    await SettleMultiplayerWagerAsync(run.SessionId, jackpot);
+                else
+                {
+                    _progression.AddCoins(_profile, jackpot);
+                    NotifyCoinsChanged();
+                    await PersistProfileAsync();
+                }
 
                 var prefix = run.IsMultiplayer ? "동시 사다리 당첨!" : "사다리 잭팟!";
                 LadderResultHeadline = prefix;
@@ -1001,6 +1048,9 @@ public sealed partial class CoinGamesViewModel
                 return;
             }
         }
+
+        if (run.IsMultiplayer && run.WagerCoins > 0)
+            await SettleMultiplayerWagerAsync(run.SessionId, 0);
 
         if (myResult is not null)
         {
@@ -1195,7 +1245,9 @@ public sealed partial class CoinGamesViewModel
 
     private void CloseLadderRoomStateInternal(bool resetStageToSetup = true)
     {
-        CancelLadderInviteTimeout();
+        _ladderStartReadiness?.Completion.TrySetResult(false);
+        _ladderStartReadiness = null;
+        _ladderPreparedStart = null;
         _ladderRoom = null;
         _ladderHostFriend = null;
         _ladderInitialPrizes.Clear();
@@ -1280,7 +1332,7 @@ public sealed partial class CoinGamesViewModel
     [RelayCommand]
     private async Task RunLadderAsync()
     {
-        if (IsLadderRoomOpen || IsLadderAnimating)
+        if (IsAcceptingIncomingInvite || IsAnyGameBusy)
         {
             return;
         }
@@ -1360,6 +1412,12 @@ public sealed partial class CoinGamesViewModel
         if (_lastLadderResults.Count == 0)
         {
             LadderStatusText = "먼저 사다리를 실행해 주세요.";
+            return;
+        }
+
+        if (IsAnyGameBusy || HasIncomingInvite)
+        {
+            LadderStatusText = DescribeInviteReason("busy");
             return;
         }
 

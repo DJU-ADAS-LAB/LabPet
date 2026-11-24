@@ -8,6 +8,8 @@ public sealed class SoloProgress
     public int Level { get; set; } = 1;
     public long Xp { get; set; }
     public long Coins { get; set; }
+    /// <summary>정산 전인 멀티플레이 참가비를 세션별로 기록한다.</summary>
+    public Dictionary<string, int> PendingGameWagers { get; set; } = [];
     public long TotalKeystrokes { get; set; }
     public long TotalMouseClicks { get; set; }
     public long TotalUptimeMinutes { get; set; }

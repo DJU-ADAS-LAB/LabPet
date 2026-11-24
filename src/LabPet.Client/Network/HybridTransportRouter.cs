@@ -448,6 +448,13 @@ public sealed class HybridTransportRouter : ISocialTransport
 
     private void OnSourceGameEventReceived(object? sender, GameEventReceivedEventArgs e)
     {
+        // 초대 단계는 응답 유실 시 같은 세션의 패킷을 다시 받아 응답해야 한다.
+        if (e.Payload.InviteExpiresAtUtc is not null)
+        {
+            GameEventReceived?.Invoke(this, e);
+            return;
+        }
+
         var key = $"game|{e.SenderPetId}|{e.Payload.GameType}|{e.Payload.SessionId}|{e.Payload.Action}|{e.Payload.WagerCoins}|{e.Payload.Data}";
         if (_gameEventDedup.TryAccept(key))
         {

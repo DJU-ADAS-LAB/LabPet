@@ -318,7 +318,7 @@ public sealed class GameUiUxAndInviteTests : IAsyncLifetime
             guestGames.BindProfile(_guestProfile);
 
             // 1. 짧은 만료(0.25s) 설정 -> 만료 시 Expired 상태 전이 및 방장 측 대기 자동 종료
-            guestGames.InviteExpireSeconds = 0.25;
+            hostGames.InviteExpireSeconds = 0.5;
             var guestInvited = WaitUntilAsync(guestGames, () => guestGames.HasIncomingInvite);
             hostGames.RpsWager = 30;
             hostGames.SelectedRpsFriend = hostGames.OnlineFriends.Single();
@@ -334,7 +334,7 @@ public sealed class GameUiUxAndInviteTests : IAsyncLifetime
             Assert.False(guestGames.HasIncomingInvite);
 
             // 2. 방장이 먼저 초대를 취소한 뒤 수락을 시도해도 코인이 차감되거나 입장되지 않는다
-            guestGames.InviteExpireSeconds = 20;
+            hostGames.InviteExpireSeconds = 20;
             var guestInvited2 = WaitUntilAsync(guestGames, () => guestGames.HasIncomingInvite);
             await hostGames.SendRpsInviteCommand.ExecuteAsync(null);
             await guestInvited2.WaitAsync(TimeSpan.FromSeconds(5));
@@ -373,8 +373,9 @@ public sealed class GameUiUxAndInviteTests : IAsyncLifetime
                 {
                     GameType = TypingSprintEngine.GameTypeId,
                     SessionId = unrelatedSession,
-                    Action = "invite",
-                    WagerCoins = 10
+                    Action = "offer",
+                    WagerCoins = 10,
+                    InviteExpiresAtUtc = DateTimeOffset.UtcNow.AddSeconds(20)
                 }));
             Assert.False(guestGames.HasIncomingInvite);
             Assert.Equal(GameScreen.Rps, guestGames.ActiveGameScreen);
@@ -597,6 +598,8 @@ public sealed class GameUiUxAndInviteTests : IAsyncLifetime
             Assert.Equal(TypingPhase.Countdown, guestGames.TypingPhase);
 
             await WaitUntilAsync(guestGames, () => guestGames.TypingPhase == TypingPhase.Result).WaitAsync(TimeSpan.FromSeconds(5));
+
+            await WaitUntilAsync(hostGames, () => hostGames.TypingPhase == TypingPhase.Result).WaitAsync(TimeSpan.FromSeconds(5));
 
             // 2. 사다리 초대 수락 시 대시보드 없이 Lobby 진입
             guestGames.OpenGameScreenCommand.Execute(GameScreen.Dashboard);

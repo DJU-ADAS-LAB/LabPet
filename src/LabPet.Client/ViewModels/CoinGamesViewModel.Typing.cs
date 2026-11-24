@@ -11,7 +11,7 @@ public sealed partial class CoinGamesViewModel
     // 3. 친구 타이핑 스프린트 대결 (3초 카운트다운 -> 10초 대결 -> 결과 비교)
     // ══════════════════════════════════════════════════════════════════════
 
-    [RelayCommand]
+    [RelayCommand(AllowConcurrentExecutions = true)]
     private async Task SendTypingInviteAsync()
     {
         if (IsTypingRunning || IsTypingCountdown || (_typingSessionId is not null && !IsTypingWaitingResponse))
@@ -21,13 +21,20 @@ public sealed partial class CoinGamesViewModel
 
         if (IsTypingWaitingResponse)
         {
-            await CancelTypingInviteInternalAsync(isTimeout: false);
+            if (_typingSessionId is { } session && _typingOpponent is { } opponent)
+                await CancelTrackedInviteAsync(session, opponent);
+            return;
+        }
+
+        if (IsAnyGameBusy || HasIncomingInvite)
+        {
+            TypingStatusText = DescribeInviteReason("busy");
             return;
         }
 
         if (SelectedTypingFriend is null)
         {
-            TypingStatusText = "대결할 온라인 친구를 먼저 선택해 주세요.";
+            TypingStatusText = _typingInviteTargetId is null ? "대결할 온라인 친구를 먼저 선택해 주세요." : DescribeInviteReason("offline");
             return;
         }
 
@@ -38,6 +45,11 @@ public sealed partial class CoinGamesViewModel
         }
 
         var target = SelectedTypingFriend;
+        if (!IsOnlineInviteTarget(target.Friend.PetId))
+        {
+            TypingStatusText = DescribeInviteReason("offline");
+            return;
+        }
         var sessionId = Guid.NewGuid().ToString("N");
 
         // 상대방이 초대를 받자마자 즉시 수락해도 유실되지 않도록 세션 상태를 먼저 등록한다.
@@ -48,65 +60,9 @@ public sealed partial class CoinGamesViewModel
         TypingPhase = TypingPhase.WaitingInviteResponse;
         TypingOpponentDisplayName = target.DisplayName;
         TypingOpponentPortrait = TryGetPortrait(ResolveFriendAppearance(target.Friend.PetId, target.Friend));
-        TypingStatusText = $"{target.DisplayName}의 수락을 기다리는 중... ({TypingWager} 코인 · {InviteWaitTimeoutSeconds}초 제한)";
+        TypingStatusText = $"{target.DisplayName}에게 초대를 보내는 중입니다.";
 
-        var ok = await _social.SendGameEventAsync(target.Friend, new GameEventPayload
-        {
-            GameType = TypingSprintEngine.GameTypeId,
-            SessionId = sessionId,
-            Action = "invite",
-            WagerCoins = TypingWager
-        });
-
-        if (!ok)
-        {
-            if (_typingSessionId == sessionId)
-            {
-                _typingSessionId = null;
-                _typingOpponent = null;
-                IsTypingWaitingResponse = false;
-                TypingPhase = TypingPhase.Setup;
-                TypingStatusText = $"{target.DisplayName}에게 도전을 보내지 못했습니다. (연결/방화벽 확인)";
-            }
-
-            return;
-        }
-
-        StartTypingInviteTimeout(sessionId);
-    }
-
-    private void StartTypingInviteTimeout(string sessionId)
-    {
-        CancelTypingInviteTimeout();
-        var cts = new CancellationTokenSource();
-        _typingInviteTimeoutCts = cts;
-        _ = Task.Run(async () =>
-        {
-            try
-            {
-                await Task.Delay(TimeSpan.FromSeconds(InviteWaitTimeoutSeconds), cts.Token);
-                if (!cts.Token.IsCancellationRequested)
-                {
-                    RunOnUi(() =>
-                    {
-                        if (IsTypingWaitingResponse && _typingSessionId == sessionId)
-                        {
-                            _ = CancelTypingInviteInternalAsync(isTimeout: true);
-                        }
-                    });
-                }
-            }
-            catch (TaskCanceledException)
-            {
-            }
-        }, cts.Token);
-    }
-
-    private void CancelTypingInviteTimeout()
-    {
-        _typingInviteTimeoutCts?.Cancel();
-        _typingInviteTimeoutCts?.Dispose();
-        _typingInviteTimeoutCts = null;
+        await SendTrackedOfferAsync(target.Friend, TypingSprintEngine.GameTypeId, sessionId, _typingActiveWager, NewInviteDeadline());
     }
 
     private void CancelTypingCountdown()
@@ -116,37 +72,10 @@ public sealed partial class CoinGamesViewModel
         _typingCountdownCts = null;
     }
 
-    private async Task CancelTypingInviteInternalAsync(bool isTimeout)
-    {
-        CancelTypingInviteTimeout();
-        var sessionId = _typingSessionId;
-        var opponent = _typingOpponent;
-        var wager = _typingActiveWager;
-
-        _typingSessionId = null;
-        _typingOpponent = null;
-        IsTypingWaitingResponse = false;
-        TypingPhase = TypingPhase.Setup;
-        TypingStatusText = isTimeout
-            ? $"수락 대기 시간({InviteWaitTimeoutSeconds}초)이 초과되어 신청이 자동 취소되었습니다."
-            : "타이핑 대결 신청을 취소했습니다.";
-
-        if (opponent is not null && sessionId is not null)
-        {
-            _ = await _social.SendGameEventAsync(opponent, new GameEventPayload
-            {
-                GameType = TypingSprintEngine.GameTypeId,
-                SessionId = sessionId,
-                Action = "cancel",
-                WagerCoins = wager
-            });
-        }
-    }
-
     [RelayCommand]
     private void StartSoloTypingPractice()
     {
-        if (IsTypingRunning || IsTypingCountdown || IsTypingWaitingResponse || _typingSessionId is not null)
+        if (IsAcceptingIncomingInvite || IsAnyGameBusy)
         {
             return;
         }
@@ -302,19 +231,14 @@ public sealed partial class CoinGamesViewModel
 
     private async Task RefundTypingRoundAsync(string message)
     {
+        var session = _typingSessionId;
         CancelTypingCountdown();
         _typingSessionId = null;
         _typingTimer.Stop();
         IsTypingRunning = false;
         TypingPhase = TypingPhase.Setup;
-        if (_typingActiveWager > 0)
-        {
-            _progression.AddCoins(_profile, _typingActiveWager);
-            NotifyCoinsChanged();
-        }
-
         TypingStatusText = message;
-        await PersistProfileAsync();
+        await SettleMultiplayerWagerAsync(session, _typingActiveWager);
     }
 
     partial void OnTypingInputTextChanged(string value)
@@ -432,6 +356,7 @@ public sealed partial class CoinGamesViewModel
         }
 
         // 저장을 기다리는 동안 나중에 수신된 완료 이벤트가 다시 정산하지 않도록 세션을 먼저 닫는다.
+        var session = _typingSessionId;
         _typingSessionId = null;
 
         var oppName = _typingOpponent is null ? "상대" : _social.GetFriendDisplayName(_typingOpponent.PetId);
@@ -441,9 +366,7 @@ public sealed partial class CoinGamesViewModel
         if (TypingMyScore > _typingOpponentFinalScore)
         {
             var prize = _typingActiveWager * 2;
-            _progression.AddCoins(_profile, prize);
-            NotifyCoinsChanged();
-            await PersistProfileAsync();
+            await SettleMultiplayerWagerAsync(session, prize);
             TypingResultHeadline = "승리!";
             TypingSettlementText = $"+{prize} 코인 획득 (참가 {_typingActiveWager} 코인)";
             TypingStatusText = $"승리! 나 {TypingMyScore}점 vs {oppName} {_typingOpponentFinalScore}점 (+{prize} 코인)";
@@ -452,9 +375,7 @@ public sealed partial class CoinGamesViewModel
         }
         else if (TypingMyScore == _typingOpponentFinalScore)
         {
-            _progression.AddCoins(_profile, _typingActiveWager);
-            NotifyCoinsChanged();
-            await PersistProfileAsync();
+            await SettleMultiplayerWagerAsync(session, _typingActiveWager);
             TypingResultHeadline = "무승부";
             TypingSettlementText = $"배팅 {_typingActiveWager} 코인 반환";
             TypingStatusText = $"무승부 · {TypingMyScore}점 동점 (배팅 {_typingActiveWager} 코인 반환)";
@@ -462,6 +383,7 @@ public sealed partial class CoinGamesViewModel
         }
         else
         {
+            await SettleMultiplayerWagerAsync(session, 0);
             TypingResultHeadline = "아쉬운 패배";
             TypingSettlementText = $"-{_typingActiveWager} 코인 차감";
             TypingStatusText = $"패배 · 나 {TypingMyScore}점 vs {oppName} {_typingOpponentFinalScore}점 (-{_typingActiveWager} 코인)";
