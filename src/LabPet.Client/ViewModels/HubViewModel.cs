@@ -94,7 +94,7 @@ public sealed partial class HubViewModel : ObservableObject, IDisposable
 
         FooterNavItems =
         [
-            new(HubPage.Settings, "설정", "일반 · 펫 표시 · 네트워크 및 방화벽 · 데이터", "IconSettingsGeometry"),
+            new(HubPage.Settings, "설정", "일반 · 펫 표시 · 데이터 저장소", "IconSettingsGeometry"),
             new(HubPage.About, "정보", "설치 버전 · 업데이트 확인 · 오픈소스 라이선스", "IconInfoGeometry")
         ];
 

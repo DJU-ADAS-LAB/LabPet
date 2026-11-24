@@ -31,7 +31,6 @@ public sealed partial class HomePageViewModel : ObservableObject, IDisposable
     [ObservableProperty] private string _petName = "모찌";
     [ObservableProperty] private string _ownerNameText = "주인 미설정";
     [ObservableProperty] private string _speciesDisplayName = "말랑 모찌 정령";
-    [ObservableProperty] private string _friendCode = string.Empty;
     [ObservableProperty] private ImageSource? _petPortrait;
 
     [ObservableProperty] private int _level = 1;
@@ -149,7 +148,6 @@ public sealed partial class HomePageViewModel : ObservableObject, IDisposable
         SpeciesDisplayName = PetCustomizationCatalog.Species
             .FirstOrDefault(s => string.Equals(s.Id, profile.Appearance.SpeciesId, StringComparison.OrdinalIgnoreCase))
             ?.DisplayName ?? profile.Appearance.SpeciesId;
-        FriendCode = profile.FriendCode;
         PetPortrait = _portraitRenderer.GetPortrait(profile.Appearance);
 
         Level = progress.Level;
@@ -224,6 +222,6 @@ public sealed partial class HomePageViewModel : ObservableObject, IDisposable
     private Task OpenGrowthAsync() => _navigation.NavigateAsync(new NavigationRequest(HubPage.Growth));
 
     [RelayCommand]
-    private Task OpenNetworkSettingsAsync() => _navigation.NavigateAsync(
-        new NavigationRequest(HubPage.Settings, SubSection: "Network"));
+    private Task OpenNearbyFriendsAsync() => _navigation.NavigateAsync(
+        new NavigationRequest(HubPage.Friends, SubSection: "Nearby"));
 }

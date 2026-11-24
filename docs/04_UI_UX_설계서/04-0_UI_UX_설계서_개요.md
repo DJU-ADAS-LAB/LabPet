@@ -46,7 +46,7 @@ flowchart LR
 | `SCR-03E` | [PomodoroPageView.xaml](../../src/LabPet.Client/Views/Hub/Pages/PomodoroPageView.xaml) | 15/25/50분 뽀모도로 집중·휴식 타이머 (백그라운드 유지) |
 | `SCR-03F` | [GamesPageView.xaml](../../src/LabPet.Client/Views/Hub/Pages/GamesPageView.xaml) · [GamesHubView.xaml](../../src/LabPet.Client/Views/Games/GamesHubView.xaml) | 2×2 카드형 게임 대시보드 및 4종 미니게임(`HiLowGameView`, `RpsGameView`, `TypingGameView`, `LadderGameView`) |
 | `SCR-03G` | [SeasonalPageView.xaml](../../src/LabPet.Client/Views/Hub/Pages/SeasonalPageView.xaml) | 확장형 시즌 콘텐츠 허브 (실구현 항목만 표시 — 터미널 크리스마스 트리) |
-| `SCR-03H` | [SettingsPageView.xaml](../../src/LabPet.Client/Views/Hub/Pages/SettingsPageView.xaml) | 일반(자동 실행·위치 초기화), 표시(크기·투명도·클릭 투과), 네트워크·방화벽(`SubSection="Network"` 포커스 이동)·SmartScreen 안내, 데이터 폴더 |
+| `SCR-03H` | [SettingsPageView.xaml](../../src/LabPet.Client/Views/Hub/Pages/SettingsPageView.xaml) | 일반(자동 실행·위치 초기화), 표시(크기·투명도·클릭 투과), 데이터 저장소 경로 · 폴더 열기 |
 | `SCR-03I` | [AboutPageView.xaml](../../src/LabPet.Client/Views/Hub/Pages/AboutPageView.xaml) | 설치 버전(`v0.3.5`), Velopack 업데이트 확인·적용(`HubNavigationAction.CheckUpdates`), 저장소·릴리스 노트 링크, 오픈소스 라이선스 |
 | `SCR-06` | [VisitorPetWindow.xaml](../../src/LabPet.Client/Views/VisitorPetWindow.xaml) | 내 바탕화면 옆 방문 친구 3D 펫 창 (크기·투명도 공유, 호버 `✕` 돌려보내기) |
 | `SCR-07` | [GameInviteCardWindow.xaml](../../src/LabPet.Client/Views/GameInviteCardWindow.xaml) | 통합 창이 닫혀 있거나 최소화되었을 때 펫 주변에 표시되는 비활성화 독립 초대 카드 |

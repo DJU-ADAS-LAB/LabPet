@@ -52,14 +52,6 @@ internal static class PetContextMenuFactory
 
         menu.Items.Add(new MenuItem { Header = "🎄  크리스마스 트리", Command = viewModel.LaunchChristmasTreeCommand });
 
-        var scaleMenu = new MenuItem { Header = "🔍  크기 조절" };
-        scaleMenu.Items.Add(CreateScaleMenuItem(viewModel, "아주 작게 (50%)", "0.5"));
-        scaleMenu.Items.Add(CreateScaleMenuItem(viewModel, "작게 (75%)", "0.75"));
-        scaleMenu.Items.Add(CreateScaleMenuItem(viewModel, "보통 (100%)", "1.0"));
-        scaleMenu.Items.Add(CreateScaleMenuItem(viewModel, "크게 (125%)", "1.25"));
-        scaleMenu.Items.Add(CreateScaleMenuItem(viewModel, "아주 크게 (150%)", "1.5"));
-        menu.Items.Add(scaleMenu);
-
         var clickThroughItem = new MenuItem
         {
             Header = "🎯  클릭 투과 집중 모드",
@@ -92,7 +84,6 @@ internal static class PetContextMenuFactory
         menu.Items.Add(new Separator());
 
         menu.Items.Add(new MenuItem { Header = "⚙  설정", Command = viewModel.OpenSettingsCommand });
-        menu.Items.Add(new MenuItem { Header = "🛡️  방화벽 · 네트워크 안내", Command = viewModel.OpenEnvironmentGuideCommand });
 
         var updateHeader = new StackPanel();
         updateHeader.Children.Add(new TextBlock { Text = "🔄  업데이트 확인" });
@@ -119,14 +110,6 @@ internal static class PetContextMenuFactory
 
         return menu;
     }
-
-    private static MenuItem CreateScaleMenuItem(PetWindowViewModel viewModel, string header, string scaleParameter)
-        => new()
-        {
-            Header = header,
-            Command = viewModel.SetPetScaleCommand,
-            CommandParameter = scaleParameter
-        };
 
     private static Brush CreateFrozenBrush(string hex)
     {

@@ -53,8 +53,6 @@
                             <TextBlock FontSize="12.5" Foreground="{StaticResource HubTextSecondaryBrush}">
                                 <Run Text="주인: " />
                                 <Run Text="{Binding OwnerNameText, Mode=OneWay}" FontWeight="SemiBold" Foreground="{StaticResource HubTextPrimaryBrush}" />
-                                <Run Text="   ·   친구 코드: " />
-                                <Run Text="{Binding FriendCode, Mode=OneWay}" FontWeight="SemiBold" Foreground="{StaticResource HubTextPrimaryBrush}" />
                             </TextBlock>
                         </StackPanel>
 
@@ -147,9 +145,9 @@
                                    Foreground="{StaticResource HubTextPrimaryBrush}"
                                    TextWrapping="Wrap"
                                    Margin="0,8,0,6" />
-                        <Button Content="네트워크 설정"
+                        <Button Content="주변 펫 탐색"
                                 Style="{StaticResource GameGhostButtonStyle}"
-                                Command="{Binding OpenNetworkSettingsCommand}"
+                                Command="{Binding OpenNearbyFriendsCommand}"
                                 HorizontalAlignment="Left"
                                 Padding="0,2" />
                     </StackPanel>

@@ -59,7 +59,6 @@ public sealed class HubNavigationAndLifecycleTests : IDisposable
         petVm.OpenPomodoroCommand.Execute(null);
         petVm.OpenGamesCommand.Execute(null);
         petVm.OpenSettingsCommand.Execute(null);
-        petVm.OpenEnvironmentGuideCommand.Execute(null);
         petVm.CheckUpdatesCommand.Execute(null);
 
         Assert.Equal(
@@ -71,7 +70,6 @@ public sealed class HubNavigationAndLifecycleTests : IDisposable
             new NavigationRequest(HubPage.Pomodoro),
             new NavigationRequest(HubPage.Games),
             new NavigationRequest(HubPage.Settings),
-            new NavigationRequest(HubPage.Settings, SubSection: "Network"),
             new NavigationRequest(HubPage.About, Action: HubNavigationAction.CheckUpdates)
         ], received);
     }
@@ -104,21 +102,21 @@ public sealed class HubNavigationAndLifecycleTests : IDisposable
 
             Assert.DoesNotContain(petHeaders, h => h.Contains("자동 실행", StringComparison.Ordinal));
             Assert.Contains(trayHeaders, h => h.Contains("자동 실행", StringComparison.Ordinal));
+            Assert.DoesNotContain(petHeaders, h => h.Contains("크기 조절", StringComparison.Ordinal));
+            Assert.DoesNotContain(trayHeaders, h => h.Contains("크기 조절", StringComparison.Ordinal));
+            Assert.DoesNotContain(petHeaders, h => h.Contains("방화벽", StringComparison.Ordinal));
+            Assert.DoesNotContain(trayHeaders, h => h.Contains("방화벽", StringComparison.Ordinal));
 
             foreach (var required in new[]
             {
                 "LabPet 열기", "외형", "친구", "성장", "뽀모도로", "코인 게임",
-                "크리스마스 트리", "크기 조절", "클릭 투과 집중 모드", "기본 위치로 복귀",
-                "설정", "방화벽", "업데이트 확인", "LabPet 종료"
+                "크리스마스 트리", "클릭 투과 집중 모드", "기본 위치로 복귀",
+                "설정", "업데이트 확인", "LabPet 종료"
             })
             {
                 Assert.Contains(petHeaders, h => h.Contains(required, StringComparison.Ordinal));
                 Assert.Contains(trayHeaders, h => h.Contains(required, StringComparison.Ordinal));
             }
-
-            var scaleMenu = petMenu.Items.OfType<MenuItem>()
-                .First(i => i.Header is string s && s.Contains("크기 조절", StringComparison.Ordinal));
-            Assert.Equal(5, scaleMenu.Items.OfType<MenuItem>().Count());
 
             var updateReadyItem = petMenu.Items.OfType<MenuItem>().First();
             Assert.Equal(Visibility.Collapsed, updateReadyItem.Visibility);
@@ -157,12 +155,12 @@ public sealed class HubNavigationAndLifecycleTests : IDisposable
                 Assert.True(firstWindow.ShellViewModel.PrimaryNavItems.Single(x => x.Page == HubPage.Pomodoro).IsSelected);
                 Assert.False(firstWindow.ShellViewModel.PrimaryNavItems.Single(x => x.Page == HubPage.Home).IsSelected);
 
-                // 최소화 상태에서 네트워크 안내 서브섹션으로 이동하면 자동 복원 및 Footer 사이드바 선택 동기화
+                // 최소화 상태에서 설정 페이지로 이동하면 자동 복원 및 Footer 사이드바 선택 동기화
                 firstWindow.WindowState = WindowState.Minimized;
                 await WpfTestHost.FlushAsync();
                 Assert.False(h.Navigation.IsHubVisibleAndNotMinimized);
 
-                Assert.True(await h.Navigation.NavigateAsync(new NavigationRequest(HubPage.Settings, SubSection: "Network")));
+                Assert.True(await h.Navigation.NavigateAsync(new NavigationRequest(HubPage.Settings)));
                 await WpfTestHost.FlushAsync();
 
                 Assert.Same(firstWindow, h.CurrentWindow);
@@ -536,7 +534,7 @@ public sealed class HubNavigationAndLifecycleTests : IDisposable
                     HubPage.Pomodoro => new PomodoroPageView(new SoloHubViewModel(pomodoro, analyzer, games), pomodoro, petVm),
                     HubPage.Games => new GamesPageView(games, petVm),
                     HubPage.Seasonal => new SeasonalPageView(new SeasonalPageViewModel(petVm, christmasTree)),
-                    HubPage.Settings => new SettingsPageView(new SettingsPageViewModel(petVm, social, store)),
+                    HubPage.Settings => new SettingsPageView(new SettingsPageViewModel(petVm, store)),
                     HubPage.About => new AboutPageView(new AboutPageViewModel(petVm, updateService, new UpdateSourceOptions())),
                     _ => throw new ArgumentOutOfRangeException(nameof(page))
                 },

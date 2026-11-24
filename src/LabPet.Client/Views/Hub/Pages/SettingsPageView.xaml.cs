@@ -1,5 +1,4 @@
 using System.Windows.Controls;
-using System.Windows.Threading;
 using LabPet.Client.Navigation;
 using LabPet.Client.ViewModels;
 
@@ -19,16 +18,9 @@ public partial class SettingsPageView : UserControl, IHubPageLifecycle, IDisposa
 
     public void OnActivated(NavigationRequest request)
     {
-        if (_disposed)
+        if (!_disposed)
         {
-            return;
-        }
-
-        _viewModel.Activate();
-
-        if (string.Equals(request.SubSection, "Network", StringComparison.OrdinalIgnoreCase))
-        {
-            Dispatcher.BeginInvoke(DispatcherPriority.Loaded, () => NetworkCard.BringIntoView());
+            _viewModel.Activate();
         }
     }
 

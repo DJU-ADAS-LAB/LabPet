@@ -109,7 +109,6 @@ public sealed partial class PetWindowViewModel : ObservableObject
     public ObservableCollection<QuickOverlayEntry> QuickOverlayEntries { get; } = [];
 
     [ObservableProperty] private string _petName = "모찌";
-    [ObservableProperty] private string _friendCode = string.Empty;
     [ObservableProperty] private bool _isSleeping;
     [ObservableProperty] private bool _isClickThroughEnabled;
     [ObservableProperty] private bool _isStartupAutoRunEnabled;
@@ -200,7 +199,6 @@ public sealed partial class PetWindowViewModel : ObservableObject
     {
         CurrentProfile = profile;
         PetName = profile.PetName;
-        FriendCode = profile.FriendCode;
 
         _suppressSliderSideEffects = true;
         try
@@ -450,19 +448,6 @@ public sealed partial class PetWindowViewModel : ObservableObject
     [RelayCommand]
     private void DismissUpdateBubble() => IsUpdateBubbleVisible = false;
 
-    [RelayCommand]
-    private async Task SetPetScaleAsync(string? scaleText)
-    {
-        if (!double.TryParse(scaleText, System.Globalization.CultureInfo.InvariantCulture, out var parsed))
-        {
-            return;
-        }
-
-        var clamped = PetProfile.NormalizePetScale(parsed);
-        await ApplyDisplaySettingsAsync(clamped, PetOpacity, persist: true);
-        ShowBubble($"펫 크기 {Math.Round(clamped * 100)}%", 1600);
-    }
-
     public async Task ApplyDisplaySettingsAsync(double scale, double opacity, bool persist = true)
     {
         var clampedScale = PetProfile.NormalizePetScale(scale);
@@ -671,10 +656,6 @@ public sealed partial class PetWindowViewModel : ObservableObject
     [RelayCommand]
     private void OpenHub()
         => HubNavigationRequested?.Invoke(this, new NavigationRequest(HubPage.Home));
-
-    [RelayCommand]
-    private void OpenEnvironmentGuide()
-        => HubNavigationRequested?.Invoke(this, new NavigationRequest(HubPage.Settings, SubSection: "Network"));
 
     [RelayCommand]
     private void OpenSettings()

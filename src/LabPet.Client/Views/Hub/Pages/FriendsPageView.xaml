@@ -225,7 +225,7 @@
                 <ScrollViewer VerticalScrollBarVisibility="Auto" CanContentScroll="False">
                     <StackPanel>
                         <Border CornerRadius="14"
-                                Height="164"
+                                Height="170"
                                 Margin="0,0,0,12"
                                 BorderBrush="#FF363E59"
                                 BorderThickness="1"
@@ -244,12 +244,14 @@
 
                             <Grid>
                                 <Viewport3D x:Name="FriendPreviewViewport"
+                                            Width="220"
+                                            HorizontalAlignment="Center"
                                             Visibility="{Binding HasSelectedFriend, Converter={StaticResource HubBoolToVis}}">
                                     <Viewport3D.Camera>
-                                        <PerspectiveCamera Position="0,0.34,6.45"
-                                                           LookDirection="0,-0.055,-1"
+                                        <PerspectiveCamera Position="0,0.34,8.6"
+                                                           LookDirection="0,-0.04,-1"
                                                            UpDirection="0,1,0"
-                                                           FieldOfView="38" />
+                                                           FieldOfView="36" />
                                     </Viewport3D.Camera>
                                     <ModelVisual3D x:Name="FriendPreviewLights" />
                                     <ModelVisual3D x:Name="FriendPreviewPet" />
