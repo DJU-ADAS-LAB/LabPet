@@ -358,6 +358,7 @@ public sealed class HubNavigationAndLifecycleTests : IDisposable
     {
         var storeDir = Path.Combine(_tempDir, "state-store");
         var stateStore = new HubWindowStateStore(storeDir);
+        var virtualScreen = new Rect(0, 0, 1920, 1080);
 
         stateStore.Save(new HubWindowState
         {
@@ -367,7 +368,7 @@ public sealed class HubNavigationAndLifecycleTests : IDisposable
             Height = 780,
             IsMaximized = false,
             IsSidebarCollapsed = true
-        });
+        }, virtualScreen);
         stateStore.Save(new HubWindowState
         {
             Left = 180,
@@ -376,14 +377,14 @@ public sealed class HubNavigationAndLifecycleTests : IDisposable
             Height = 740,
             IsMaximized = true,
             IsSidebarCollapsed = false
-        });
+        }, virtualScreen);
 
         Assert.True(File.Exists(stateStore.FilePath));
         Assert.True(File.Exists(stateStore.FilePath + ".bak"));
 
         // 본 파일 손상 시 .bak에서 직전 정상 상태 복구
         File.WriteAllText(stateStore.FilePath, "{corrupt-json");
-        var recovered = stateStore.Load(new Rect(0, 0, 1920, 1080));
+        var recovered = stateStore.Load(virtualScreen);
         Assert.Equal(1220, recovered.Width);
         Assert.Equal(780, recovered.Height);
         Assert.True(recovered.IsSidebarCollapsed);
@@ -395,7 +396,7 @@ public sealed class HubNavigationAndLifecycleTests : IDisposable
             Top = -400,
             Width = 300,
             Height = 200
-        }.Normalize(new Rect(0, 0, 1920, 1080));
+        }.Normalize(virtualScreen);
 
         Assert.Equal(HubWindowState.DefaultWidth, outOfBounds.Width);
         Assert.Equal(HubWindowState.DefaultHeight, outOfBounds.Height);

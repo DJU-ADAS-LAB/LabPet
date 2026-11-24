@@ -9,6 +9,7 @@ using LabPet.Client.Network;
 using LabPet.Client.Storage;
 using LabPet.Server;
 using LabPet.Server.Options;
+using LabPet.Server.Storage;
 using LabPet.Shared.Models;
 using LabPet.Shared.Protocol;
 using LabPet.Shared.Transport;
@@ -504,7 +505,7 @@ public sealed class GcpServerAndHybridTests : IAsyncLifetime
             // 짝끼리 친구 등록 후 동시 다발 E2EE 메시지 중계 (6쌍 x 5건 = 30건)
             var receivedTotal = 0;
             var relayTasks = new List<Task<bool>>();
-            var friendPairs = new List<(GcpSignalRTransport Sender, FriendEntry TargetFriend)>();
+            var friendPairs = new List<(string SenderPetId, GcpSignalRTransport Sender, FriendEntry TargetFriend)>();
             for (var i = 0; i < clientCount; i += 2)
             {
                 var secret = PacketSigner.GeneratePairSecretBase64();
@@ -516,14 +517,20 @@ public sealed class GcpServerAndHybridTests : IAsyncLifetime
                 b.Transport.BubbleMessageReceived += (_, _) => Interlocked.Increment(ref receivedTotal);
                 a.Transport.UpdateKnownFriends([fb]);
                 b.Transport.UpdateKnownFriends([fa]);
-                friendPairs.Add((a.Transport, fb));
+                friendPairs.Add((a.Profile.PetId, a.Transport, fb));
             }
 
             await WaitUntilAsync(
                 () => clients.Where((_, idx) => idx % 2 == 0).All(c => c.Transport.GetDiscoveredPeers().Count(p => p.IsFriend) == 1),
                 TimeSpan.FromSeconds(5));
 
-            foreach (var (sender, targetFriend) in friendPairs)
+            // 로컬 친구 목록이 갱신된 뒤에도 서버의 양방향 친구 동기화는 진행 중일 수 있다.
+            var registry = _server!.Services.GetRequiredService<IdentityRegistryStore>();
+            await WaitUntilAsync(
+                () => friendPairs.All(pair => registry.AreMutualFriends(pair.SenderPetId, pair.TargetFriend.PetId)),
+                TimeSpan.FromSeconds(5));
+
+            foreach (var (_, sender, targetFriend) in friendPairs)
             {
                 for (var m = 0; m < 5; m++)
                 {

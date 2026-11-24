@@ -103,9 +103,12 @@ public sealed class HubWindowStateStore
     }
 
     public void Save(HubWindowState state)
+        => Save(state, null);
+
+    internal void Save(HubWindowState state, Rect? virtualScreenBounds)
     {
         ArgumentNullException.ThrowIfNull(state);
-        var normalized = state.Normalize();
+        var normalized = state.Normalize(virtualScreenBounds);
 
         lock (_ioLock)
         {
