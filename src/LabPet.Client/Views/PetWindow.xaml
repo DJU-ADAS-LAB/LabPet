@@ -471,7 +471,7 @@
                                                            TextTrimming="CharacterEllipsis" />
                                             </Grid>
 
-                                            <!-- 메시지 / 쓰다듬기 / 노래 따라하기 / 데려오기 -->
+                                            <!-- 메시지 / 인사하기 / 노래 따라하기 / 데려오기 -->
                                             <StackPanel Grid.Column="1"
                                                         Orientation="Horizontal"
                                                         VerticalAlignment="Center">
@@ -482,7 +482,7 @@
                                                         CommandParameter="{Binding}"
                                                         Margin="0,0,3,0" />
                                                 <Button Content="👋"
-                                                        ToolTip="쓰다듬기"
+                                                        ToolTip="인사하기"
                                                         Style="{StaticResource MiniActionIconButton}"
                                                         Command="{Binding DataContext.QuickPetFriendCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
                                                         CommandParameter="{Binding}"

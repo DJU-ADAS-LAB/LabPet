@@ -636,7 +636,7 @@ public sealed class SocialCoordinatorService : IAsyncDisposable
         var ok = await _transport.SendBubbleMessageAsync(FindFriend(friend.PetId) ?? friend, text).ConfigureAwait(false);
         if (ok)
         {
-            await RewardSocialBonusAsync(friend.PetId, coins: 2).ConfigureAwait(false);
+            await RewardSocialBonusAsync(friend.PetId, SocialRewardKind.FriendMessage).ConfigureAwait(false);
         }
 
         return ok;
@@ -647,7 +647,7 @@ public sealed class SocialCoordinatorService : IAsyncDisposable
         var ok = await _transport.SendQuickReactionAsync(FindFriend(friend.PetId) ?? friend, reactionId).ConfigureAwait(false);
         if (ok)
         {
-            await RewardSocialBonusAsync(friend.PetId, coins: 1).ConfigureAwait(false);
+            await RewardSocialBonusAsync(friend.PetId, SocialRewardKind.QuickReaction).ConfigureAwait(false);
         }
 
         return ok;
@@ -674,9 +674,9 @@ public sealed class SocialCoordinatorService : IAsyncDisposable
             return PetInteractionSendResult.Unavailable;
         }
 
-        await RewardSocialBonusAsync(target.PetId, coins: 2).ConfigureAwait(false);
+        await RewardSocialBonusAsync(target.PetId, SocialRewardKind.FriendGreeting).ConfigureAwait(false);
         var name = FormatDisplayName(target.OwnerName, target.PetName);
-        FriendStatusNotification?.Invoke(this, new FriendStatusNotice(target.PetId, $"{name}을(를) 쓰다듬어 주었습니다.", 2000, AnimateHost: false));
+        FriendStatusNotification?.Invoke(this, new FriendStatusNotice(target.PetId, $"{name}에게 인사했습니다.", 2000, AnimateHost: false));
         return PetInteractionSendResult.Sent;
     }
 
@@ -885,7 +885,7 @@ public sealed class SocialCoordinatorService : IAsyncDisposable
     {
         try
         {
-            var name = await RewardSocialBonusAsync(e.SenderPetId, coins: 2).ConfigureAwait(false);
+            var name = await RewardSocialBonusAsync(e.SenderPetId, SocialRewardKind.FriendMessage).ConfigureAwait(false);
             var peer = DiscoveredPeers.FirstOrDefault(peer =>
                 string.Equals(peer.PetId, e.SenderPetId, StringComparison.OrdinalIgnoreCase));
             var appearance = peer?.Appearance?.Clone() ?? FindFriend(e.SenderPetId)?.CachedAppearance ?? new PetAppearance();
@@ -901,16 +901,16 @@ public sealed class SocialCoordinatorService : IAsyncDisposable
 
     private async void OnQuickReactionReceived(object? sender, QuickReactionReceivedEventArgs e)
     {
-        var name = await RewardSocialBonusAsync(e.SenderPetId, coins: 1).ConfigureAwait(false);
+        var name = await RewardSocialBonusAsync(e.SenderPetId, SocialRewardKind.QuickReaction).ConfigureAwait(false);
 
         FriendStatusNotification?.Invoke(this, new FriendStatusNotice(e.SenderPetId, $"{name}의 반응: {e.ReactionId}", 2600));
     }
 
     private async void OnPetInteractionReceived(object? sender, PetInteractionReceivedEventArgs e)
     {
-        var name = await RewardSocialBonusAsync(e.SenderPetId, coins: 2).ConfigureAwait(false);
+        var name = await RewardSocialBonusAsync(e.SenderPetId, SocialRewardKind.FriendGreeting).ConfigureAwait(false);
 
-        FriendStatusNotification?.Invoke(this, new FriendStatusNotice(e.SenderPetId, $"{name}(이)가 쓰다듬어 줬어요!", 2600));
+        FriendStatusNotification?.Invoke(this, new FriendStatusNotice(e.SenderPetId, $"{name}(이)가 인사했어요!", 2600));
     }
 
     private void OnMusicFrameReceived(object? sender, MusicFrameReceivedEventArgs e)
@@ -978,7 +978,7 @@ public sealed class SocialCoordinatorService : IAsyncDisposable
         return true;
     }
 
-    private async Task<string> RewardSocialBonusAsync(string petId, long coins)
+    private async Task<string> RewardSocialBonusAsync(string petId, SocialRewardKind rewardKind)
     {
         string name;
         PetProfile profile;
@@ -992,13 +992,22 @@ public sealed class SocialCoordinatorService : IAsyncDisposable
 
             lock (friend)
             {
-                friend.Intimacy++;
+                if (friend.Intimacy < FriendEntry.MaxIntimacy)
+                {
+                    friend.Intimacy = FriendEntry.NormalizeIntimacy(friend.Intimacy + 1);
+                }
+                else
+                {
+                    friend.Intimacy = FriendEntry.MaxIntimacy;
+                }
+
                 name = FormatDisplayName(friend.OwnerName, friend.PetName);
             }
 
             profile = _localProfile;
-            _progression.GrantRewards(profile, xp: 3, coins: coins);
         }
+
+        _progression.Economy.TryGrantSocialCoinReward(profile, petId, rewardKind);
 
         await SaveSocialStateAsync(profile).ConfigureAwait(false);
         StateChanged?.Invoke(this, EventArgs.Empty);

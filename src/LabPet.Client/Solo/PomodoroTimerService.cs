@@ -34,6 +34,12 @@ public sealed class PomodoroTimerService
         _timer.Tick += OnTimerTick;
     }
 
+    private int _activeSessionFocusMinutes = 25;
+
+    public int LastCompletedFocusMinutes { get; private set; } = 25;
+
+    public event EventHandler<int>? FocusCompletedWithDuration;
+
     public void ConfigureDurations(int focusMinutes, int breakMinutes = 5)
     {
         FocusMinutes = Math.Clamp(focusMinutes, 1, 120);
@@ -41,6 +47,7 @@ public sealed class PomodoroTimerService
         if (!IsRunning)
         {
             CurrentPhase = PomodoroPhase.Focus;
+            _activeSessionFocusMinutes = FocusMinutes;
             Remaining = TimeSpan.FromMinutes(FocusMinutes);
             Tick?.Invoke(this, EventArgs.Empty);
         }
@@ -54,6 +61,10 @@ public sealed class PomodoroTimerService
         }
         else
         {
+            if (CurrentPhase == PomodoroPhase.Focus && Remaining >= TimeSpan.FromMinutes(FocusMinutes))
+            {
+                _activeSessionFocusMinutes = FocusMinutes;
+            }
             _timer.Start();
         }
 
@@ -64,6 +75,7 @@ public sealed class PomodoroTimerService
     {
         _timer.Stop();
         CurrentPhase = PomodoroPhase.Focus;
+        _activeSessionFocusMinutes = FocusMinutes;
         Remaining = TimeSpan.FromMinutes(FocusMinutes);
         Tick?.Invoke(this, EventArgs.Empty);
     }
@@ -80,13 +92,17 @@ public sealed class PomodoroTimerService
         _timer.Stop();
         if (CurrentPhase == PomodoroPhase.Focus)
         {
+            var completedFocusMinutes = Math.Clamp(_activeSessionFocusMinutes, 1, 120);
+            LastCompletedFocusMinutes = completedFocusMinutes;
             CurrentPhase = PomodoroPhase.Break;
             Remaining = TimeSpan.FromMinutes(BreakMinutes);
+            FocusCompletedWithDuration?.Invoke(this, completedFocusMinutes);
             FocusCompleted?.Invoke(this, EventArgs.Empty);
         }
         else
         {
             CurrentPhase = PomodoroPhase.Focus;
+            _activeSessionFocusMinutes = FocusMinutes;
             Remaining = TimeSpan.FromMinutes(FocusMinutes);
             BreakCompleted?.Invoke(this, EventArgs.Empty);
         }

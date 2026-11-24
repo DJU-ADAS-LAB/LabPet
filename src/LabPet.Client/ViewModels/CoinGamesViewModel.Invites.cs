@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.IO;
 using System.Text.Json;
 using LabPet.Client.Games;
+using LabPet.Client.Solo;
 using LabPet.Shared.Models;
 using LabPet.Shared.Protocol;
 
@@ -175,10 +176,13 @@ public sealed partial class CoinGamesViewModel
                     GameInviteStatus.Sending when exchange.TransportAcknowledged => "unregistered",
                     GameInviteStatus.Sending => IsOnlineInviteTarget(exchange.Friend.PetId) ? "delivery" : "offline",
                     GameInviteStatus.Accepting or GameInviteStatus.Ready or GameInviteStatus.Starting => "connection",
+                    _ when !exchange.Outgoing && exchange.Wager > 0 && !PetEconomyService.CanAfford(_profile, exchange.Wager) => "coins",
                     _ => "expired"
                 };
-                await EndInviteAsync(exchange, reason == "expired" ? GameInviteStatus.Expired : GameInviteStatus.Failed,
-                    reason, exchange.Outgoing ? Cancel : Decline);
+                var expireStatus = !exchange.Outgoing || reason == "expired"
+                    ? GameInviteStatus.Expired
+                    : GameInviteStatus.Failed;
+                await EndInviteAsync(exchange, expireStatus, reason, exchange.Outgoing ? Cancel : Decline);
                 return;
             }
 
@@ -296,11 +300,12 @@ public sealed partial class CoinGamesViewModel
         exchange.Status = status;
         exchange.Reason = reason;
         exchange.TerminalPacket = terminalPacket;
-        var message = (reason, terminalPacket) switch
+        var message = (status, reason, terminalPacket) switch
         {
-            ("declined", Decline) => "게임 초대를 거절했습니다.",
-            ("canceled", Cancel) => "게임 초대를 취소했습니다.",
-            ("coins", null) => "상대의 참가 코인이 부족합니다.",
+            (GameInviteStatus.Declined, _, Decline) => "게임 초대를 거절했습니다.",
+            (GameInviteStatus.Expired, _, Decline) => "초대 시간이 만료되었습니다.",
+            (_, "canceled", Cancel) => "게임 초대를 취소했습니다.",
+            (_, "coins", null) => "상대의 참가 코인이 부족합니다.",
             _ => DescribeInviteReason(reason)
         };
         if (terminalPacket is not null)
@@ -347,6 +352,7 @@ public sealed partial class CoinGamesViewModel
     {
         if (exchange.Game == RpsGameEngine.GameTypeId && IsRpsWaitingResponse && _rpsSessionId == exchange.Session)
         {
+            CancelOutgoingWaitCountdown();
             _rpsSessionId = null;
             _rpsOpponent = null;
             IsRpsWaitingResponse = false;
@@ -355,6 +361,7 @@ public sealed partial class CoinGamesViewModel
         }
         else if (exchange.Game == TypingSprintEngine.GameTypeId && IsTypingWaitingResponse && _typingSessionId == exchange.Session)
         {
+            CancelOutgoingWaitCountdown();
             _typingSessionId = null;
             _typingOpponent = null;
             IsTypingWaitingResponse = false;
@@ -362,19 +369,9 @@ public sealed partial class CoinGamesViewModel
             TypingStatusText = message;
         }
         else if (exchange.Game == LabLadderEngine.GameTypeId && IsLadderHost && _ladderRoom?.SessionId == exchange.Session
-            && _ladderPendingInviteeIds.Remove(exchange.Friend.PetId))
+            && _ladderPendingInviteeIds.Contains(exchange.Friend.PetId))
         {
-            _ladderPendingInvitees.Remove(exchange.Friend.PetId);
-            _ladderRoom.PendingInviteCount = _ladderPendingInviteeIds.Count;
-            if (_ladderRoom.Members.Count + _ladderRoom.PendingInviteCount < LabLadderEngine.MinParticipants)
-            {
-                await AbortLadderRoomAsHostAsync(message);
-                return;
-            }
-            RecalculateHostSlotCountAndPrizes();
-            RefreshLadderLobbyUi();
-            LadderStatusText = $"{_social.GetFriendDisplayName(exchange.Friend.PetId)} · {message}";
-            await BroadcastLadderStateOrAbortAsync();
+            await HandleLadderPendingInviteEndedAsync(exchange.Friend.PetId, exchange.Status, exchange.Reason ?? string.Empty, message);
         }
     }
 
@@ -448,7 +445,7 @@ public sealed partial class CoinGamesViewModel
                 return true;
             }
 
-            await HandleLiveInvitePacketAsync(exchange, name, packet.Action);
+            await HandleLiveInvitePacketAsync(exchange, name, packet.Action, packet.InviteReason);
             return true;
         }
         finally
@@ -482,7 +479,6 @@ public sealed partial class CoinGamesViewModel
         var rejection = !valid || deadline > now.AddSeconds(InviteWaitTimeoutSeconds + 5) ? "invalid"
             : deadline <= now ? "expired"
             : IsAnyGameBusy || HasIncomingInvite ? "busy"
-            : packet.WagerCoins > _profile.SoloProgress.Coins ? "coins"
             : null;
 
         PruneInviteExchanges();
@@ -499,6 +495,12 @@ public sealed partial class CoinGamesViewModel
             return;
         }
 
+        // 코인이 부족해도 초대를 즉시 거절하지 않고 UI에 표시하며, 상대에게는 코인 부족 사유만 전달한다.
+        if (packet.WagerCoins > 0 && !PetEconomyService.CanAfford(_profile, packet.WagerCoins))
+        {
+            exchange.Reason = "coins";
+        }
+
         exchange.Status = GameInviteStatus.Pending;
         _inviteExchanges[key] = exchange;
         var appearance = ResolveFriendAppearance(friend.PetId, friend);
@@ -511,10 +513,31 @@ public sealed partial class CoinGamesViewModel
         IncomingInviteProgressRatio = 1;
         IncomingInviteStatus = GameInviteStatus.Pending;
         IncomingInvite = invite;
+        OnEconomyCoinsUpdated();
         StartIncomingInviteCountdown(invite);
         _ = WatchInviteAsync(exchange, _inviteToken);
         _ = SendInvitePacketAsync(exchange, Registered);
     }
+
+    private void UpdateOutgoingWaitUiFromAck(InviteExchange exchange, string responseStatus, string detail, bool coinsShort)
+    {
+        if (exchange.Game == RpsGameEngine.GameTypeId && _rpsSessionId == exchange.Session)
+        {
+            RpsWaitState.OpponentResponseStatusText = responseStatus;
+            RpsWaitState.StatusDetailText = detail;
+        }
+        else if (exchange.Game == TypingSprintEngine.GameTypeId && _typingSessionId == exchange.Session)
+        {
+            TypingWaitState.OpponentResponseStatusText = responseStatus;
+            TypingWaitState.StatusDetailText = detail;
+        }
+        else if (exchange.Game == LabLadderEngine.GameTypeId && _ladderRoom?.SessionId == exchange.Session)
+        {
+            OnLadderInviteeRegisteredAck(exchange.Friend.PetId, coinsShort);
+        }
+    }
+
+    partial void OnLadderInviteeRegisteredAck(string friendPetId, bool coinsShort);
 
     private static LadderRoomStateDto? ReadLadderOffer(GameEventPayload packet, string sender)
         => packet.GameType == LabLadderEngine.GameTypeId
@@ -522,7 +545,7 @@ public sealed partial class CoinGamesViewModel
            && room.Phase == LadderRoomPhase.WaitingInvites
            && LabLadderEngine.IsValidRoom(room, packet.SessionId, sender, packet.WagerCoins) ? room : null;
 
-    private async Task HandleLiveInvitePacketAsync(InviteExchange exchange, string name, string action)
+    private async Task HandleLiveInvitePacketAsync(InviteExchange exchange, string name, string action, string? inviteReason)
     {
         if (exchange.Outgoing)
         {
@@ -535,10 +558,16 @@ public sealed partial class CoinGamesViewModel
             if (action == Registered && exchange.Status == GameInviteStatus.Sending)
             {
                 exchange.Status = GameInviteStatus.Pending;
-                SetInviteMessage(exchange.Game, $"{name}에게 초대가 표시되었습니다. 수락을 기다리는 중입니다.");
+                var coinsShort = string.Equals(inviteReason, "coins", StringComparison.OrdinalIgnoreCase);
+                var waitMessage = coinsShort
+                    ? $"{name}에게 초대가 표시되었으나 현재 참가 코인이 부족합니다."
+                    : $"{name}에게 초대가 표시되었습니다. 수락을 기다리는 중입니다.";
+                SetInviteMessage(exchange.Game, waitMessage);
+                UpdateOutgoingWaitUiFromAck(exchange, coinsShort ? "코인 부족 (대기 중)" : "수락 대기 중", waitMessage, coinsShort);
             }
             else if (action == Accept && exchange.Status is GameInviteStatus.Sending or GameInviteStatus.Pending or GameInviteStatus.Ready)
             {
+                UpdateOutgoingWaitUiFromAck(exchange, "수락 · 시작 확인 중", $"{name}와 게임 시작을 확인하는 중입니다.", false);
                 if (exchange.Status != GameInviteStatus.Ready)
                 {
                     var failure = await ReserveInviteCoinsAsync(exchange, alreadyPaid: exchange.Game == LabLadderEngine.GameTypeId);
@@ -560,6 +589,7 @@ public sealed partial class CoinGamesViewModel
             }
             else if (action == Begun && exchange.Status == GameInviteStatus.Starting)
             {
+                CancelOutgoingWaitCountdown();
                 exchange.Status = GameInviteStatus.Accepted;
                 exchange.ReservedCoins = 0;
                 if (exchange.Game == LabLadderEngine.GameTypeId)
@@ -628,6 +658,7 @@ public sealed partial class CoinGamesViewModel
                 _ladderInitialPrizes.Clear();
                 _ladderInitialPrizes.AddRange(room.Prizes);
                 _ladderRoom = room;
+                LadderBoardPrizesSummaryText = $"공개 상품: {LabLadderEngine.FormatPrizeSummary(room.Prizes)}";
                 IsLadderHost = false;
                 IsLadderRoomOpen = true;
                 IsLadderMultiplayerMode = true;

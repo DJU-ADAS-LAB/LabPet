@@ -473,7 +473,7 @@ public sealed partial class PetWindowViewModel : ObservableObject
 
         if (await _social.SendPetInteractionAsync(friend) == PetInteractionSendResult.Unavailable)
         {
-            ShowBubble("쓰다듬기 전송 실패", 2000);
+            ShowBubble("인사하기 전송 실패", 2000);
         }
     }
 

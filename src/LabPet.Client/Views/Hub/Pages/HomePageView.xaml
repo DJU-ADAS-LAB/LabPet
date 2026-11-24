@@ -57,12 +57,12 @@
                         </StackPanel>
 
                         <DockPanel LastChildFill="False" Margin="0,0,0,5">
-                            <TextBlock Text="레벨 경험치" FontSize="11.5" FontWeight="SemiBold" Foreground="{StaticResource HubTextSecondaryBrush}" />
-                            <TextBlock DockPanel.Dock="Right" Text="{Binding XpProgressText}" FontSize="11.5" FontWeight="Bold" Foreground="{StaticResource HubTextPrimaryBrush}" />
+                            <TextBlock Text="{Binding LevelUpTargetLabel}" FontSize="11.5" FontWeight="SemiBold" Foreground="{StaticResource HubTextSecondaryBrush}" />
+                            <TextBlock DockPanel.Dock="Right" Text="{Binding LevelUpProgressText}" FontSize="11.5" FontWeight="Bold" Foreground="{StaticResource HubTextPrimaryBrush}" />
                         </DockPanel>
                         <ProgressBar Height="8"
                                      Maximum="100"
-                                     Value="{Binding XpPercent}"
+                                     Value="{Binding LevelUpAffordProgressPercent, Mode=OneWay}"
                                      Foreground="{StaticResource HubAccentBrush}"
                                      Background="{StaticResource HubSubtleFillBrush}" />
                     </StackPanel>
@@ -95,6 +95,7 @@
                     <StackPanel>
                         <TextBlock Text="보유 코인" FontSize="12" Foreground="{StaticResource HubTextSecondaryBrush}" />
                         <TextBlock Text="{Binding CoinsText}"
+                                   ToolTip="{Binding CoinsExactTooltip}"
                                    FontSize="20"
                                    FontWeight="Bold"
                                    Foreground="{StaticResource GameCoinBrush}"
@@ -160,7 +161,7 @@
                     <DockPanel Margin="0,0,0,14" LastChildFill="False">
                         <StackPanel DockPanel.Dock="Left">
                             <TextBlock Text="누적 활동 및 성장 기록" Style="{StaticResource HubSectionTitleStyle}" />
-                            <TextBlock Text="PC 입력과 함께한 시간에 따라 경험치와 코인이 자동으로 쌓입니다." Style="{StaticResource HubCaptionTextStyle}" Margin="0,2,0,0" />
+                            <TextBlock Text="PC 입력과 함께한 시간에 따라 코인이 자동으로 쌓입니다." Style="{StaticResource HubCaptionTextStyle}" Margin="0,2,0,0" />
                         </StackPanel>
                         <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center">
                             <Button Content="친구 목록 보기"
@@ -174,28 +175,28 @@
                     </DockPanel>
 
                     <UniformGrid Columns="4">
-                        <Border Style="{StaticResource HubSubtlePanelStyle}" Margin="0,0,6,0">
+                        <Border Style="{StaticResource HubSubtlePanelStyle}" Margin="0,0,6,0" ToolTip="{Binding TotalKeystrokesTooltip}">
                             <StackPanel>
                                 <TextBlock Text="키보드 입력" FontSize="11.5" Foreground="{StaticResource HubTextSecondaryBrush}" />
-                                <TextBlock Text="{Binding TotalKeystrokes}" FontSize="20" FontWeight="Bold" Foreground="{StaticResource HubTextPrimaryBrush}" Margin="0,4,0,0" />
+                                <TextBlock Text="{Binding TotalKeystrokesText}" FontSize="20" FontWeight="Bold" Foreground="{StaticResource HubTextPrimaryBrush}" Margin="0,4,0,0" />
                             </StackPanel>
                         </Border>
-                        <Border Style="{StaticResource HubSubtlePanelStyle}" Margin="6,0">
+                        <Border Style="{StaticResource HubSubtlePanelStyle}" Margin="6,0" ToolTip="{Binding TotalMouseClicksTooltip}">
                             <StackPanel>
                                 <TextBlock Text="마우스 클릭" FontSize="11.5" Foreground="{StaticResource HubTextSecondaryBrush}" />
-                                <TextBlock Text="{Binding TotalMouseClicks}" FontSize="20" FontWeight="Bold" Foreground="{StaticResource HubTextPrimaryBrush}" Margin="0,4,0,0" />
+                                <TextBlock Text="{Binding TotalMouseClicksText}" FontSize="20" FontWeight="Bold" Foreground="{StaticResource HubTextPrimaryBrush}" Margin="0,4,0,0" />
                             </StackPanel>
                         </Border>
-                        <Border Style="{StaticResource HubSubtlePanelStyle}" Margin="6,0">
+                        <Border Style="{StaticResource HubSubtlePanelStyle}" Margin="6,0" ToolTip="{Binding TotalUptimeTooltip}">
                             <StackPanel>
-                                <TextBlock Text="함께한 시간(분)" FontSize="11.5" Foreground="{StaticResource HubTextSecondaryBrush}" />
-                                <TextBlock Text="{Binding TotalUptimeMinutes}" FontSize="20" FontWeight="Bold" Foreground="{StaticResource HubTextPrimaryBrush}" Margin="0,4,0,0" />
+                                <TextBlock Text="함께한 시간" FontSize="11.5" Foreground="{StaticResource HubTextSecondaryBrush}" />
+                                <TextBlock Text="{Binding TotalUptimeText}" FontSize="20" FontWeight="Bold" Foreground="{StaticResource HubTextPrimaryBrush}" Margin="0,4,0,0" />
                             </StackPanel>
                         </Border>
-                        <Border Style="{StaticResource HubSubtlePanelStyle}" Margin="6,0,0,0">
+                        <Border Style="{StaticResource HubSubtlePanelStyle}" Margin="6,0,0,0" ToolTip="{Binding CompletedPomodorosTooltip}">
                             <StackPanel>
                                 <TextBlock Text="완료 뽀모도로" FontSize="11.5" Foreground="{StaticResource HubTextSecondaryBrush}" />
-                                <TextBlock Text="{Binding CompletedPomodoros}" FontSize="20" FontWeight="Bold" Foreground="{StaticResource HubTextPrimaryBrush}" Margin="0,4,0,0" />
+                                <TextBlock Text="{Binding CompletedPomodorosText}" FontSize="20" FontWeight="Bold" Foreground="{StaticResource HubTextPrimaryBrush}" Margin="0,4,0,0" />
                             </StackPanel>
                         </Border>
                     </UniformGrid>

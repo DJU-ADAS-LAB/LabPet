@@ -62,7 +62,18 @@ public sealed partial class CoinGamesViewModel
         TypingOpponentPortrait = TryGetPortrait(ResolveFriendAppearance(target.Friend.PetId, target.Friend));
         TypingStatusText = $"{target.DisplayName}에게 초대를 보내는 중입니다.";
 
-        await SendTrackedOfferAsync(target.Friend, TypingSprintEngine.GameTypeId, sessionId, _typingActiveWager, NewInviteDeadline());
+        var deadline = NewInviteDeadline();
+        StartOutgoingWaitCountdown(
+            TypingWaitState,
+            "타이핑 대결",
+            _typingActiveWager,
+            target.DisplayName,
+            TypingOpponentPortrait,
+            $"{target.DisplayName}에게 초대를 보내는 중입니다.",
+            sessionId,
+            deadline);
+
+        await SendTrackedOfferAsync(target.Friend, TypingSprintEngine.GameTypeId, sessionId, _typingActiveWager, deadline);
     }
 
     private void CancelTypingCountdown()

@@ -101,7 +101,7 @@ public sealed class SocialCoordinatorTests : IAsyncLifetime
         Assert.True(await _guestTransport.SendPetInteractionAsync(_hostAsFriend, "pet"));
         var notice = await noticeReceived.Task.WaitAsync(TimeSpan.FromSeconds(5));
         Assert.Equal(friend.PetId, notice.FriendPetId);
-        Assert.Contains("쓰다듬어 줬어요!", notice.Text);
+        Assert.Contains("인사했어요!", notice.Text);
     }
 
     [Fact]
@@ -442,6 +442,7 @@ public sealed class SocialCoordinatorTests : IAsyncLifetime
         var guestGames = new CoinGamesViewModel(guestStore, new SoloProgressionService(), guestSocial);
         hostGames.BindProfile(hostProfile);
         guestGames.BindProfile(guestProfile);
+        hostGames.LadderFriendPicker.SelectAllCommand.Execute(null);
 
         return new LadderPairHarness
         {
@@ -459,7 +460,7 @@ public sealed class SocialCoordinatorTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task LadderSolo_FreeAndPaid_HideResultsUntilArrivalAndSettleOnce()
+    public async Task LadderSolo_FourSlots_HideResultsUntilArrivalAndSettleOnce()
     {
         var soloStore = new JsonAppDataStore(new StateMigrator(), Path.Combine(_dataDirectory, "solo"));
         var soloProfile = new PetProfile { OwnerName = "솔로", PetName = "모찌", SoloProgress = { Coins = 100 } };
@@ -470,42 +471,33 @@ public sealed class SocialCoordinatorTests : IAsyncLifetime
         var reactions = new List<bool>();
         games.PetEmotionTriggered += (_, won) => reactions.Add(won);
 
-        // 무료(0코인) 솔로 사다리: 도착 전 숨김, 완료 후 코인 변동 없음
-        games.LadderParticipantsText = "나, 친구";
-        games.LadderPrizesText = "커피 x1, 통과 x1";
-        games.LadderEntryFee = 0;
-        await games.RunLadderCommand.ExecuteAsync(null);
+        // 시작 전 슬롯 미선택 시 시작 불가, 보상 비율 변경 불가
+        Assert.False(games.CanStartSoloLadder);
+        games.SelectSoloLadderSlotCommand.Execute(2);
+        games.SoloLadderBetCoins = 30;
+        Assert.True(games.CanStartSoloLadder);
+        await games.StartSoloLadderCommand.ExecuteAsync(null);
 
-        Assert.True(games.IsLadderAnimating);
-        Assert.All(games.LadderResultLines, line => Assert.EndsWith("→  ?", line));
-        Assert.Contains("커피 ×1, 통과 ×1", games.LadderBoardPrizesSummaryText);
-        Assert.DoesNotContain("커피", games.LadderStatusText);
-        Assert.Equal(100, soloProfile.SoloProgress.Coins);
-
-        Assert.True(games.RevealLadderParticipantResult(0));
-        Assert.DoesNotContain("→  ?", games.LadderResultLines[0]);
-        Assert.EndsWith("→  ?", games.LadderResultLines[1]);
-
-        await games.CompleteLadderRevealAsync();
-        Assert.False(games.IsLadderAnimating);
-        Assert.Equal(100, soloProfile.SoloProgress.Coins);
-        Assert.Empty(reactions);
-
-        // 유료(30코인) 솔로 잭팟: 시작 시 30코인 차감(70), 도착 전 지급 없음, 완료 시 잭팟 결과에 따라 1회 정산
-        games.LadderPrizesText = "💰 잭팟! x1, 꽝 x1";
-        games.LadderEntryFee = 30;
-        await games.RunLadderCommand.ExecuteAsync(null);
+        Assert.True(games.IsSoloLadderRunning);
+        Assert.Equal(SoloLadderPhase.Running, games.SoloLadderPhase);
         Assert.Equal(70, soloProfile.SoloProgress.Coins);
-        Assert.All(games.LadderResultLines, line => Assert.EndsWith("→  ?", line));
+        Assert.NotNull(soloProfile.SoloProgress.PendingSoloLadderSession);
+        Assert.All(games.SoloLadderRevealedSlotLabels, lbl => Assert.Equal("?", lbl));
 
-        var board = Assert.IsType<LadderBoard>(games.ActiveLadderBoard);
-        var myWon = LabLadderEngine.IsJackpot(LabLadderEngine.TracePath(board, 0).Prize);
-        await games.CompleteLadderRevealAsync();
-        await games.CompleteLadderRevealAsync();
+        var session = Assert.IsType<SoloLadderPersistedSession>(games.ActiveSoloLadderSession);
+        var (endSlot, _) = SoloLadderEngine.TraceSinglePath(session.Bridges, session.SelectedSlot);
+        var expectedPayout = SoloLadderEngine.CalculatePayout(session.BetCoins, session.SlotMultipliersPercent[endSlot]);
 
-        var expectedCoins = myWon ? 70 + 30 * 2 : 70;
-        Assert.Equal(expectedCoins, soloProfile.SoloProgress.Coins);
-        Assert.Equal(myWon, Assert.Single(reactions));
+        // 중복 완료 호출 시에도 1회만 정산되고 PendingSoloLadderSession은 제거된다
+        await games.CompleteSoloLadderTraceAsync();
+        await games.CompleteSoloLadderTraceAsync();
+
+        Assert.False(games.IsSoloLadderRunning);
+        Assert.Equal(SoloLadderPhase.Result, games.SoloLadderPhase);
+        Assert.Equal(70 + expectedPayout, soloProfile.SoloProgress.Coins);
+        Assert.Null(soloProfile.SoloProgress.PendingSoloLadderSession);
+        Assert.Single(reactions);
+        Assert.DoesNotContain("?", games.SoloLadderRevealedSlotLabels);
     }
 
     private static Task WaitUntilPropertyAsync(CoinGamesViewModel vm, string propertyName, Func<bool> condition)
@@ -660,7 +652,6 @@ public sealed class SocialCoordinatorTests : IAsyncLifetime
         await Task.WhenAll(allReceived.Task, friendAccepted.Task).WaitAsync(TimeSpan.FromSeconds(15));
 
         var guestIntimacy = 1 + 2 * messagesPerDirection;
-        var totalMessages = 2 * messagesPerDirection + 1;
         Assert.Single(beforeList);
         Assert.Equal(1, before.Intimacy);
         Assert.Collection(_host.Friends,
@@ -674,8 +665,9 @@ public sealed class SocialCoordinatorTests : IAsyncLifetime
                 Assert.Equal(2, friend.Intimacy);
             });
         var savedProfile = await _store.LoadProfileAsync();
-        Assert.Equal(totalMessages * 2, savedProfile.SoloProgress.Coins);
-        Assert.Equal(totalMessages * 3, savedProfile.SoloProgress.Xp);
+        // 메시지 보상 1코인 · 동일 친구 15초 쿨다운(기존 친구 1코인 + 새 친구 1코인 = 2코인), XP 0 유지
+        Assert.Equal(2, savedProfile.SoloProgress.Coins);
+        Assert.Equal(0, savedProfile.SoloProgress.Xp);
     }
 
     [Fact]
@@ -695,7 +687,7 @@ public sealed class SocialCoordinatorTests : IAsyncLifetime
         Assert.Contains("저장하지 못했어요", notifications[0]);
         Assert.True(await _host.SendBubbleMessageAsync(guest, "다음 메시지"));
         Assert.Equal(3, Assert.Single((await _store.LoadFriendsAsync()).Friends).Intimacy);
-        Assert.Equal(4, (await _store.LoadProfileAsync()).SoloProgress.Coins);
+        Assert.Equal(1, (await _store.LoadProfileAsync()).SoloProgress.Coins);
     }
 
     [Fact]

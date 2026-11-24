@@ -294,7 +294,7 @@ public sealed partial class OnboardingViewModel : ObservableObject
 
         ValidationMessage = string.Empty;
 
-        // 편집 도중 쌓인 최신 XP·코인·활동량·친구 관계 등을 덮어쓰지 않도록 최신 라이브 프로필을 기준으로 외형만 반영한다.
+        // 편집 도중 쌓인 최신 레벨·코인·활동량·친구 관계 등을 덮어쓰지 않도록 최신 라이브 프로필을 기준으로 외형만 반영한다.
         var target = _latestProfileProvider?.Invoke() ?? _profile;
         target.OwnerName = trimmedOwner;
         target.PetName = trimmedPet;

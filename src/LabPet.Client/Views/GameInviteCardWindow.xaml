@@ -20,7 +20,7 @@
 
     <Border x:Name="InviteCardRoot"
             Margin="12"
-            Width="292"
+            Width="316"
             Background="#FCFFFFFF"
             BorderBrush="{StaticResource GameDividerBrush}"
             BorderThickness="1"
@@ -81,22 +81,75 @@
                 </Border>
             </DockPanel>
 
-            <!-- 참가비 및 사다리 상품 정보 -->
+            <!-- 참가비 · 코인 충족 여부 · 사다리 상품 정보 -->
             <StackPanel Margin="0,0,0,10">
                 <WrapPanel Orientation="Horizontal" Margin="0,0,0,4">
-                    <Border Background="{StaticResource GameSubtleFillBrush}" CornerRadius="8" Padding="8,4" Margin="0,0,6,0">
+                    <Border Background="{StaticResource GameSubtleFillBrush}" CornerRadius="8" Padding="8,4" Margin="0,0,6,4">
                         <TextBlock Text="{Binding IncomingInvite.CostBadgeText, FallbackValue=''}"
                                    FontSize="11.5"
                                    FontWeight="Bold"
                                    Foreground="{StaticResource GameTextPrimaryBrush}" />
                     </Border>
+                    <Border CornerRadius="8" Padding="8,4" Margin="0,0,0,4">
+                        <Border.Style>
+                            <Style TargetType="Border">
+                                <Setter Property="Background" Value="{StaticResource GameWinSoftBrush}" />
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding HasIncomingInviteInsufficientCoins}" Value="True">
+                                        <Setter Property="Background" Value="{StaticResource GameLossSoftBrush}" />
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </Border.Style>
+                        <TextBlock Text="{Binding IncomingInviteEligibilityText}"
+                                   FontSize="11"
+                                   FontWeight="Bold">
+                            <TextBlock.Style>
+                                <Style TargetType="TextBlock">
+                                    <Setter Property="Foreground" Value="{StaticResource GameWinBrush}" />
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding HasIncomingInviteInsufficientCoins}" Value="True">
+                                            <Setter Property="Foreground" Value="{StaticResource GameLossBrush}" />
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </TextBlock.Style>
+                        </TextBlock>
+                    </Border>
                 </WrapPanel>
+
+                <!-- 유료 게임일 때 필요 / 보유 / 부족 코인 상세 표시 -->
+                <Border Visibility="{Binding ShowIncomingInviteCoinDetails, Converter={StaticResource BoolToVis}}"
+                        Background="{StaticResource GameSubtleFillBrush}"
+                        CornerRadius="10"
+                        Padding="10,7"
+                        Margin="0,2,0,4">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Grid.Column="0">
+                            <TextBlock Text="필요 코인" FontSize="10" Foreground="{StaticResource GameTextMutedBrush}" />
+                            <TextBlock Text="{Binding IncomingInviteRequiredCoinsText}" FontSize="11.5" FontWeight="Bold" Foreground="{StaticResource GameTextPrimaryBrush}" Margin="0,1,0,0" />
+                        </StackPanel>
+                        <StackPanel Grid.Column="1">
+                            <TextBlock Text="보유 코인" FontSize="10" Foreground="{StaticResource GameTextMutedBrush}" />
+                            <TextBlock Text="{Binding IncomingInviteCurrentCoinsText}" FontSize="11.5" FontWeight="Bold" Foreground="{StaticResource GameCoinBrush}" Margin="0,1,0,0" />
+                        </StackPanel>
+                        <StackPanel Grid.Column="2" Visibility="{Binding HasIncomingInviteInsufficientCoins, Converter={StaticResource BoolToVis}}">
+                            <TextBlock Text="부족 코인" FontSize="10" Foreground="{StaticResource GameLossBrush}" />
+                            <TextBlock Text="{Binding IncomingInviteShortfallText}" FontSize="11.5" FontWeight="Bold" Foreground="{StaticResource GameLossBrush}" Margin="0,1,0,0" />
+                        </StackPanel>
+                    </Grid>
+                </Border>
 
                 <Border Visibility="{Binding IncomingInvite.PrizeSummary, Converter={StaticResource NullToVis}, FallbackValue=Collapsed}"
                         Background="{StaticResource GameSubtleFillBrush}"
                         CornerRadius="9"
                         Padding="9,6"
-                        Margin="0,4,0,0">
+                        Margin="0,2,0,0">
                     <TextBlock FontSize="11.5"
                                FontWeight="SemiBold"
                                Foreground="{StaticResource GameTextSecondaryBrush}"
@@ -115,7 +168,7 @@
                          Background="{StaticResource GameSubtleFillBrush}"
                          Margin="0,0,0,11" />
 
-            <!-- 수락 / 거절 버튼 (클릭 투과 중에도 클릭 가능, 수락 중 중복 클릭 차단) -->
+            <!-- 수락 / 거절 버튼 (코인 부족 시 수락 비활성화, 거절은 가능) -->
             <Grid>
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="*" />
@@ -133,13 +186,16 @@
 
                 <Button Grid.Column="2"
                         Command="{Binding AcceptIncomingInviteCommand}"
-                        IsEnabled="{Binding CanRespondToIncomingInvite}"
+                        IsEnabled="{Binding CanAcceptIncomingInvite}"
                         Height="36"
                         Focusable="False">
                     <Button.Style>
                         <Style TargetType="Button" BasedOn="{StaticResource GamePrimaryButtonStyle}">
                             <Setter Property="Content" Value="수락" />
                             <Style.Triggers>
+                                <DataTrigger Binding="{Binding HasIncomingInviteInsufficientCoins}" Value="True">
+                                    <Setter Property="Content" Value="코인 부족" />
+                                </DataTrigger>
                                 <DataTrigger Binding="{Binding IsAcceptingIncomingInvite}" Value="True">
                                     <Setter Property="Content" Value="수락 중..." />
                                 </DataTrigger>

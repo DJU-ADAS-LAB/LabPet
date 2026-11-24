@@ -12,7 +12,7 @@ public static class ProtocolConstants
     public const int MinSupportedProtocolVersion = 3;
 
     /// <summary>로컬 JSON 저장소 프로필/친구 스키마 현재 버전.</summary>
-    public const int CurrentStorageSchemaVersion = 1;
+    public const int CurrentStorageSchemaVersion = 2;
 
     /// <summary>LAN 피어 탐색(HELLO 브로드캐스트) UDP 포트.</summary>
     public const int UdpDiscoveryPort = 45678;

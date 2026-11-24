@@ -43,6 +43,7 @@ public partial class PetWindow : Window, IMessageBubbleTarget
     private readonly SoloProgressionService _progression;
     private readonly PomodoroTimerService _pomodoro;
     private readonly SocialCoordinatorService _social;
+    private readonly ISystemActivityStateProvider _activityState;
 
     private readonly DispatcherTimer _frameTimer;
     private readonly DispatcherTimer _activityFlushTimer;
@@ -80,7 +81,8 @@ public partial class PetWindow : Window, IMessageBubbleTarget
         GlobalActivityHookService activityHook,
         SoloProgressionService progression,
         PomodoroTimerService pomodoro,
-        SocialCoordinatorService social)
+        SocialCoordinatorService social,
+        ISystemActivityStateProvider? activityState = null)
     {
         InitializeComponent();
 
@@ -93,6 +95,7 @@ public partial class PetWindow : Window, IMessageBubbleTarget
         _progression = progression;
         _pomodoro = pomodoro;
         _social = social;
+        _activityState = activityState ?? new SystemActivityStateMonitor(hookSystemEvents: false);
         DataContext = _viewModel;
 
         TrayIcon.Icon = CreateTrayIcon();
@@ -157,8 +160,13 @@ public partial class PetWindow : Window, IMessageBubbleTarget
         _viewModel.ResetPositionRequested += OnResetPositionRequested;
         _viewModel.ExitRequested += OnExitRequested;
         _activityHook.KeyTyped += OnGlobalKeyTyped;
-        _pomodoro.FocusCompleted += OnPomodoroFocusCompleted;
+        _pomodoro.FocusCompletedWithDuration += OnPomodoroFocusCompleted;
         _pomodoro.BreakCompleted += OnPomodoroBreakCompleted;
+        _progression.Economy.LevelUpCompleted += OnEconomyLevelUpCompleted;
+        if (_activityState is SystemActivityStateMonitor activityMonitor)
+        {
+            activityMonitor.ActivityClockResetRequested += OnActivityClockResetRequested;
+        }
         _social.StateChanged += OnSocialStateChanged;
         _social.FriendRequestArrived += OnSocialFriendRequestArrived;
         _social.SocialNotification += OnSocialNotification;
@@ -224,8 +232,13 @@ public partial class PetWindow : Window, IMessageBubbleTarget
             _viewModel.ResetPositionRequested -= OnResetPositionRequested;
             _viewModel.ExitRequested -= OnExitRequested;
             _activityHook.KeyTyped -= OnGlobalKeyTyped;
-            _pomodoro.FocusCompleted -= OnPomodoroFocusCompleted;
+            _pomodoro.FocusCompletedWithDuration -= OnPomodoroFocusCompleted;
             _pomodoro.BreakCompleted -= OnPomodoroBreakCompleted;
+            _progression.Economy.LevelUpCompleted -= OnEconomyLevelUpCompleted;
+            if (_activityState is SystemActivityStateMonitor activityMonitor)
+            {
+                activityMonitor.ActivityClockResetRequested -= OnActivityClockResetRequested;
+            }
             _social.StateChanged -= OnSocialStateChanged;
             _social.FriendRequestArrived -= OnSocialFriendRequestArrived;
             _social.SocialNotification -= OnSocialNotification;
@@ -588,40 +601,59 @@ public partial class PetWindow : Window, IMessageBubbleTarget
             return;
         }
 
-        var (keyLevelUp, _) = _progression.RecordKeystrokes(_viewModel.CurrentProfile, keys);
-        var (clickLevelUp, newLevel) = _progression.RecordMouseClicks(_viewModel.CurrentProfile, clicks);
-
-        if (keyLevelUp || clickLevelUp)
-        {
-            _animator.TriggerPetReaction();
-            _viewModel.ShowBubble($"레벨 업! Lv.{newLevel} 달성!", 3200);
-        }
+        _progression.RecordKeystrokes(_viewModel.CurrentProfile, keys);
+        _progression.RecordMouseClicks(_viewModel.CurrentProfile, clicks);
 
         await _viewModel.SaveCurrentProfileAsync();
     }
 
     private async void OnUptimeTick(object? sender, EventArgs e)
     {
-        var (leveledUp, newLevel) = _progression.RecordUptimeMinutes(_viewModel.CurrentProfile, 1);
-        if (leveledUp)
+        if (!_activityState.IsUserActiveForUptime(out _))
         {
-            _animator.TriggerPetReaction();
-            _viewModel.ShowBubble($"레벨 업! Lv.{newLevel} 달성!", 3200);
+            return;
         }
 
+        _progression.RecordUptimeMinutes(_viewModel.CurrentProfile, 1);
         await _viewModel.SaveCurrentProfileAsync();
     }
 
-    private async void OnPomodoroFocusCompleted(object? sender, EventArgs e)
+    private async void OnPomodoroFocusCompleted(object? sender, int focusMinutes)
     {
-        var (leveledUp, newLevel) = _progression.RecordPomodoroCompleted(_viewModel.CurrentProfile);
+        var reward = _progression.RecordPomodoroCompletedDetailed(_viewModel.CurrentProfile, focusMinutes);
         _animator.TriggerPetReaction();
         _viewModel.ShowBubble(
-            leveledUp
-                ? $"뽀모도로 완료! +50 코인 & Lv.{newLevel} 달성!"
-                : "뽀모도로 완료! +100 XP · +50 코인 획득!",
+            reward.CoinsEarned > 0
+                ? $"뽀모도로 완료! +{reward.CoinsEarned} 코인 획득!"
+                : "뽀모도로 완료!",
             4000);
         await _viewModel.SaveCurrentProfileAsync();
+    }
+
+    private void OnEconomyLevelUpCompleted(object? sender, LevelUpCompletedEventArgs e)
+    {
+        Dispatcher.BeginInvoke(async () =>
+        {
+            _animator.TriggerPetReaction();
+            _viewModel.ShowBubble($"레벨 업! Lv.{e.NewLevel} 달성!", 3200);
+            await _viewModel.SaveCurrentProfileAsync();
+            _ = _social.UpdateLocalPresenceAsync(_viewModel.CurrentProfile, _lastReportedMusicActive, _isLocalSleeping);
+        });
+    }
+
+    private void OnActivityClockResetRequested(object? sender, EventArgs e)
+    {
+        _activityHook.ResetAntiAbuseState();
+        Dispatcher.BeginInvoke(() =>
+        {
+            if (_isClosingOrClosed)
+            {
+                return;
+            }
+
+            _uptimeTimer.Stop();
+            _uptimeTimer.Start();
+        });
     }
 
     private void OnPomodoroBreakCompleted(object? sender, EventArgs e)

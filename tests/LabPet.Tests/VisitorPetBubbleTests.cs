@@ -468,10 +468,10 @@ public sealed class VisitorPetBubbleTests
                 var viewport = Assert.IsType<Viewport3D>(second.FindName("VisitorViewport"));
                 Assert.True(composer.PointToScreen(new Point(0, composer.ActualHeight)).Y > viewport.PointToScreen(new Point()).Y);
 
-                Assert.Equal(FriendMessageRouteOutcome.Visitor, router.RouteStatus(new("second", "쓰다듬기 전송!", 5000)));
+                Assert.Equal(FriendMessageRouteOutcome.Visitor, router.RouteStatus(new("second", "인사 전송!", 5000)));
                 await FlushUiAsync();
                 Assert.False(first.HasStatusBubble);
-                Assert.Equal("쓰다듬기 전송!", second.StatusBubbleText);
+                Assert.Equal("인사 전송!", second.StatusBubbleText);
                 Assert.Empty(host.ReceivedStatuses);
                 Assert.True(second.CurrentBubblePhysicalBounds.Bottom < second.CurrentComposerPhysicalBounds.Top);
                 var status = Assert.IsType<Border>(second.FindName("VisitorStatusBubble"));
@@ -483,8 +483,8 @@ public sealed class VisitorPetBubbleTests
                 Assert.True(first.IsChatComposerOpen);
                 Assert.False(second.IsChatComposerOpen);
                 Assert.Equal("보내기 전 문장", first.ChatComposerInputText);
-                Assert.Equal(FriendMessageRouteOutcome.Host, router.RouteStatus(new("absent", "쓰다듬어 줬어요!", 2000)));
-                Assert.Equal("쓰다듬어 줬어요!", Assert.Single(host.ReceivedStatuses));
+                Assert.Equal(FriendMessageRouteOutcome.Host, router.RouteStatus(new("absent", "인사했어요!", 2000)));
+                Assert.Equal("인사했어요!", Assert.Single(host.ReceivedStatuses));
             }
             finally
             {
@@ -735,9 +735,9 @@ public sealed class VisitorPetBubbleTests
                     var initialHeight = window.Height;
 
                     // 시스템 알림 먼저 표시
-                    window.ShowVisitorBubble("쓰다듬기 전송!", 5000);
+                    window.ShowVisitorBubble("인사 전송!", 5000);
                     Assert.True(window.HasStatusBubble);
-                    Assert.Equal("쓰다듬기 전송!", window.StatusBubbleText);
+                    Assert.Equal("인사 전송!", window.StatusBubbleText);
 
                     // 긴 메시지 포함 7연속 채팅 전송 → 최대 5개 유지 + 시스템 알림은 덮어쓰지 않음 + 창 높이/위치 불변
                     var longText = "이것은 아주 긴 친구 메시지입니다. 방문 펫 말풍선에서 자동 줄바꿈되고 창이 흔들리지 않아야 합니다.";
@@ -753,7 +753,7 @@ public sealed class VisitorPetBubbleTests
                     Assert.Equal(["채팅 3", "채팅 4", "채팅 5", "채팅 6", longText],
                         window.ChatBubbleStack.Items.Select(x => x.Text));
                     Assert.True(window.HasStatusBubble);
-                    Assert.Equal("쓰다듬기 전송!", window.StatusBubbleText);
+                    Assert.Equal("인사 전송!", window.StatusBubbleText);
                     Assert.Equal(initialTop, window.Top);
                     Assert.Equal(initialHeight, window.Height);
                     Assert.False(window.CurrentBubblePhysicalBounds.IsEmpty);

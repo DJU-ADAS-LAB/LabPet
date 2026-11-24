@@ -1028,7 +1028,7 @@ public partial class VisitorPetWindow : Window, IMessageBubbleTarget
     {
         if (await _social.SendPetInteractionAsync(_friend) == PetInteractionSendResult.Unavailable)
         {
-            ShowVisitorBubble("쓰다듬기를 보내지 못했어요", 1800);
+            ShowVisitorBubble("인사하기를 보내지 못했어요", 1800);
         }
     }
 

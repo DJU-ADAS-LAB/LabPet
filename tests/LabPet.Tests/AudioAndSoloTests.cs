@@ -50,29 +50,30 @@ public sealed class AudioAndSoloTests
         var svc = new SoloProgressionService();
         var profile = new PetProfile();
 
-        // 키보드 80타 -> 2버킷 (+10 XP, +4 코인)
-        svc.RecordKeystrokes(profile, 80);
-        Assert.Equal(10, profile.SoloProgress.Xp);
-        Assert.Equal(4, profile.SoloProgress.Coins);
+        // 키보드 200타 -> +1 코인 (XP 자동 레벨업 제거, XP 0 / Lv.1 유지)
+        svc.RecordKeystrokes(profile, 200);
+        Assert.Equal(0, profile.SoloProgress.Xp);
+        Assert.Equal(1, profile.SoloProgress.Level);
+        Assert.Equal(1, profile.SoloProgress.Coins);
 
-        // 뽀모도로 1회 완료 -> +100 XP (레벨업 Lv.1->Lv.2, 잔여 10 XP), +50 코인 (총 54 코인)
-        var (leveledUp, newLevel) = svc.RecordPomodoroCompleted(profile);
-        Assert.True(leveledUp);
-        Assert.Equal(2, newLevel);
-        Assert.Equal(10, profile.SoloProgress.Xp);
-        Assert.Equal(54, profile.SoloProgress.Coins);
+        // 뽀모도로 25분 1회 완료 -> +10 코인 (총 11 코인, 자동 레벨업 없음)
+        var (leveledUp, newLevel) = svc.RecordPomodoroCompleted(profile, 25);
+        Assert.False(leveledUp);
+        Assert.Equal(1, newLevel);
+        Assert.Equal(0, profile.SoloProgress.Xp);
+        Assert.Equal(11, profile.SoloProgress.Coins);
 
         // 코인 차감 및 잔액 부족 차단 + 게임 정산 가산 검증
         var (failSpend, _) = svc.TrySpendCoins(profile, 60);
         Assert.False(failSpend);
-        Assert.Equal(54, profile.SoloProgress.Coins);
+        Assert.Equal(11, profile.SoloProgress.Coins);
 
-        var (okSpend, _) = svc.TrySpendCoins(profile, 30);
+        var (okSpend, _) = svc.TrySpendCoins(profile, 5);
         Assert.True(okSpend);
-        Assert.Equal(24, profile.SoloProgress.Coins);
+        Assert.Equal(6, profile.SoloProgress.Coins);
 
         svc.AddCoins(profile, 60);
-        Assert.Equal(84, profile.SoloProgress.Coins);
+        Assert.Equal(66, profile.SoloProgress.Coins);
     }
 
     private static float[] GenerateSineWave(double frequencyHz, int sampleRate, int length, float amplitude)

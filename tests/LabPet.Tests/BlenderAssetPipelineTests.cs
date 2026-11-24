@@ -420,11 +420,14 @@ public sealed class BlenderAssetPipelineTests
             Assert.True(p0.IsFrozen);
             Assert.Same(p0, renderer.GetPortrait(baseApp.Clone()));
 
-            // 8개 초과 추가 시 LRU 캐시에서 가장 오래된 항목이 정리되어 10번째 삽입 후 재요청 시 새로 생성됨
-            for (var i = 1; i <= 9; i++)
+            // 캐시 상한(32개) 초과 추가 시 LRU 캐시에서 가장 오래된 항목이 정리되어 재요청 시 새로 생성됨
+            for (var i = 1; i <= PetPortraitRenderer.MaxCachedPortraits + 1; i++)
             {
                 var alt = baseApp.Clone();
-                alt.BodyColorHex = $"#FFE{i:D1}CC";
+                var r = (i * 37) % 256;
+                var g = (i * 59) % 256;
+                var b = (i * 83) % 256;
+                alt.BodyColorHex = $"#{r:X2}{g:X2}{b:X2}";
                 var bmp = renderer.GetPortrait(alt);
                 Assert.Equal(72, bmp.PixelWidth);
             }

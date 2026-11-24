@@ -34,10 +34,8 @@ public sealed partial class HomePageViewModel : ObservableObject, IDisposable
     [ObservableProperty] private ImageSource? _petPortrait;
 
     [ObservableProperty] private int _level = 1;
-    [ObservableProperty] private long _xp;
-    [ObservableProperty] private long _requiredXp = 100;
-    [ObservableProperty] private double _xpPercent;
     [ObservableProperty] private long _coins;
+    [ObservableProperty] private int _dailySocialCoinsEarned;
 
     [ObservableProperty] private long _totalKeystrokes;
     [ObservableProperty] private long _totalMouseClicks;
@@ -54,9 +52,35 @@ public sealed partial class HomePageViewModel : ObservableObject, IDisposable
     [ObservableProperty] private string _pomodoroStatusText = "대기 중";
     [ObservableProperty] private bool _isPomodoroRunning;
 
-    public string LevelText => $"Lv.{Level}";
-    public string XpProgressText => $"{Xp} / {RequiredXp} XP";
-    public string CoinsText => $"{Coins} 코인";
+    public bool IsMaxLevel => Level >= LabPet.Client.Solo.PetEconomyService.MaxLevel;
+    public long LevelUpCost => LabPet.Client.Solo.PetEconomyService.GetLevelUpCost(Level);
+    public long LevelUpShortfallCoins => IsMaxLevel ? 0L : Math.Max(0L, LevelUpCost - Coins);
+    public double LevelUpAffordProgressPercent => IsMaxLevel
+        ? 100.0
+        : LevelUpCost <= 0
+            ? 100.0
+            : Math.Clamp((double)Coins / LevelUpCost * 100.0, 0.0, 100.0);
+
+    public string LevelText => IsMaxLevel
+        ? $"Lv.{LabPet.Client.Solo.PetEconomyService.MaxLevel} MAX"
+        : $"Lv.{Level}";
+    public string LevelUpTargetLabel => IsMaxLevel ? "최고 레벨 달성" : $"다음 Lv.{Level + 1} 성장 비용";
+    public string LevelUpProgressText => IsMaxLevel
+        ? "MAX LEVEL"
+        : Coins >= LevelUpCost
+            ? $"레벨 업 가능 ({LabPet.Client.Formatting.CompactNumberFormatter.FormatExact(LevelUpCost)} 코인)"
+            : $"{LabPet.Client.Formatting.CompactNumberFormatter.FormatExact(LevelUpCost)} 코인 ({LabPet.Client.Formatting.CompactNumberFormatter.FormatExact(LevelUpShortfallCoins)} 부족)";
+
+    public string CoinsText => $"{LabPet.Client.Formatting.CompactNumberFormatter.Format(Coins)} 코인";
+    public string CoinsExactTooltip => $"보유 코인: {LabPet.Client.Formatting.CompactNumberFormatter.FormatExact(Coins)} 코인";
+    public string TotalKeystrokesText => LabPet.Client.Formatting.CompactNumberFormatter.Format(TotalKeystrokes);
+    public string TotalKeystrokesTooltip => $"누적 키보드 입력: {LabPet.Client.Formatting.CompactNumberFormatter.FormatExact(TotalKeystrokes)}타";
+    public string TotalMouseClicksText => LabPet.Client.Formatting.CompactNumberFormatter.Format(TotalMouseClicks);
+    public string TotalMouseClicksTooltip => $"누적 마우스 클릭: {LabPet.Client.Formatting.CompactNumberFormatter.FormatExact(TotalMouseClicks)}회";
+    public string TotalUptimeText => LabPet.Client.Formatting.CompactNumberFormatter.FormatUptimeDuration(TotalUptimeMinutes);
+    public string TotalUptimeTooltip => $"누적 함께한 시간: {LabPet.Client.Formatting.CompactNumberFormatter.FormatExactUptimeTooltip(TotalUptimeMinutes)}";
+    public string CompletedPomodorosText => LabPet.Client.Formatting.CompactNumberFormatter.Format(CompletedPomodoros);
+    public string CompletedPomodorosTooltip => $"누적 뽀모도로: {LabPet.Client.Formatting.CompactNumberFormatter.FormatExact(CompletedPomodoros)}회";
     internal bool IsRefreshTimerRunning => _refreshTimer.IsEnabled;
 
     public HomePageViewModel(
@@ -96,6 +120,7 @@ public sealed partial class HomePageViewModel : ObservableObject, IDisposable
             _petVm.ProfileUpdated += OnProfileUpdated;
             _petVm.ProfileProgressUpdated += OnProfileUpdated;
             _games.ProfileChanged += OnProfileUpdated;
+            _games.Economy.EconomyStateChanged += OnEconomyStateChanged;
             _pomodoro.Tick += OnPomodoroTick;
             _social.StateChanged += OnSocialStateChanged;
         }
@@ -123,6 +148,7 @@ public sealed partial class HomePageViewModel : ObservableObject, IDisposable
         _petVm.ProfileUpdated -= OnProfileUpdated;
         _petVm.ProfileProgressUpdated -= OnProfileUpdated;
         _games.ProfileChanged -= OnProfileUpdated;
+        _games.Economy.EconomyStateChanged -= OnEconomyStateChanged;
         _pomodoro.Tick -= OnPomodoroTick;
         _social.StateChanged -= OnSocialStateChanged;
     }
@@ -150,20 +176,35 @@ public sealed partial class HomePageViewModel : ObservableObject, IDisposable
             ?.DisplayName ?? profile.Appearance.SpeciesId;
         PetPortrait = _portraitRenderer.GetPortrait(profile.Appearance);
 
-        Level = progress.Level;
-        Xp = progress.Xp;
-        RequiredXp = SoloProgressionService.GetRequiredXpForLevel(progress.Level);
-        XpPercent = RequiredXp > 0 ? Math.Clamp((double)Xp / RequiredXp * 100.0, 0.0, 100.0) : 0.0;
-        Coins = progress.Coins;
+        lock (progress)
+        {
+            PetEconomyService.NormalizeProgress(profile);
+            Level = progress.Level;
+            Coins = progress.Coins;
+            DailySocialCoinsEarned = _games.Economy.GetDailySocialCoinsEarned(profile);
+            TotalKeystrokes = progress.TotalKeystrokes;
+            TotalMouseClicks = progress.TotalMouseClicks;
+            TotalUptimeMinutes = progress.TotalUptimeMinutes;
+            CompletedPomodoros = progress.CompletedPomodoros;
+        }
 
-        TotalKeystrokes = progress.TotalKeystrokes;
-        TotalMouseClicks = progress.TotalMouseClicks;
-        TotalUptimeMinutes = progress.TotalUptimeMinutes;
-        CompletedPomodoros = progress.CompletedPomodoros;
-
+        OnPropertyChanged(nameof(IsMaxLevel));
+        OnPropertyChanged(nameof(LevelUpCost));
+        OnPropertyChanged(nameof(LevelUpShortfallCoins));
+        OnPropertyChanged(nameof(LevelUpAffordProgressPercent));
         OnPropertyChanged(nameof(LevelText));
-        OnPropertyChanged(nameof(XpProgressText));
+        OnPropertyChanged(nameof(LevelUpTargetLabel));
+        OnPropertyChanged(nameof(LevelUpProgressText));
         OnPropertyChanged(nameof(CoinsText));
+        OnPropertyChanged(nameof(CoinsExactTooltip));
+        OnPropertyChanged(nameof(TotalKeystrokesText));
+        OnPropertyChanged(nameof(TotalKeystrokesTooltip));
+        OnPropertyChanged(nameof(TotalMouseClicksText));
+        OnPropertyChanged(nameof(TotalMouseClicksTooltip));
+        OnPropertyChanged(nameof(TotalUptimeText));
+        OnPropertyChanged(nameof(TotalUptimeTooltip));
+        OnPropertyChanged(nameof(CompletedPomodorosText));
+        OnPropertyChanged(nameof(CompletedPomodorosTooltip));
 
         var friends = _social.Friends;
         var peers = _social.DiscoveredPeers;
@@ -192,6 +233,18 @@ public sealed partial class HomePageViewModel : ObservableObject, IDisposable
 
     private void OnProfileUpdated(object? sender, PetProfile e) => Refresh();
     private void OnPomodoroTick(object? sender, EventArgs e) => Refresh();
+
+    private void OnEconomyStateChanged(object? sender, EconomyChangedEventArgs e)
+    {
+        if (Application.Current?.Dispatcher is { } dispatcher)
+        {
+            dispatcher.BeginInvoke(Refresh);
+        }
+        else
+        {
+            Refresh();
+        }
+    }
 
     private void OnSocialStateChanged(object? sender, EventArgs e)
     {

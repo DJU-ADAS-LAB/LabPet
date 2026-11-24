@@ -414,6 +414,9 @@ public partial class App : Application
         services.AddSingleton<PetPortraitRenderer>();
         services.AddSingleton<PetAnimationController>();
         services.AddSingleton<IAudioAnalyzer, LoopbackAudioAnalyzer>();
+        services.AddSingleton<PetEconomyService>();
+        services.AddSingleton<SystemActivityStateMonitor>();
+        services.AddSingleton<ISystemActivityStateProvider>(sp => sp.GetRequiredService<SystemActivityStateMonitor>());
         services.AddSingleton<SoloProgressionService>();
         services.AddSingleton<GlobalActivityHookService>();
         services.AddSingleton<PomodoroTimerService>();

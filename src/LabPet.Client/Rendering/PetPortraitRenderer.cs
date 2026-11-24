@@ -10,7 +10,7 @@ namespace LabPet.Client.Rendering;
 public sealed class PetPortraitRenderer(IPetMeshFactory meshFactory)
 {
     private const int PixelSize = 72;
-    private const int MaxCachedPortraits = 8;
+    internal const int MaxCachedPortraits = 32;
     private readonly Dictionary<PortraitAppearance, BitmapSource> _cache = [];
     private readonly LinkedList<PortraitAppearance> _lruOrder = [];
 

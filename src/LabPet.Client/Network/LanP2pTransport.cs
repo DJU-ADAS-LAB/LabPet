@@ -189,7 +189,9 @@ public sealed partial class LanP2pTransport : ISocialTransport
         var previous = _localPresence;
         _localPresence = presence;
 
-        if (IsRunning && (previous.IsSleeping != presence.IsSleeping || previous.IsMusicActive != presence.IsMusicActive))
+        if (IsRunning && (previous.IsSleeping != presence.IsSleeping
+            || previous.IsMusicActive != presence.IsMusicActive
+            || previous.Level != presence.Level))
         {
             var ct = _cts?.Token ?? cancellationToken;
             if (!ct.IsCancellationRequested)

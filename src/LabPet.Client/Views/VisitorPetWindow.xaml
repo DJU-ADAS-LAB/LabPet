@@ -96,7 +96,7 @@
                     </ItemsControl.ItemTemplate>
                 </ItemsControl>
 
-                <!-- 쓰다듬기·노래 따라하기 등 시스템 알림 (채팅 메시지와 별도 표시되어 서로 덮어쓰지 않음) -->
+                <!-- 인사하기·노래 따라하기 등 시스템 알림 (채팅 메시지와 별도 표시되어 서로 덮어쓰지 않음) -->
                 <Border x:Name="VisitorStatusBubble"
                         HorizontalAlignment="Center"
                         Margin="0,0,0,2"
@@ -208,7 +208,7 @@
             </Viewport3D.CacheMode>
             <Viewport3D.ContextMenu>
                 <ContextMenu Opened="VisitorContextMenu_Opened">
-                    <MenuItem Header="👋  쓰다듬기 보내기" Click="PetFriendMenu_Click" />
+                    <MenuItem Header="👋  인사하기 보내기" Click="PetFriendMenu_Click" />
                     <MenuItem x:Name="MusicFollowMenuItem" Header="🎵  노래 따라하기" Click="ToggleMusicFollowMenu_Click" />
                     <Separator />
                     <MenuItem Header="✕  친구 돌려보내기" Click="DismissMenu_Click" />

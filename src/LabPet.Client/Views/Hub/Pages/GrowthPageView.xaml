@@ -4,46 +4,125 @@
 
     <ScrollViewer VerticalScrollBarVisibility="Auto" CanContentScroll="False">
         <StackPanel>
-            <!-- 레벨 · 경험치 · 활동량 카드 -->
+            <!-- 코인 수동 레벨업 · 활동량 요약 카드 -->
             <Border Style="{StaticResource HubCardStyle}" Margin="0,0,0,16">
                 <StackPanel>
-                    <DockPanel LastChildFill="False" Margin="0,0,0,8">
-                        <TextBlock Text="레벨 · 경험치 (XP)" Style="{StaticResource HubSectionTitleStyle}" />
-                        <TextBlock DockPanel.Dock="Right" FontSize="12.5" FontWeight="SemiBold" Foreground="{StaticResource HubTextSecondaryBrush}">
-                            <Run Text="Lv." /><Run Text="{Binding Level, Mode=OneWay}" FontWeight="Bold" Foreground="{StaticResource HubAccentTextBrush}" />
-                            <Run Text="  ·  " />
-                            <Run Text="{Binding Xp, Mode=OneWay}" /><Run Text=" / " /><Run Text="{Binding RequiredXp, Mode=OneWay}" /><Run Text=" XP" />
-                        </TextBlock>
-                    </DockPanel>
-                    <ProgressBar Height="10"
-                                 Maximum="100"
-                                 Value="{Binding XpPercent}"
-                                 Foreground="{StaticResource HubAccentBrush}"
-                                 Background="{StaticResource HubSubtleFillBrush}" />
+                    <DockPanel LastChildFill="False" Margin="0,0,0,12">
+                        <StackPanel DockPanel.Dock="Left" Orientation="Horizontal" VerticalAlignment="Center">
+                            <Border Background="{StaticResource HubAccentSoftBrush}"
+                                    BorderBrush="{StaticResource HubAccentBorderBrush}"
+                                    BorderThickness="1"
+                                    CornerRadius="10"
+                                    Padding="10,4"
+                                    Margin="0,0,10,0">
+                                <TextBlock Text="{Binding LevelDisplayText}"
+                                           FontSize="13.5"
+                                           FontWeight="Bold"
+                                           Foreground="{StaticResource HubAccentTextBrush}" />
+                            </Border>
+                            <StackPanel VerticalAlignment="Center">
+                                <TextBlock Text="코인 레벨 업" Style="{StaticResource HubSectionTitleStyle}" />
+                                <TextBlock Text="{Binding NextLevelLabelText}"
+                                           FontSize="11.5"
+                                           Foreground="{StaticResource HubTextSecondaryBrush}"
+                                           Margin="0,1,0,0" />
+                            </StackPanel>
+                        </StackPanel>
 
-                    <UniformGrid Columns="4" Margin="0,16,0,0">
-                        <Border Style="{StaticResource HubSubtlePanelStyle}" Margin="0,0,6,0">
+                        <Border DockPanel.Dock="Right"
+                                Background="{StaticResource GameCoinSoftBrush}"
+                                BorderBrush="{StaticResource GameCoinBorderBrush}"
+                                BorderThickness="1"
+                                CornerRadius="10"
+                                Padding="11,5"
+                                VerticalAlignment="Center">
+                            <TextBlock FontSize="12" FontWeight="SemiBold" Foreground="{StaticResource GameCoinBrush}">
+                                <Run Text="보유 " />
+                                <Run Text="{Binding ExactHeldCoinsText, Mode=OneWay}" FontWeight="Bold" />
+                            </TextBlock>
+                        </Border>
+                    </DockPanel>
+
+                    <Border Background="{StaticResource HubSubtleFillBrush}"
+                            BorderBrush="{StaticResource HubDividerBrush}"
+                            BorderThickness="1"
+                            CornerRadius="14"
+                            Padding="14,12">
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+
+                            <StackPanel Grid.Column="0" VerticalAlignment="Center" Margin="0,0,14,0">
+                                <DockPanel LastChildFill="False" Margin="0,0,0,6">
+                                    <TextBlock Text="레벨 업 필요 비용"
+                                               FontSize="12"
+                                               FontWeight="SemiBold"
+                                               Foreground="{StaticResource HubTextSecondaryBrush}" />
+                                    <TextBlock DockPanel.Dock="Right"
+                                               Text="{Binding LevelUpCostExactText}"
+                                               FontSize="13"
+                                               FontWeight="Bold"
+                                               Foreground="{StaticResource HubTextPrimaryBrush}" />
+                                </DockPanel>
+
+                                <ProgressBar Height="9"
+                                             Maximum="100"
+                                             Value="{Binding LevelUpAffordProgressPercent, Mode=OneWay}"
+                                             Foreground="{StaticResource HubAccentBrush}"
+                                             Background="#FFE4E8F2" />
+
+                                <TextBlock Text="{Binding LevelUpHintText}"
+                                           FontSize="11.5"
+                                           Foreground="{StaticResource HubTextSecondaryBrush}"
+                                           Margin="0,6,0,0" />
+                            </StackPanel>
+
+                            <Button Grid.Column="1"
+                                    Content="{Binding LevelUpButtonText}"
+                                    Command="{Binding LevelUpCommand}"
+                                    Style="{StaticResource GamePrimaryButtonStyle}"
+                                    MinWidth="154"
+                                    Height="42"
+                                    VerticalAlignment="Center" />
+                        </Grid>
+                    </Border>
+
+                    <TextBlock Text="{Binding LevelUpStatusText}"
+                               FontSize="12"
+                               FontWeight="SemiBold"
+                               Foreground="{StaticResource HubAccentTextBrush}"
+                               Margin="2,8,0,0"
+                               Visibility="{Binding LevelUpStatusText, Converter={StaticResource HubNullToVis}}" />
+
+                    <UniformGrid Columns="4" Margin="0,14,0,0">
+                        <Border Style="{StaticResource HubSubtlePanelStyle}" Margin="0,0,6,0" ToolTip="{Binding TotalKeystrokesExactTooltip}">
                             <StackPanel>
                                 <TextBlock Text="키보드 입력" FontSize="11.5" Foreground="{StaticResource HubTextSecondaryBrush}" />
-                                <TextBlock Text="{Binding TotalKeystrokes}" FontSize="20" FontWeight="Bold" Foreground="{StaticResource HubTextPrimaryBrush}" Margin="0,4,0,0" />
+                                <TextBlock Text="{Binding TotalKeystrokesCompactText}" FontSize="20" FontWeight="Bold" Foreground="{StaticResource HubTextPrimaryBrush}" Margin="0,4,0,0" />
+                                <TextBlock Text="{Binding KeystrokeProgressText}" FontSize="10.5" Foreground="{StaticResource HubTextMutedBrush}" Margin="0,3,0,0" TextTrimming="CharacterEllipsis" />
                             </StackPanel>
                         </Border>
-                        <Border Style="{StaticResource HubSubtlePanelStyle}" Margin="6,0">
+                        <Border Style="{StaticResource HubSubtlePanelStyle}" Margin="6,0" ToolTip="{Binding TotalMouseClicksExactTooltip}">
                             <StackPanel>
                                 <TextBlock Text="마우스 클릭" FontSize="11.5" Foreground="{StaticResource HubTextSecondaryBrush}" />
-                                <TextBlock Text="{Binding TotalMouseClicks}" FontSize="20" FontWeight="Bold" Foreground="{StaticResource HubTextPrimaryBrush}" Margin="0,4,0,0" />
+                                <TextBlock Text="{Binding TotalMouseClicksCompactText}" FontSize="20" FontWeight="Bold" Foreground="{StaticResource HubTextPrimaryBrush}" Margin="0,4,0,0" />
+                                <TextBlock Text="{Binding MouseClickProgressText}" FontSize="10.5" Foreground="{StaticResource HubTextMutedBrush}" Margin="0,3,0,0" TextTrimming="CharacterEllipsis" />
                             </StackPanel>
                         </Border>
-                        <Border Style="{StaticResource HubSubtlePanelStyle}" Margin="6,0">
+                        <Border Style="{StaticResource HubSubtlePanelStyle}" Margin="6,0" ToolTip="{Binding TotalUptimeExactTooltip}">
                             <StackPanel>
-                                <TextBlock Text="함께한 시간(분)" FontSize="11.5" Foreground="{StaticResource HubTextSecondaryBrush}" />
-                                <TextBlock Text="{Binding TotalUptimeMinutes}" FontSize="20" FontWeight="Bold" Foreground="{StaticResource HubTextPrimaryBrush}" Margin="0,4,0,0" />
+                                <TextBlock Text="함께한 시간" FontSize="11.5" Foreground="{StaticResource HubTextSecondaryBrush}" />
+                                <TextBlock Text="{Binding TotalUptimeDisplayText}" FontSize="20" FontWeight="Bold" Foreground="{StaticResource HubTextPrimaryBrush}" Margin="0,4,0,0" />
+                                <TextBlock Text="{Binding UptimeProgressText}" FontSize="10.5" Foreground="{StaticResource HubTextMutedBrush}" Margin="0,3,0,0" TextTrimming="CharacterEllipsis" />
                             </StackPanel>
                         </Border>
-                        <Border Style="{StaticResource HubSubtlePanelStyle}" Margin="6,0,0,0">
+                        <Border Style="{StaticResource HubSubtlePanelStyle}" Margin="6,0,0,0" ToolTip="{Binding CompletedPomodorosExactTooltip}">
                             <StackPanel>
                                 <TextBlock Text="완료 뽀모도로" FontSize="11.5" Foreground="{StaticResource HubTextSecondaryBrush}" />
-                                <TextBlock Text="{Binding CompletedPomodoros}" FontSize="20" FontWeight="Bold" Foreground="{StaticResource HubTextPrimaryBrush}" Margin="0,4,0,0" />
+                                <TextBlock Text="{Binding CompletedPomodorosCompactText}" FontSize="20" FontWeight="Bold" Foreground="{StaticResource HubTextPrimaryBrush}" Margin="0,4,0,0" />
+                                <TextBlock Text="집중 5분당 +2코인" FontSize="10.5" Foreground="{StaticResource HubTextMutedBrush}" Margin="0,3,0,0" TextTrimming="CharacterEllipsis" />
                             </StackPanel>
                         </Border>
                     </UniformGrid>
@@ -66,7 +145,17 @@
                             </Border>
                             <TextBlock Text="코인 획득 방법" Style="{StaticResource HubSectionTitleStyle}" VerticalAlignment="Center" />
                         </StackPanel>
-                        <TextBlock DockPanel.Dock="Right" Text="활동·집중·친구 교류로 자동 적립됩니다" FontSize="11.5" Foreground="{StaticResource HubTextMutedBrush}" VerticalAlignment="Center" />
+                        <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center">
+                            <Border Background="{StaticResource HubAccentSoftBrush}"
+                                    BorderBrush="{StaticResource HubAccentBorderBrush}"
+                                    BorderThickness="1"
+                                    CornerRadius="8"
+                                    Padding="8,3"
+                                    Margin="0,0,8,0">
+                                <TextBlock Text="{Binding DailySocialCapText}" FontSize="11" FontWeight="SemiBold" Foreground="{StaticResource HubAccentTextBrush}" />
+                            </Border>
+                            <TextBlock Text="활동·집중·친구 교류로 자동 적립됩니다" FontSize="11.5" Foreground="{StaticResource HubTextMutedBrush}" VerticalAlignment="Center" />
+                        </StackPanel>
                     </DockPanel>
 
                     <ItemsControl ItemsSource="{Binding CoinEarningGuides}">

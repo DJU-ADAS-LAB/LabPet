@@ -5,8 +5,14 @@ namespace LabPet.Shared.Models;
 /// </summary>
 public sealed class SoloProgress
 {
-    public int Level { get; set; } = 1;
+    public const int MinLevel = 1;
+    public const int MaxLevel = 99;
+
+    public int Level { get; set; } = MinLevel;
+
+    /// <summary>구버전 XP 잔여 호환용 필드(v2 마이그레이션 후 0 유지).</summary>
     public long Xp { get; set; }
+
     public long Coins { get; set; }
     /// <summary>정산 전인 멀티플레이 참가비를 세션별로 기록한다.</summary>
     public Dictionary<string, int> PendingGameWagers { get; set; } = [];
@@ -14,6 +20,12 @@ public sealed class SoloProgress
     public long TotalMouseClicks { get; set; }
     public long TotalUptimeMinutes { get; set; }
     public int CompletedPomodoros { get; set; }
+    public int PendingKeystrokesForReward { get; set; }
+    public int PendingMouseClicksForReward { get; set; }
+    public int PendingUptimeMinutesForReward { get; set; }
+    public string DailySocialRewardDateLocal { get; set; } = string.Empty;
+    public int DailySocialRewardCoinsEarned { get; set; }
+    public SoloLadderPersistedSession? PendingSoloLadderSession { get; set; }
 
     /// <summary>해금된 3D 악세서리/표정/오라/컬러 ID 목록.</summary>
     public List<string> UnlockedItemIds { get; set; } =
@@ -24,6 +36,25 @@ public sealed class SoloProgress
         "acc_sprout",
         "aura_none"
     ];
+}
+
+/// <summary>재시도·새로고침 리롤 방지를 위해 저장하는 솔로 사다리 진행 세션.</summary>
+public sealed class SoloLadderPersistedSession
+{
+    public string SessionId { get; set; } = string.Empty;
+    public int BetCoins { get; set; }
+    public int SelectedSlot { get; set; } = -1;
+    public int[] SlotMultipliersPercent { get; set; } = [];
+    public string[] SlotOutcomeKeys { get; set; } = [];
+    public List<SoloLadderBridgeRecord> Bridges { get; set; } = [];
+    public DateTimeOffset CreatedAtUtc { get; set; } = DateTimeOffset.UtcNow;
+}
+
+/// <summary>솔로 사다리 가로줄 연결 좌표.</summary>
+public sealed class SoloLadderBridgeRecord
+{
+    public int LeftColumn { get; set; }
+    public double NormalizedY { get; set; }
 }
 
 /// <summary>

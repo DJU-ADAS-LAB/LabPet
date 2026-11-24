@@ -31,9 +31,16 @@ public sealed class FriendEntry
     /// <summary>오프라인 상태에서도 표시할 수 있도록 캐시된 3D 외형.</summary>
     public PetAppearance CachedAppearance { get; set; } = new();
 
+    public const int MinIntimacy = 0;
+    public const int MaxIntimacy = 9999;
+
     public int Intimacy { get; set; }
     public DateTimeOffset PairedAtUtc { get; set; } = DateTimeOffset.UtcNow;
     public DateTimeOffset? LastSeenAtUtc { get; set; }
+
+    /// <summary>친밀도를 허용 범위(0~9999)로 보정한다.</summary>
+    public static int NormalizeIntimacy(int intimacy)
+        => Math.Clamp(intimacy, MinIntimacy, MaxIntimacy);
 
     // 전송과 저장에서 공유하는 항목의 갱신 및 복사는 같은 항목을 잠근 상태에서 수행한다.
     public FriendEntry Clone()

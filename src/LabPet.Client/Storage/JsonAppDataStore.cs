@@ -57,6 +57,10 @@ public sealed class JsonAppDataStore : IAppDataStore
             profile.Appearance ??= new PetAppearance();
             profile.SoloProgress ??= new SoloProgress();
             profile.SyncMetadata ??= new SyncMetadata();
+            if (NormalizeProfileInvariants(profile))
+            {
+                needsSave = true;
+            }
 
             if (needsSave)
             {
@@ -78,6 +82,7 @@ public sealed class JsonAppDataStore : IAppDataStore
         {
             profile.SchemaVersion = ProtocolConstants.CurrentStorageSchemaVersion;
             profile.UpdatedAtUtc = DateTimeOffset.UtcNow;
+            NormalizeProfileInvariants(profile);
             var path = Path.Combine(DataDirectory, ProfileFileName);
             await WriteAtomicCoreAsync(path, profile, cancellationToken).ConfigureAwait(false);
         }
@@ -105,6 +110,13 @@ public sealed class JsonAppDataStore : IAppDataStore
             // friends.json에 저장된 DPAPI 비밀키 복호화 및 기존 평문 비밀키 자동 마이그레이션
             foreach (var friend in store.Friends)
             {
+                var clampedIntimacy = FriendEntry.NormalizeIntimacy(friend.Intimacy);
+                if (clampedIntimacy != friend.Intimacy)
+                {
+                    friend.Intimacy = clampedIntimacy;
+                    needsSave = true;
+                }
+
                 if (LocalSecretProtector.TryUnprotect(friend.PairSecretBase64, out var plainSecret, out var wasPlaintext))
                 {
                     friend.PairSecretBase64 = plainSecret;
@@ -140,6 +152,10 @@ public sealed class JsonAppDataStore : IAppDataStore
         {
             friendsStore.SchemaVersion = ProtocolConstants.CurrentStorageSchemaVersion;
             friendsStore.UpdatedAtUtc = DateTimeOffset.UtcNow;
+            foreach (var friend in friendsStore.Friends)
+            {
+                friend.Intimacy = FriendEntry.NormalizeIntimacy(friend.Intimacy);
+            }
             var path = Path.Combine(DataDirectory, FriendsFileName);
             await WriteAtomicFriendsAsync(path, friendsStore, cancellationToken).ConfigureAwait(false);
         }
@@ -319,5 +335,37 @@ public sealed class JsonAppDataStore : IAppDataStore
 
         // 3. 임시 파일을 본 파일로 원자적 교체
         File.Move(tempPath, targetPath, overwrite: true);
+    }
+
+    private static bool NormalizeProfileInvariants(PetProfile profile)
+    {
+        var changed = false;
+        var p = profile.SoloProgress;
+        var clampedLevel = Math.Clamp(p.Level, SoloProgress.MinLevel, SoloProgress.MaxLevel);
+        if (p.Level != clampedLevel)
+        {
+            p.Level = clampedLevel;
+            changed = true;
+        }
+
+        if (p.Xp != 0)
+        {
+            p.Xp = 0;
+            changed = true;
+        }
+
+        if (p.Coins < 0)
+        {
+            p.Coins = 0;
+            changed = true;
+        }
+
+        if (p.DailySocialRewardCoinsEarned is < 0 or > 10)
+        {
+            p.DailySocialRewardCoinsEarned = Math.Clamp(p.DailySocialRewardCoinsEarned, 0, 10);
+            changed = true;
+        }
+
+        return changed;
     }
 }

@@ -51,7 +51,7 @@
                             Height="44" />
                 </StackPanel>
 
-                <TextBlock Text="집중 세션 완료 시 보너스 +100 XP · +50 코인이 지급됩니다."
+                <TextBlock Text="{Binding PomodoroRewardPreviewText}"
                            HorizontalAlignment="Center"
                            TextAlignment="Center"
                            TextWrapping="Wrap"

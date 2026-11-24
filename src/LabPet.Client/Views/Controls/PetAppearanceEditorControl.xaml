@@ -130,7 +130,7 @@
                 <StackPanel Grid.Row="2">
                     <TextBlock Text="모션 미리보기" FontSize="11.5" FontWeight="Bold" Foreground="{StaticResource HubTextSecondaryBrush}" Margin="0,0,0,7" />
                     <WrapPanel Margin="0,0,0,10">
-                        <Button Content="쓰다듬기" Click="PreviewPetMotion_Click" Margin="0,0,6,6" Padding="10,5" FontSize="11.5" />
+                        <Button Content="인사하기" Click="PreviewPetMotion_Click" Margin="0,0,6,6" Padding="10,5" FontSize="11.5" />
                         <Button Content="어지러움" Click="PreviewDizzyMotion_Click" Margin="0,0,6,6" Padding="10,5" FontSize="11.5" />
                         <ToggleButton Content="타이핑" IsChecked="{Binding IsTypingPreviewEnabled}" Margin="0,0,6,6" Padding="10,5" FontSize="11.5" />
                         <ToggleButton Content="리듬 댄스" IsChecked="{Binding IsRhythmPreviewEnabled}" Margin="0,0,0,6" Padding="10,5" FontSize="11.5" />

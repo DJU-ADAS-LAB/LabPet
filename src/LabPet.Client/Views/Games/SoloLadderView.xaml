@@ -1,0 +1,470 @@
+<UserControl x:Class="LabPet.Client.Views.Games.SoloLadderView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:games="clr-namespace:LabPet.Client.Views.Games">
+
+    <UserControl.Resources>
+        <BooleanToVisibilityConverter x:Key="BoolToVis" />
+        <games:EnumEqualsConverter x:Key="EnumEquals" />
+        <games:EnumToVisibilityConverter x:Key="EnumToVis" />
+        <games:InverseBoolToVisibilityConverter x:Key="InvBoolToVis" />
+    </UserControl.Resources>
+
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <!-- 상단: 보유 코인(정확한 숫자) + 4개 고정 보상 구성 카드 -->
+        <Grid Grid.Row="0" Margin="0,0,0,8">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="10" />
+                <ColumnDefinition Width="*" />
+            </Grid.ColumnDefinitions>
+
+            <Border Grid.Column="0"
+                    Background="{StaticResource GameCoinSoftBrush}"
+                    BorderBrush="{StaticResource GameCoinBorderBrush}"
+                    BorderThickness="1"
+                    CornerRadius="14"
+                    Padding="12,8">
+                <StackPanel VerticalAlignment="Center">
+                    <TextBlock Text="현재 보유 코인" FontSize="10.5" FontWeight="SemiBold" Foreground="{StaticResource GameCoinBrush}" />
+                    <StackPanel Orientation="Horizontal" Margin="0,2,0,0" VerticalAlignment="Center">
+                        <Path Data="{StaticResource IconCoinGeometry}" Width="14" Height="14" Stretch="Uniform" Stroke="{StaticResource GameCoinBrush}" StrokeThickness="2" Margin="0,0,5,0" VerticalAlignment="Center" />
+                        <TextBlock FontSize="15" FontWeight="Bold" Foreground="{StaticResource GameTextPrimaryBrush}">
+                            <Run Text="{Binding CurrentCoins, StringFormat={}{0:N0}, Mode=OneWay}" /><Run Text=" 코인" />
+                        </TextBlock>
+                    </StackPanel>
+                </StackPanel>
+            </Border>
+
+            <!-- 4칸 고정 보상 구성 카드 (50% 꽝 / 25% 본전 / 25% 당첨, 반환율 87.5%) -->
+            <Border Grid.Column="2"
+                    Background="{StaticResource GameCardBrush}"
+                    BorderBrush="{StaticResource GameDividerBrush}"
+                    BorderThickness="1"
+                    CornerRadius="14"
+                    Padding="10,8">
+                <UniformGrid Rows="1" Columns="4">
+                    <Border Background="{StaticResource GameSubtleFillBrush}" CornerRadius="9" Padding="6,5" Margin="0,0,5,0">
+                        <StackPanel HorizontalAlignment="Center">
+                            <TextBlock Text="꽝 · 0배" FontSize="11.5" FontWeight="Bold" Foreground="{StaticResource GameTextSecondaryBrush}" HorizontalAlignment="Center" />
+                            <TextBlock Text="25% (1칸)" FontSize="10" Foreground="{StaticResource GameTextMutedBrush}" HorizontalAlignment="Center" Margin="0,1,0,0" />
+                        </StackPanel>
+                    </Border>
+                    <Border Background="{StaticResource GameSubtleFillBrush}" CornerRadius="9" Padding="6,5" Margin="2.5,0">
+                        <StackPanel HorizontalAlignment="Center">
+                            <TextBlock Text="꽝 · 0배" FontSize="11.5" FontWeight="Bold" Foreground="{StaticResource GameTextSecondaryBrush}" HorizontalAlignment="Center" />
+                            <TextBlock Text="25% (1칸)" FontSize="10" Foreground="{StaticResource GameTextMutedBrush}" HorizontalAlignment="Center" Margin="0,1,0,0" />
+                        </StackPanel>
+                    </Border>
+                    <Border Background="{StaticResource GameFreeSoftBrush}" BorderBrush="{StaticResource GameFreeBorderBrush}" BorderThickness="1" CornerRadius="9" Padding="6,5" Margin="2.5,0">
+                        <StackPanel HorizontalAlignment="Center">
+                            <TextBlock Text="본전 · 1배" FontSize="11.5" FontWeight="Bold" Foreground="{StaticResource GameFreeBrush}" HorizontalAlignment="Center" />
+                            <TextBlock Text="25% (1칸)" FontSize="10" Foreground="{StaticResource GameTextSecondaryBrush}" HorizontalAlignment="Center" Margin="0,1,0,0" />
+                        </StackPanel>
+                    </Border>
+                    <Border Background="{StaticResource GamePinkSoftBrush}" BorderBrush="{StaticResource GamePinkBorderBrush}" BorderThickness="1" CornerRadius="9" Padding="6,5" Margin="5,0,0,0">
+                        <StackPanel HorizontalAlignment="Center">
+                            <TextBlock Text="당첨 · 2.5배" FontSize="11.5" FontWeight="Bold" Foreground="{StaticResource GamePinkBrush}" HorizontalAlignment="Center" />
+                            <TextBlock Text="25% (1칸)" FontSize="10" Foreground="{StaticResource GameTextSecondaryBrush}" HorizontalAlignment="Center" Margin="0,1,0,0" />
+                        </StackPanel>
+                    </Border>
+                </UniformGrid>
+            </Border>
+        </Grid>
+
+        <!-- 중앙 게임 영역 (Idle: 4개 시작 위치 선택 / Running: 내 경로 추적 / Result: 정산) -->
+        <Grid Grid.Row="1">
+            <!-- Idle 단계: 시작 위치 1~4번 선택 카드 + 비공개 영역 -->
+            <Border Visibility="{Binding SoloLadderPhase, Converter={StaticResource EnumToVis}, ConverterParameter=Idle}"
+                    Background="{StaticResource GameCardBrush}"
+                    BorderBrush="{StaticResource GameDividerBrush}"
+                    BorderThickness="1"
+                    CornerRadius="16"
+                    Padding="12,8">
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="*" />
+                        <RowDefinition Height="Auto" />
+                    </Grid.RowDefinitions>
+
+                    <DockPanel Grid.Row="0" Margin="0,0,0,6" LastChildFill="False">
+                        <StackPanel DockPanel.Dock="Left">
+                            <TextBlock Text="시작 위치를 선택하세요 (4칸 고정)" FontSize="14" FontWeight="Bold" Foreground="{StaticResource GameTextPrimaryBrush}" />
+                            <TextBlock Text="시작 후 무작위 사다리가 생성되며 내 펫이 선택한 경로만 추적합니다." FontSize="11" Foreground="{StaticResource GameTextSecondaryBrush}" Margin="0,2,0,0" />
+                        </StackPanel>
+                        <Border DockPanel.Dock="Right" Background="{StaticResource GameSubtleFillBrush}" CornerRadius="8" Padding="9,4" VerticalAlignment="Center">
+                            <TextBlock Text="기대 반환율 87.5%" FontSize="11" FontWeight="Bold" Foreground="{StaticResource GameTextSecondaryBrush}" />
+                        </Border>
+                    </DockPanel>
+
+                    <UniformGrid Grid.Row="1" Rows="1" Columns="4" Margin="0,2">
+                        <Button Command="{Binding SelectSoloLadderSlotCommand}" CommandParameter="0" Margin="0,0,5,0" MinHeight="48" Padding="6,4" VerticalAlignment="Stretch" VerticalContentAlignment="Center">
+                            <Button.Style>
+                                <Style TargetType="Button" BasedOn="{StaticResource GameOutlineButtonStyle}">
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding SoloLadderSelectedSlot}" Value="0">
+                                            <Setter Property="Background" Value="{StaticResource GamePinkSoftBrush}" />
+                                            <Setter Property="BorderBrush" Value="{StaticResource GamePinkBrush}" />
+                                            <Setter Property="BorderThickness" Value="2" />
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </Button.Style>
+                            <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" VerticalAlignment="Center">
+                                <Border Width="34" Height="34" CornerRadius="10" Background="White" BorderBrush="{StaticResource GameDividerBrush}" BorderThickness="1" Margin="0,0,8,0">
+                                    <Border.Style>
+                                        <Style TargetType="Border">
+                                            <Setter Property="Visibility" Value="Collapsed" />
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding SoloLadderSelectedSlot}" Value="0">
+                                                    <Setter Property="Visibility" Value="Visible" />
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </Border.Style>
+                                    <Image Source="{Binding MyPetPortrait}" Margin="2" RenderOptions.BitmapScalingMode="HighQuality" />
+                                </Border>
+                                <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
+                                    <TextBlock Text="1번 줄" FontSize="14.5" FontWeight="Bold" Foreground="{StaticResource GameTextPrimaryBrush}" HorizontalAlignment="Center" />
+                                    <TextBlock FontSize="11" FontWeight="SemiBold" Margin="0,2,0,0" HorizontalAlignment="Center">
+                                        <TextBlock.Style>
+                                            <Style TargetType="TextBlock">
+                                                <Setter Property="Text" Value="클릭해서 선택" />
+                                                <Setter Property="Foreground" Value="{StaticResource GameTextMutedBrush}" />
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding SoloLadderSelectedSlot}" Value="0">
+                                                        <Setter Property="Text" Value="내 펫 출발!" />
+                                                        <Setter Property="Foreground" Value="{StaticResource GamePinkBrush}" />
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </TextBlock.Style>
+                                    </TextBlock>
+                                </StackPanel>
+                            </StackPanel>
+                        </Button>
+
+                        <Button Command="{Binding SelectSoloLadderSlotCommand}" CommandParameter="1" Margin="2.5,0" MinHeight="48" Padding="6,4" VerticalAlignment="Stretch" VerticalContentAlignment="Center">
+                            <Button.Style>
+                                <Style TargetType="Button" BasedOn="{StaticResource GameOutlineButtonStyle}">
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding SoloLadderSelectedSlot}" Value="1">
+                                            <Setter Property="Background" Value="{StaticResource GamePinkSoftBrush}" />
+                                            <Setter Property="BorderBrush" Value="{StaticResource GamePinkBrush}" />
+                                            <Setter Property="BorderThickness" Value="2" />
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </Button.Style>
+                            <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" VerticalAlignment="Center">
+                                <Border Width="34" Height="34" CornerRadius="10" Background="White" BorderBrush="{StaticResource GameDividerBrush}" BorderThickness="1" Margin="0,0,8,0">
+                                    <Border.Style>
+                                        <Style TargetType="Border">
+                                            <Setter Property="Visibility" Value="Collapsed" />
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding SoloLadderSelectedSlot}" Value="1">
+                                                    <Setter Property="Visibility" Value="Visible" />
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </Border.Style>
+                                    <Image Source="{Binding MyPetPortrait}" Margin="2" RenderOptions.BitmapScalingMode="HighQuality" />
+                                </Border>
+                                <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
+                                    <TextBlock Text="2번 줄" FontSize="14.5" FontWeight="Bold" Foreground="{StaticResource GameTextPrimaryBrush}" HorizontalAlignment="Center" />
+                                    <TextBlock FontSize="11" FontWeight="SemiBold" Margin="0,2,0,0" HorizontalAlignment="Center">
+                                        <TextBlock.Style>
+                                            <Style TargetType="TextBlock">
+                                                <Setter Property="Text" Value="클릭해서 선택" />
+                                                <Setter Property="Foreground" Value="{StaticResource GameTextMutedBrush}" />
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding SoloLadderSelectedSlot}" Value="1">
+                                                        <Setter Property="Text" Value="내 펫 출발!" />
+                                                        <Setter Property="Foreground" Value="{StaticResource GamePinkBrush}" />
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </TextBlock.Style>
+                                    </TextBlock>
+                                </StackPanel>
+                            </StackPanel>
+                        </Button>
+
+                        <Button Command="{Binding SelectSoloLadderSlotCommand}" CommandParameter="2" Margin="2.5,0" MinHeight="48" Padding="6,4" VerticalAlignment="Stretch" VerticalContentAlignment="Center">
+                            <Button.Style>
+                                <Style TargetType="Button" BasedOn="{StaticResource GameOutlineButtonStyle}">
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding SoloLadderSelectedSlot}" Value="2">
+                                            <Setter Property="Background" Value="{StaticResource GamePinkSoftBrush}" />
+                                            <Setter Property="BorderBrush" Value="{StaticResource GamePinkBrush}" />
+                                            <Setter Property="BorderThickness" Value="2" />
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </Button.Style>
+                            <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" VerticalAlignment="Center">
+                                <Border Width="34" Height="34" CornerRadius="10" Background="White" BorderBrush="{StaticResource GameDividerBrush}" BorderThickness="1" Margin="0,0,8,0">
+                                    <Border.Style>
+                                        <Style TargetType="Border">
+                                            <Setter Property="Visibility" Value="Collapsed" />
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding SoloLadderSelectedSlot}" Value="2">
+                                                    <Setter Property="Visibility" Value="Visible" />
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </Border.Style>
+                                    <Image Source="{Binding MyPetPortrait}" Margin="2" RenderOptions.BitmapScalingMode="HighQuality" />
+                                </Border>
+                                <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
+                                    <TextBlock Text="3번 줄" FontSize="14.5" FontWeight="Bold" Foreground="{StaticResource GameTextPrimaryBrush}" HorizontalAlignment="Center" />
+                                    <TextBlock FontSize="11" FontWeight="SemiBold" Margin="0,2,0,0" HorizontalAlignment="Center">
+                                        <TextBlock.Style>
+                                            <Style TargetType="TextBlock">
+                                                <Setter Property="Text" Value="클릭해서 선택" />
+                                                <Setter Property="Foreground" Value="{StaticResource GameTextMutedBrush}" />
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding SoloLadderSelectedSlot}" Value="2">
+                                                        <Setter Property="Text" Value="내 펫 출발!" />
+                                                        <Setter Property="Foreground" Value="{StaticResource GamePinkBrush}" />
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </TextBlock.Style>
+                                    </TextBlock>
+                                </StackPanel>
+                            </StackPanel>
+                        </Button>
+
+                        <Button Command="{Binding SelectSoloLadderSlotCommand}" CommandParameter="3" Margin="5,0,0,0" MinHeight="48" Padding="6,4" VerticalAlignment="Stretch" VerticalContentAlignment="Center">
+                            <Button.Style>
+                                <Style TargetType="Button" BasedOn="{StaticResource GameOutlineButtonStyle}">
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding SoloLadderSelectedSlot}" Value="3">
+                                            <Setter Property="Background" Value="{StaticResource GamePinkSoftBrush}" />
+                                            <Setter Property="BorderBrush" Value="{StaticResource GamePinkBrush}" />
+                                            <Setter Property="BorderThickness" Value="2" />
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </Button.Style>
+                            <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" VerticalAlignment="Center">
+                                <Border Width="34" Height="34" CornerRadius="10" Background="White" BorderBrush="{StaticResource GameDividerBrush}" BorderThickness="1" Margin="0,0,8,0">
+                                    <Border.Style>
+                                        <Style TargetType="Border">
+                                            <Setter Property="Visibility" Value="Collapsed" />
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding SoloLadderSelectedSlot}" Value="3">
+                                                    <Setter Property="Visibility" Value="Visible" />
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </Border.Style>
+                                    <Image Source="{Binding MyPetPortrait}" Margin="2" RenderOptions.BitmapScalingMode="HighQuality" />
+                                </Border>
+                                <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
+                                    <TextBlock Text="4번 줄" FontSize="14.5" FontWeight="Bold" Foreground="{StaticResource GameTextPrimaryBrush}" HorizontalAlignment="Center" />
+                                    <TextBlock FontSize="11" FontWeight="SemiBold" Margin="0,2,0,0" HorizontalAlignment="Center">
+                                        <TextBlock.Style>
+                                            <Style TargetType="TextBlock">
+                                                <Setter Property="Text" Value="클릭해서 선택" />
+                                                <Setter Property="Foreground" Value="{StaticResource GameTextMutedBrush}" />
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding SoloLadderSelectedSlot}" Value="3">
+                                                        <Setter Property="Text" Value="내 펫 출발!" />
+                                                        <Setter Property="Foreground" Value="{StaticResource GamePinkBrush}" />
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </TextBlock.Style>
+                                    </TextBlock>
+                                </StackPanel>
+                            </StackPanel>
+                        </Button>
+                    </UniformGrid>
+
+                    <!-- 시작 전 비공개 사다리 하단 안내 -->
+                    <UniformGrid Grid.Row="2" Rows="1" Columns="4" Margin="0,6,0,0">
+                        <Border Background="{StaticResource GameSubtleFillBrush}" CornerRadius="9" Padding="8,4" Margin="0,0,5,0">
+                            <TextBlock Text="?" FontSize="12.5" FontWeight="Bold" Foreground="{StaticResource GameTextMutedBrush}" HorizontalAlignment="Center" />
+                        </Border>
+                        <Border Background="{StaticResource GameSubtleFillBrush}" CornerRadius="9" Padding="8,4" Margin="2.5,0">
+                            <TextBlock Text="?" FontSize="12.5" FontWeight="Bold" Foreground="{StaticResource GameTextMutedBrush}" HorizontalAlignment="Center" />
+                        </Border>
+                        <Border Background="{StaticResource GameSubtleFillBrush}" CornerRadius="9" Padding="8,4" Margin="2.5,0">
+                            <TextBlock Text="?" FontSize="12.5" FontWeight="Bold" Foreground="{StaticResource GameTextMutedBrush}" HorizontalAlignment="Center" />
+                        </Border>
+                        <Border Background="{StaticResource GameSubtleFillBrush}" CornerRadius="9" Padding="8,4" Margin="5,0,0,0">
+                            <TextBlock Text="?" FontSize="12.5" FontWeight="Bold" Foreground="{StaticResource GameTextMutedBrush}" HorizontalAlignment="Center" />
+                        </Border>
+                    </UniformGrid>
+                </Grid>
+            </Border>
+
+            <!-- Running 단계: 단일 경로 사다리 캔버스 -->
+            <Border Visibility="{Binding SoloLadderPhase, Converter={StaticResource EnumToVis}, ConverterParameter=Running}"
+                    Background="{StaticResource GameCardBrush}"
+                    BorderBrush="{StaticResource GameDividerBrush}"
+                    BorderThickness="1"
+                    CornerRadius="16"
+                    Padding="16,12">
+                <Canvas x:Name="SoloLadderCanvas"
+                        ClipToBounds="True"
+                        SizeChanged="SoloLadderCanvas_SizeChanged" />
+            </Border>
+
+            <!-- Result 단계: 사용 코인 / 획득 코인 / 순손익 + 4칸 실제 배치 -->
+            <Grid Visibility="{Binding SoloLadderPhase, Converter={StaticResource EnumToVis}, ConverterParameter=Result}">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="*" />
+                    <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
+
+                <Border Grid.Row="0"
+                        Background="{StaticResource GamePinkSoftBrush}"
+                        BorderBrush="{StaticResource GamePinkBorderBrush}"
+                        BorderThickness="1.2"
+                        CornerRadius="16"
+                        Padding="18,14"
+                        Margin="0,0,0,10">
+                    <DockPanel LastChildFill="False">
+                        <StackPanel DockPanel.Dock="Left" VerticalAlignment="Center">
+                            <TextBlock Text="{Binding SoloLadderResultHeadline}" FontSize="16.5" FontWeight="Bold" Foreground="{StaticResource GameTextPrimaryBrush}" />
+                            <TextBlock Text="{Binding SoloLadderResultDetailText}" FontSize="12" FontWeight="SemiBold" Foreground="{StaticResource GameTextSecondaryBrush}" Margin="0,3,0,0" />
+                        </StackPanel>
+                        <Image DockPanel.Dock="Right" Source="{Binding MyPetPortrait}" Width="44" Height="44" RenderOptions.BitmapScalingMode="HighQuality" />
+                    </DockPanel>
+                </Border>
+
+                <Border Grid.Row="1"
+                        Background="{StaticResource GameCardBrush}"
+                        BorderBrush="{StaticResource GameDividerBrush}"
+                        BorderThickness="1"
+                        CornerRadius="16"
+                        Padding="18,16">
+                    <StackPanel VerticalAlignment="Center">
+                        <UniformGrid Rows="1" Columns="3" Margin="0,0,0,14">
+                            <Border Background="{StaticResource GameSubtleFillBrush}" CornerRadius="12" Padding="14,12" Margin="0,0,6,0">
+                                <StackPanel>
+                                    <TextBlock Text="사용 코인" FontSize="11.5" Foreground="{StaticResource GameTextSecondaryBrush}" />
+                                    <TextBlock Text="{Binding SoloLadderLastSpentText}" FontSize="17" FontWeight="Bold" Foreground="{StaticResource GameTextPrimaryBrush}" Margin="0,4,0,0" />
+                                </StackPanel>
+                            </Border>
+                            <Border Background="{StaticResource GameCoinSoftBrush}" BorderBrush="{StaticResource GameCoinBorderBrush}" BorderThickness="1" CornerRadius="12" Padding="14,12" Margin="3,0">
+                                <StackPanel>
+                                    <TextBlock Text="획득 코인" FontSize="11.5" Foreground="{StaticResource GameCoinBrush}" FontWeight="SemiBold" />
+                                    <TextBlock Text="{Binding SoloLadderLastPayoutText}" FontSize="17" FontWeight="Bold" Foreground="{StaticResource GameTextPrimaryBrush}" Margin="0,4,0,0" />
+                                </StackPanel>
+                            </Border>
+                            <Border Background="{StaticResource GameSubtleFillBrush}" CornerRadius="12" Padding="14,12" Margin="6,0,0,0">
+                                <StackPanel>
+                                    <TextBlock Text="순손익" FontSize="11.5" Foreground="{StaticResource GameTextSecondaryBrush}" />
+                                    <TextBlock Text="{Binding SoloLadderLastNetText}" FontSize="17" FontWeight="Bold" Margin="0,4,0,0">
+                                        <TextBlock.Style>
+                                            <Style TargetType="TextBlock">
+                                                <Setter Property="Foreground" Value="{StaticResource GameLossBrush}" />
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding SoloLadderLastNetIsPositive}" Value="True">
+                                                        <Setter Property="Foreground" Value="{StaticResource GameWinBrush}" />
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </TextBlock.Style>
+                                    </TextBlock>
+                                </StackPanel>
+                            </Border>
+                        </UniformGrid>
+
+                        <TextBlock Text="이번 판 4칸 보상 배치" FontSize="12" FontWeight="Bold" Foreground="{StaticResource GameTextSecondaryBrush}" Margin="0,0,0,6" />
+                        <UniformGrid Rows="1" Columns="4">
+                            <Border Background="{StaticResource GameSubtleFillBrush}" CornerRadius="10" Padding="8,7" Margin="0,0,5,0">
+                                <TextBlock Text="{Binding SoloLadderRevealedSlotLabels[0]}" FontSize="12" FontWeight="Bold" HorizontalAlignment="Center" Foreground="{StaticResource GameTextPrimaryBrush}" />
+                            </Border>
+                            <Border Background="{StaticResource GameSubtleFillBrush}" CornerRadius="10" Padding="8,7" Margin="2.5,0">
+                                <TextBlock Text="{Binding SoloLadderRevealedSlotLabels[1]}" FontSize="12" FontWeight="Bold" HorizontalAlignment="Center" Foreground="{StaticResource GameTextPrimaryBrush}" />
+                            </Border>
+                            <Border Background="{StaticResource GameSubtleFillBrush}" CornerRadius="10" Padding="8,7" Margin="2.5,0">
+                                <TextBlock Text="{Binding SoloLadderRevealedSlotLabels[2]}" FontSize="12" FontWeight="Bold" HorizontalAlignment="Center" Foreground="{StaticResource GameTextPrimaryBrush}" />
+                            </Border>
+                            <Border Background="{StaticResource GameSubtleFillBrush}" CornerRadius="10" Padding="8,7" Margin="5,0,0,0">
+                                <TextBlock Text="{Binding SoloLadderRevealedSlotLabels[3]}" FontSize="12" FontWeight="Bold" HorizontalAlignment="Center" Foreground="{StaticResource GameTextPrimaryBrush}" />
+                            </Border>
+                        </UniformGrid>
+                    </StackPanel>
+                </Border>
+
+                <DockPanel Grid.Row="2" Margin="0,12,0,0" LastChildFill="False">
+                    <TextBlock DockPanel.Dock="Left"
+                               Text="{Binding SoloLadderStatusText}"
+                               FontSize="12"
+                               FontWeight="SemiBold"
+                               Foreground="{StaticResource GameTextSecondaryBrush}"
+                               VerticalAlignment="Center"
+                               MaxWidth="420"
+                               TextTrimming="CharacterEllipsis" />
+                    <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
+                        <Button Style="{StaticResource GameSecondaryButtonStyle}"
+                                Command="{Binding NavigateToDashboardCommand}"
+                                Content="게임 목록"
+                                Height="40"
+                                Margin="0,0,8,0" />
+                        <Button Style="{StaticResource GamePrimaryButtonStyle}"
+                                Command="{Binding ResetSoloLadderCommand}"
+                                Content="다시 플레이"
+                                MinWidth="136"
+                                Height="40" />
+                    </StackPanel>
+                </DockPanel>
+            </Grid>
+        </Grid>
+
+        <!-- 하단 조작 바 (Idle 단계: 참가 코인 10/30/50/100 + 최대 보상 + 게임 시작 버튼) -->
+        <Grid Grid.Row="2" Margin="0,8,0,0">
+            <DockPanel LastChildFill="False"
+                       Visibility="{Binding IsSoloLadderIdle, Converter={StaticResource BoolToVis}}">
+                <StackPanel DockPanel.Dock="Left" Orientation="Horizontal" VerticalAlignment="Center">
+                    <Border Background="{StaticResource GameSubtleFillBrush}" CornerRadius="12" Padding="4">
+                        <StackPanel Orientation="Horizontal">
+                            <RadioButton Content="10 코인" Style="{StaticResource GameSegmentRadioStyle}" GroupName="SoloLadderBetGroup" Padding="10,6"
+                                         IsChecked="{Binding SoloLadderBetCoins, Converter={StaticResource EnumEquals}, ConverterParameter=10}" />
+                            <RadioButton Content="30 코인" Style="{StaticResource GameSegmentRadioStyle}" GroupName="SoloLadderBetGroup" Padding="10,6"
+                                         IsChecked="{Binding SoloLadderBetCoins, Converter={StaticResource EnumEquals}, ConverterParameter=30}" />
+                            <RadioButton Content="50 코인" Style="{StaticResource GameSegmentRadioStyle}" GroupName="SoloLadderBetGroup" Padding="10,6"
+                                         IsChecked="{Binding SoloLadderBetCoins, Converter={StaticResource EnumEquals}, ConverterParameter=50}" />
+                            <RadioButton Content="100 코인" Style="{StaticResource GameSegmentRadioStyle}" GroupName="SoloLadderBetGroup" Padding="10,6"
+                                         IsChecked="{Binding SoloLadderBetCoins, Converter={StaticResource EnumEquals}, ConverterParameter=100}" />
+                        </StackPanel>
+                    </Border>
+                    <Border Background="{StaticResource GamePinkSoftBrush}" CornerRadius="10" Padding="10,6" Margin="10,0,0,0" VerticalAlignment="Center">
+                        <TextBlock FontSize="11.5" FontWeight="Bold" Foreground="{StaticResource GamePinkBrush}">
+                            <Run Text="당첨 시 최대 " /><Run Text="{Binding SoloLadderMaxPayoutText, Mode=OneWay}" />
+                        </TextBlock>
+                    </Border>
+                </StackPanel>
+
+                <Button DockPanel.Dock="Right"
+                        Style="{StaticResource GamePrimaryButtonStyle}"
+                        Command="{Binding StartSoloLadderCommand}"
+                        IsEnabled="{Binding CanStartSoloLadder}"
+                        Content="게임 시작"
+                        MinWidth="150"
+                        Height="40" />
+            </DockPanel>
+
+            <TextBlock Visibility="{Binding IsSoloLadderRunning, Converter={StaticResource BoolToVis}}"
+                       Text="{Binding SoloLadderStatusText}"
+                       FontSize="12.5"
+                       FontWeight="SemiBold"
+                       Foreground="{StaticResource GamePinkBrush}"
+                       HorizontalAlignment="Center" />
+        </Grid>
+    </Grid>
+</UserControl>

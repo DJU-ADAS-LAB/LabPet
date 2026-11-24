@@ -67,8 +67,11 @@ public sealed partial class HubViewModel : ObservableObject, IDisposable
 
     public string CurrentPageTitle => FindNavItem(SelectedPage)?.Title ?? "홈";
     public string CurrentPageSubtitle => FindNavItem(SelectedPage)?.Subtitle ?? string.Empty;
-    public string LevelBadgeText => $"Lv.{Level}";
-    public string CoinsBadgeText => $"{Coins} 코인";
+    public string LevelBadgeText => Level >= LabPet.Client.Solo.PetEconomyService.MaxLevel
+        ? $"Lv.{LabPet.Client.Solo.PetEconomyService.MaxLevel} MAX"
+        : $"Lv.{Level}";
+    public string CoinsBadgeText => $"{LabPet.Client.Formatting.CompactNumberFormatter.Format(Coins)} 코인";
+    public string CoinsBadgeTooltip => $"보유 코인: {LabPet.Client.Formatting.CompactNumberFormatter.FormatExact(Coins)} 코인";
 
     public HubViewModel(
         IHubNavigationService navigation,
@@ -101,6 +104,7 @@ public sealed partial class HubViewModel : ObservableObject, IDisposable
         _petViewModel.ProfileUpdated += OnPetProfileUpdated;
         _petViewModel.ProfileProgressUpdated += OnPetProfileUpdated;
         Games.ProfileChanged += OnGamesProfileChanged;
+        Games.Economy.EconomyStateChanged += OnEconomyStateChanged;
         _navigation.Navigated += OnNavigated;
 
         RefreshPetSummary(_petViewModel.CurrentProfile);
@@ -118,6 +122,7 @@ public sealed partial class HubViewModel : ObservableObject, IDisposable
         _petViewModel.ProfileUpdated -= OnPetProfileUpdated;
         _petViewModel.ProfileProgressUpdated -= OnPetProfileUpdated;
         Games.ProfileChanged -= OnGamesProfileChanged;
+        Games.Economy.EconomyStateChanged -= OnEconomyStateChanged;
         _navigation.Navigated -= OnNavigated;
     }
 
@@ -126,11 +131,12 @@ public sealed partial class HubViewModel : ObservableObject, IDisposable
         ArgumentNullException.ThrowIfNull(profile);
         PetName = string.IsNullOrWhiteSpace(profile.PetName) ? "모찌" : profile.PetName;
         OwnerName = profile.OwnerName ?? string.Empty;
-        Level = profile.SoloProgress.Level;
-        Coins = profile.SoloProgress.Coins;
+        Level = Math.Clamp(profile.SoloProgress.Level, LabPet.Client.Solo.PetEconomyService.MinLevel, LabPet.Client.Solo.PetEconomyService.MaxLevel);
+        Coins = Math.Max(0, profile.SoloProgress.Coins);
         PetPortrait = _portraitRenderer.GetPortrait(profile.Appearance);
         OnPropertyChanged(nameof(LevelBadgeText));
         OnPropertyChanged(nameof(CoinsBadgeText));
+        OnPropertyChanged(nameof(CoinsBadgeTooltip));
     }
 
     public void SyncSelectedPage(HubPage page)
@@ -168,6 +174,18 @@ public sealed partial class HubViewModel : ObservableObject, IDisposable
     private void OnPetProfileUpdated(object? sender, PetProfile profile) => RefreshPetSummary(profile);
     private void OnGamesProfileChanged(object? sender, PetProfile profile) => RefreshPetSummary(profile);
     private void OnNavigated(object? sender, NavigationRequest request) => SyncSelectedPage(request.Page);
+
+    private void OnEconomyStateChanged(object? sender, LabPet.Client.Solo.EconomyChangedEventArgs e)
+    {
+        var dispatcher = System.Windows.Application.Current?.Dispatcher;
+        if (dispatcher is not null && !dispatcher.CheckAccess())
+        {
+            dispatcher.BeginInvoke(() => RefreshPetSummary(_petViewModel.CurrentProfile));
+            return;
+        }
+
+        RefreshPetSummary(_petViewModel.CurrentProfile);
+    }
 
     private HubNavigationItemViewModel? FindNavItem(HubPage page)
     {

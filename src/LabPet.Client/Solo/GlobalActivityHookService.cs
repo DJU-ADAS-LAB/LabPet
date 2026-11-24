@@ -12,9 +12,32 @@ public sealed class GlobalActivityHookService : IDisposable
     private const int WhKeyboardLl = 13;
     private const int WhMouseLl = 14;
     private const int WmKeyDown = 0x0100;
+    private const int WmKeyUp = 0x0101;
     private const int WmSysKeyDown = 0x0104;
+    private const int WmSysKeyUp = 0x0105;
     private const int WmLButtonDown = 0x0201;
     private const int WmRButtonDown = 0x0204;
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct KbdLlHookStruct
+    {
+        public uint VkCode;
+        public uint ScanCode;
+        public uint Flags;
+        public uint Time;
+        public UIntPtr DwExtraInfo;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct MsLlHookStruct
+    {
+        public int PtX;
+        public int PtY;
+        public uint MouseData;
+        public uint Flags;
+        public uint Time;
+        public UIntPtr DwExtraInfo;
+    }
 
     private delegate IntPtr LowLevelHookProc(int nCode, IntPtr wParam, IntPtr lParam);
 
@@ -34,8 +57,13 @@ public sealed class GlobalActivityHookService : IDisposable
     // GC 수집 방지를 위해 델리게이트를 필드로 유지
     private readonly LowLevelHookProc _keyboardProc;
     private readonly LowLevelHookProc _mouseProc;
+    private readonly ActivityAntiAbuseFilter _antiAbuseFilter = new();
     private IntPtr _keyboardHook = IntPtr.Zero;
     private IntPtr _mouseHook = IntPtr.Zero;
+
+    public ActivityAntiAbuseFilter AntiAbuseFilter => _antiAbuseFilter;
+
+    public void ResetAntiAbuseState() => _antiAbuseFilter.Reset();
 
     private long _pendingKeystrokes;
     private long _pendingMouseClicks;
@@ -99,10 +127,22 @@ public sealed class GlobalActivityHookService : IDisposable
 
     private IntPtr KeyboardHookCallback(int nCode, IntPtr wParam, IntPtr lParam)
     {
-        if (nCode >= 0 && (wParam == (IntPtr)WmKeyDown || wParam == (IntPtr)WmSysKeyDown))
+        if (nCode >= 0 && lParam != IntPtr.Zero)
         {
-            Interlocked.Increment(ref _pendingKeystrokes);
-            KeyTyped?.Invoke();
+            if (wParam == (IntPtr)WmKeyDown || wParam == (IntPtr)WmSysKeyDown)
+            {
+                var kbd = Marshal.PtrToStructure<KbdLlHookStruct>(lParam);
+                if (_antiAbuseFilter.TryAcceptKeyDown(kbd.VkCode, kbd.Flags))
+                {
+                    Interlocked.Increment(ref _pendingKeystrokes);
+                    KeyTyped?.Invoke();
+                }
+            }
+            else if (wParam == (IntPtr)WmKeyUp || wParam == (IntPtr)WmSysKeyUp)
+            {
+                var kbd = Marshal.PtrToStructure<KbdLlHookStruct>(lParam);
+                _antiAbuseFilter.NotifyKeyUp(kbd.VkCode);
+            }
         }
 
         return CallNextHookEx(_keyboardHook, nCode, wParam, lParam);
@@ -110,9 +150,13 @@ public sealed class GlobalActivityHookService : IDisposable
 
     private IntPtr MouseHookCallback(int nCode, IntPtr wParam, IntPtr lParam)
     {
-        if (nCode >= 0 && (wParam == (IntPtr)WmLButtonDown || wParam == (IntPtr)WmRButtonDown))
+        if (nCode >= 0 && lParam != IntPtr.Zero && (wParam == (IntPtr)WmLButtonDown || wParam == (IntPtr)WmRButtonDown))
         {
-            Interlocked.Increment(ref _pendingMouseClicks);
+            var mouse = Marshal.PtrToStructure<MsLlHookStruct>(lParam);
+            if (_antiAbuseFilter.TryAcceptMouseClick(mouse.Flags))
+            {
+                Interlocked.Increment(ref _pendingMouseClicks);
+            }
         }
 
         return CallNextHookEx(_mouseHook, nCode, wParam, lParam);

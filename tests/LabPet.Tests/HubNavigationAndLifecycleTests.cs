@@ -325,11 +325,11 @@ public sealed class HubNavigationAndLifecycleTests : IDisposable
                 Assert.Equal("새이름모찌", appearanceView.EditorViewModel.PetName);
                 Assert.True(appearanceView.HasUnsavedChanges);
 
-                // 3. 편집 중 획득한 라이브 코인·XP는 저장 시 덮어쓰지 않고 보존되어야 함
+                // 3. 편집 중 획득한 라이브 코인·레벨은 저장 시 덮어쓰지 않고 보존되어야 함
                 h.PetVm.CurrentProfile.SoloProgress.Coins += 500;
-                h.PetVm.CurrentProfile.SoloProgress.Xp += 42;
+                h.PetVm.CurrentProfile.SoloProgress.Level = 5;
                 var expectedCoins = h.PetVm.CurrentProfile.SoloProgress.Coins;
-                var expectedXp = h.PetVm.CurrentProfile.SoloProgress.Xp;
+                var expectedLevel = h.PetVm.CurrentProfile.SoloProgress.Level;
 
                 await appearanceView.EditorViewModel.SaveCommand.ExecuteAsync(null);
                 Assert.False(appearanceView.HasUnsavedChanges);
@@ -337,7 +337,8 @@ public sealed class HubNavigationAndLifecycleTests : IDisposable
                 Assert.Equal(1.25, h.PetVm.CurrentProfile.PetScale, 2);
                 Assert.Equal(0.80, h.PetVm.CurrentProfile.PetOpacity, 2);
                 Assert.Equal(expectedCoins, h.PetVm.CurrentProfile.SoloProgress.Coins);
-                Assert.Equal(expectedXp, h.PetVm.CurrentProfile.SoloProgress.Xp);
+                Assert.Equal(expectedLevel, h.PetVm.CurrentProfile.SoloProgress.Level);
+                Assert.Equal(0, h.PetVm.CurrentProfile.SoloProgress.Xp);
 
                 // 4. 변경 후 취소 실행 시 저장된 값으로 원복
                 appearanceView.EditorViewModel.PetName = "취소될이름";

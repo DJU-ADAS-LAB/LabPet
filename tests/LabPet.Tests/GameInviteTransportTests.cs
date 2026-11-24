@@ -95,6 +95,12 @@ public sealed class GameInviteTransportTests
                 b.BindProfile(guest);
                 a.RpsWager = b.RpsWager = 30;
 
+                // 최초에는 아무 친구도 자동 선택되지 않으며, 선택 후 오프라인 전환 시 타인을 임의 선택하지 않는다.
+                Assert.Null(a.SelectedRpsFriend);
+                Assert.Null(a.SelectedTypingFriend);
+                Assert.Equal(0, a.SelectedLadderInviteeCount);
+
+                a.SelectedRpsFriend = a.OnlineFriends.First(f => f.Friend.PetId == guest.PetId);
                 a.InviteExpireSeconds = 0.8;
                 hostTransport.Filter = (p, send) => p.Action == "offer" ? Task.FromResult(true) : send();
                 await a.SendRpsInviteCommand.ExecuteAsync(null);
@@ -116,10 +122,11 @@ public sealed class GameInviteTransportTests
                 Assert.Null(a.SelectedRpsFriend);
                 Assert.Null(a.SelectedTypingFriend);
                 await a.SendRpsInviteCommand.ExecuteAsync(null);
-                Assert.Contains("오프라인", a.RpsStatusText);
+                Assert.Contains("선택해 주세요", a.RpsStatusText);
                 hostTransport.OverridePeers = null;
                 a.RefreshOnlineFriends();
-                Assert.Equal(guest.PetId, a.SelectedRpsFriend?.Friend.PetId);
+                Assert.Null(a.SelectedRpsFriend);
+                a.SelectedRpsFriend = a.OnlineFriends.First(f => f.Friend.PetId == guest.PetId);
 
                 a.InviteExpireSeconds = 1;
                 DateTimeOffset? sentDeadline = null;
@@ -186,6 +193,7 @@ public sealed class GameInviteTransportTests
                     return await send();
                 }
                 hostTransport.Filter = guestTransport.Filter = DelayOffer;
+                b.SelectedRpsFriend = b.OnlineFriends.First(f => f.Friend.PetId == host.PetId);
                 var outgoingA = a.SendRpsInviteCommand.ExecuteAsync(null);
                 var outgoingB = b.SendRpsInviteCommand.ExecuteAsync(null);
                 simultaneous.SetResult();
@@ -198,8 +206,14 @@ public sealed class GameInviteTransportTests
 
                 guest.SoloProgress.Coins = 0;
                 await a.SendRpsInviteCommand.ExecuteAsync(null);
+                await UntilAsync(() => b.HasIncomingInvite && a.RpsWaitState.OpponentResponseStatusText.Contains("코인 부족", StringComparison.Ordinal));
+                Assert.True(b.HasIncomingInviteInsufficientCoins);
+                Assert.False(b.CanAcceptIncomingInvite);
+                await b.AcceptIncomingInviteAsync();
+                Assert.True(b.HasIncomingInvite);
+                await b.DeclineIncomingInviteAsync();
                 await UntilAsync(() => !a.IsRpsWaitingResponse);
-                Assert.Contains("상대의 참가 코인", a.RpsStatusText);
+                Assert.Contains("코인", a.RpsStatusText);
                 Assert.False(b.HasIncomingInvite);
                 Assert.Equal(100, host.SoloProgress.Coins);
                 guest.SoloProgress.Coins = 100;
@@ -264,6 +278,7 @@ public sealed class GameInviteTransportTests
                 Assert.Empty(guest.SoloProgress.PendingGameWagers);
                 hostTransport.Filter = guestTransport.Filter = null;
 
+                a.SelectedTypingFriend = a.OnlineFriends.First(f => f.Friend.PetId == guest.PetId);
                 a.TypingWager = 10;
                 a.TypingCountdownDurationSeconds = b.TypingCountdownDurationSeconds = 0.3;
                 a.TypingSprintDurationSeconds = b.TypingSprintDurationSeconds = 0.3;
@@ -286,6 +301,7 @@ public sealed class GameInviteTransportTests
                 Assert.Equal(100, host.SoloProgress.Coins);
                 Assert.Equal(100, guest.SoloProgress.Coins);
 
+                a.LadderFriendPicker.SelectAllCommand.Execute(null);
                 a.LadderEntryFee = 0;
                 a.LadderPrizesText = "커피 x1, 통과 x1";
                 await a.OpenLadderRoomCommand.ExecuteAsync(null);

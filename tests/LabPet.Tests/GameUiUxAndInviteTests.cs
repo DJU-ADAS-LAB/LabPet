@@ -478,29 +478,31 @@ public sealed class GameUiUxAndInviteTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task Ladder_EightPlayersResizeAndCloseReopen_PreservesAnimationWithoutPrematureSettle()
+    public async Task SoloLadderResizeAndCloseReopen_PreservesAnimationWithoutPrematureSettle()
     {
         await WpfTestHost.RunAsync(async () =>
         {
             var portraitRenderer = new PetPortraitRenderer(new BlenderAssetPetMeshFactory(new ProceduralPetMeshFactory()));
             using var hostGames = new CoinGamesViewModel(_hostStore, new SoloProgressionService(), _hostSocial, portraitRenderer);
             hostGames.BindProfile(_hostProfile);
-            hostGames.LadderEntryFee = 0;
-            hostGames.LadderParticipantsText = "승민, 대현, 민수, 지영, 현우, 서연, 도윤, 하은";
-            hostGames.LadderPrizesText = "커피 x1, 간식 x1, 통과 x6";
-            await hostGames.RunLadderCommand.ExecuteAsync(null);
+            hostGames.IsLadderMultiplayerMode = false;
+            hostGames.SelectSoloLadderSlotCommand.Execute(1);
+            hostGames.SoloLadderBetCoins = 30;
+            await hostGames.StartSoloLadderCommand.ExecuteAsync(null);
 
-            Assert.True(hostGames.IsLadderAnimating);
-            Assert.Equal(LadderStage.Running, hostGames.LadderStage);
+            Assert.True(hostGames.IsSoloLadderRunning);
+            Assert.Equal(SoloLadderPhase.Running, hostGames.SoloLadderPhase);
+            Assert.Equal(170, _hostProfile.SoloProgress.Coins);
+            Assert.NotNull(_hostProfile.SoloProgress.PendingSoloLadderSession);
 
-            // 사다리 뷰를 오프스크린 창에 마운트해 실제 IsVisible 상태에서 8명 반응형 리사이즈·창 닫기 후 재오픈 복원을 검증한다
+            // 솔로 사다리 뷰를 오프스크린 창에 마운트해 실제 IsVisible 상태에서 반응형 리사이즈·창 닫기 후 재오픈 복원을 검증한다
             hostGames.ActiveGameScreen = GameScreen.Ladder;
             var hostWin = new Window
             {
                 Left = -20000,
                 Top = -20000,
-                Width = 760,
-                Height = 520,
+                Width = 840,
+                Height = 580,
                 ShowActivated = false,
                 Content = new GamesHubView { DataContext = hostGames }
             };
@@ -510,23 +512,28 @@ public sealed class GameUiUxAndInviteTests : IAsyncLifetime
             hostWin.Width = 1120;
             hostWin.Height = 720;
             hostWin.UpdateLayout();
-            await Task.Delay(140);
+            await Task.Delay(120);
             await WpfTestHost.FlushAsync();
 
             // 창을 닫아도 완료 전에는 절대 강제 공개·정산하지 않고 진행률만 자동 보존한다
-            hostGames.RevealLadderParticipantResult(0);
             hostWin.Close();
             await WpfTestHost.FlushAsync();
 
-            Assert.True(hostGames.IsLadderAnimating);
-            Assert.Equal(LadderStage.Running, hostGames.LadderStage);
-            Assert.InRange(hostGames.ActiveLadderAnimationProgress, 0.01, 0.99);
-            Assert.EndsWith("→  ?", hostGames.LadderResultLines[1]);
+            Assert.True(hostGames.IsSoloLadderRunning);
+            Assert.Equal(SoloLadderPhase.Running, hostGames.SoloLadderPhase);
+            Assert.InRange(hostGames.ActiveSoloLadderAnimationProgress, 0.01, 0.99);
+            Assert.Equal(170, _hostProfile.SoloProgress.Coins);
 
-            hostGames.SaveLadderAnimationProgress(0.45);
-            Assert.Equal(0.45, hostGames.ActiveLadderAnimationProgress, precision: 3);
+            hostGames.SaveSoloLadderAnimationProgress(0.45);
+            Assert.Equal(0.45, hostGames.ActiveSoloLadderAnimationProgress, precision: 3);
 
-            // 새 창으로 재오픈 시 상태 복원 후 완료 시 결과 단계로 1회 정산된다
+            // 새 ViewModel + 창으로 재오픈 시 기존 세션이 리롤 없이 복원되고 완료 시 1회만 정산된다
+            using var reopenedGames = new CoinGamesViewModel(_hostStore, new SoloProgressionService(), _hostSocial, portraitRenderer);
+            reopenedGames.BindProfile(await _hostStore.LoadProfileAsync());
+            reopenedGames.ActiveGameScreen = GameScreen.Ladder;
+            Assert.Equal(SoloLadderPhase.Running, reopenedGames.SoloLadderPhase);
+            Assert.Equal(170, _hostProfile.SoloProgress.Coins);
+
             var reopenedWin = new Window
             {
                 Left = -20000,
@@ -534,16 +541,16 @@ public sealed class GameUiUxAndInviteTests : IAsyncLifetime
                 Width = 900,
                 Height = 620,
                 ShowActivated = false,
-                Content = new GamesHubView { DataContext = hostGames }
+                Content = new GamesHubView { DataContext = reopenedGames }
             };
             reopenedWin.Show();
             await WpfTestHost.FlushAsync();
 
-            await hostGames.CompleteLadderRevealAsync();
-            Assert.False(hostGames.IsLadderAnimating);
-            Assert.Equal(LadderStage.Result, hostGames.LadderStage);
-            Assert.Equal(8, hostGames.LadderResultCards.Count);
-            Assert.Contains("무료 모드", hostGames.LadderResultSettlementText);
+            await reopenedGames.CompleteSoloLadderTraceAsync();
+            await reopenedGames.CompleteSoloLadderTraceAsync();
+            Assert.False(reopenedGames.IsSoloLadderRunning);
+            Assert.Equal(SoloLadderPhase.Result, reopenedGames.SoloLadderPhase);
+            Assert.Null((await _hostStore.LoadProfileAsync()).SoloProgress.PendingSoloLadderSession);
 
             reopenedWin.Close();
             portraitRenderer.ClearCache();
@@ -603,6 +610,7 @@ public sealed class GameUiUxAndInviteTests : IAsyncLifetime
 
             // 2. 사다리 초대 수락 시 대시보드 없이 Lobby 진입
             guestGames.OpenGameScreenCommand.Execute(GameScreen.Dashboard);
+            hostGames.LadderFriendPicker.SelectAllCommand.Execute(null);
             hostGames.LadderEntryFee = 0;
             hostGames.LadderPrizesText = "커피 x1, 통과 x1";
             var invitedLadder = WaitUntilAsync(guestGames, () => guestGames.HasIncomingInvite);
@@ -628,9 +636,11 @@ public sealed class GameUiUxAndInviteTests : IAsyncLifetime
             using var hostGames = new CoinGamesViewModel(_hostStore, new SoloProgressionService(), _hostSocial, portraitRenderer);
             hostGames.BindProfile(_hostProfile);
 
-            // 인증된 친구가 이름을 바꾸어 재연결(PresenceSync)하면 온라인 친구·사다리 후보가 자동 갱신된다
+            // 초기에는 아무도 선택되지 않으며, 선택한 친구는 이름 변경 재연결 후에도 PetId 기준으로 선택이 유지된다.
             var candidate = Assert.Single(hostGames.LadderInviteCandidates);
-            Assert.True(candidate.IsSelected);
+            Assert.False(candidate.IsSelected);
+            hostGames.LadderFriendPicker.SetSelection(_guestProfile.PetId, true, raiseEvent: true);
+            Assert.True(Assert.Single(hostGames.LadderInviteCandidates).IsSelected);
             _guestProfile.PetName = "몽실-재접속";
             await _guestSocial.UpdateLocalPresenceAsync(_guestProfile, isMusicActive: false);
             var updatedVisible = WaitUntilAsync(hostGames,
@@ -849,7 +859,7 @@ public sealed class GameUiUxAndInviteTests : IAsyncLifetime
             var hub = new SoloHubViewModel(pomodoroSvc, analyzer, gamesVm);
             hub.BindProfile(profile);
             Assert.Equal(6, hub.CoinEarningGuides.Count);
-            Assert.Contains(hub.CoinEarningGuides, item => item.ConditionText.Contains("40타") && item.RewardBadge == "+2 코인");
+            Assert.Contains(hub.CoinEarningGuides, item => item.ConditionText.Contains("200타") && item.RewardBadge == "+1 코인");
             hub.SetPomodoroPresetCommand.Execute("15");
             Assert.Equal("15:00", hub.PomodoroTimeText);
             hub.SelectSectionCommand.Execute(SoloHubSection.Games);

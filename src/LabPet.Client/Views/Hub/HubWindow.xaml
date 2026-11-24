@@ -308,7 +308,8 @@
                                         BorderThickness="1"
                                         CornerRadius="9"
                                         Padding="9,4"
-                                        Margin="0,0,12,0">
+                                        Margin="0,0,12,0"
+                                        ToolTip="{Binding CoinsBadgeTooltip}">
                                     <StackPanel Orientation="Horizontal">
                                         <Path Data="{StaticResource IconCoinGeometry}"
                                               Width="12.5"
@@ -380,11 +381,33 @@
                                                    FontSize="12.5"
                                                    FontWeight="Bold"
                                                    Foreground="{StaticResource HubTextPrimaryBrush}" />
-                                        <TextBlock FontSize="11" FontWeight="SemiBold" Foreground="{StaticResource HubAccentTextBrush}">
-                                            <Run Text="{Binding Games.IncomingInvite.CostBadgeText, Mode=OneWay, FallbackValue=''}" />
-                                            <Run Text=" · 남은 시간 " />
-                                            <Run Text="{Binding Games.IncomingInviteRemainingSeconds, Mode=OneWay}" />
-                                            <Run Text="초" />
+                                        <WrapPanel Orientation="Horizontal" Margin="0,2,0,0">
+                                            <TextBlock FontSize="11" FontWeight="SemiBold" Foreground="{StaticResource HubAccentTextBrush}" Margin="0,0,8,0">
+                                                <Run Text="{Binding Games.IncomingInvite.CostBadgeText, Mode=OneWay, FallbackValue=''}" />
+                                                <Run Text=" · 남은 시간 " />
+                                                <Run Text="{Binding Games.IncomingInviteRemainingTimeText, Mode=OneWay, FallbackValue='0초'}" />
+                                            </TextBlock>
+                                            <TextBlock FontSize="11" FontWeight="Bold">
+                                                <TextBlock.Style>
+                                                    <Style TargetType="TextBlock">
+                                                        <Setter Property="Foreground" Value="{StaticResource GameWinBrush}" />
+                                                        <Style.Triggers>
+                                                            <DataTrigger Binding="{Binding Games.HasIncomingInviteInsufficientCoins}" Value="True">
+                                                                <Setter Property="Foreground" Value="{StaticResource GameLossBrush}" />
+                                                            </DataTrigger>
+                                                        </Style.Triggers>
+                                                    </Style>
+                                                </TextBlock.Style>
+                                                <Run Text="{Binding Games.IncomingInviteEligibilityText, Mode=OneWay, FallbackValue=''}" />
+                                            </TextBlock>
+                                        </WrapPanel>
+                                        <TextBlock Visibility="{Binding Games.ShowIncomingInviteCoinDetails, Converter={StaticResource HubBoolToVis}}"
+                                                   FontSize="10.5"
+                                                   Foreground="{StaticResource HubTextSecondaryBrush}"
+                                                   Margin="0,2,0,0">
+                                            <Run Text="필요 " /><Run Text="{Binding Games.IncomingInviteRequiredCoinsText, Mode=OneWay}" FontWeight="Bold" />
+                                            <Run Text=" · 보유 " /><Run Text="{Binding Games.IncomingInviteCurrentCoinsText, Mode=OneWay}" FontWeight="Bold" />
+                                            <Run Text=" · 부족 " /><Run Text="{Binding Games.IncomingInviteShortfallText, Mode=OneWay}" FontWeight="Bold" Foreground="{StaticResource GameLossBrush}" />
                                         </TextBlock>
                                     </StackPanel>
                                 </StackPanel>
@@ -397,12 +420,15 @@
                                             Padding="12,6"
                                             Margin="0,0,6,0" />
                                     <Button Command="{Binding Games.AcceptIncomingInviteCommand}"
-                                            IsEnabled="{Binding Games.CanRespondToIncomingInvite}"
+                                            IsEnabled="{Binding Games.CanAcceptIncomingInvite}"
                                             Padding="14,6">
                                         <Button.Style>
                                             <Style TargetType="Button" BasedOn="{StaticResource GamePrimaryButtonStyle}">
                                                 <Setter Property="Content" Value="수락하고 입장" />
                                                 <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding Games.HasIncomingInviteInsufficientCoins}" Value="True">
+                                                        <Setter Property="Content" Value="코인 부족" />
+                                                    </DataTrigger>
                                                     <DataTrigger Binding="{Binding Games.IsAcceptingIncomingInvite}" Value="True">
                                                         <Setter Property="Content" Value="수락 중..." />
                                                     </DataTrigger>

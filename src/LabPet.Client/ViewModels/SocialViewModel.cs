@@ -91,7 +91,14 @@ public sealed class FriendListItemViewModel
             }
             : "오프라인";
 
-    public string IntimacyText => $"친밀도 {Entry.Intimacy}";
+    public int ClampedIntimacy => FriendEntry.NormalizeIntimacy(Entry.Intimacy);
+    public bool IsIntimacyMax => ClampedIntimacy >= FriendEntry.MaxIntimacy;
+    public string IntimacyText => IsIntimacyMax
+        ? "친밀도 MAX"
+        : $"친밀도 {LabPet.Client.Formatting.CompactNumberFormatter.FormatExact(ClampedIntimacy)}";
+    public string IntimacyToolTip => IsIntimacyMax
+        ? $"최대 친밀도 달성 ({LabPet.Client.Formatting.CompactNumberFormatter.FormatExact(FriendEntry.MaxIntimacy)} / {LabPet.Client.Formatting.CompactNumberFormatter.FormatExact(FriendEntry.MaxIntimacy)})"
+        : $"친밀도 {LabPet.Client.Formatting.CompactNumberFormatter.FormatExact(ClampedIntimacy)} / {LabPet.Client.Formatting.CompactNumberFormatter.FormatExact(FriendEntry.MaxIntimacy)}";
     public string MusicFollowButtonText => IsFollowingMusic
         ? "⏹  노래 따라하기 중지"
         : !IsOnline
@@ -356,8 +363,8 @@ public sealed partial class SocialViewModel : ObservableObject
         if (result != PetInteractionSendResult.Cooldown)
         {
             StatusBanner = result == PetInteractionSendResult.Sent
-                ? $"{friend.DisplayTitle}을(를) 쓰다듬어 주었습니다."
-                : "쓰다듬기 전송에 실패했습니다.";
+                ? $"{friend.DisplayTitle}에게 인사했습니다."
+                : "인사하기 전송에 실패했습니다.";
         }
     }
 

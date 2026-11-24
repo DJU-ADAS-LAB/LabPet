@@ -102,6 +102,16 @@ public enum LadderStage
 }
 
 /// <summary>
+/// 솔로 사다리 4칸 미니게임 진행 단계.
+/// </summary>
+public enum SoloLadderPhase
+{
+    Idle = 0,
+    Running = 1,
+    Result = 2
+}
+
+/// <summary>
 /// 게임 대시보드 카드 메타 정보.
 /// </summary>
 public sealed record GameCardDescriptor(
@@ -133,6 +143,15 @@ public sealed partial class LadderFriendInviteOption : ObservableObject
 }
 
 /// <summary>
+/// 사다리 상품 설정 행 모델(이름 + 수량).
+/// </summary>
+public sealed partial class LadderPrizeRowViewModel : ObservableObject
+{
+    [ObservableProperty] private string _label = string.Empty;
+    [ObservableProperty] private int _quantity = 1;
+}
+
+/// <summary>
 /// 사다리 대기실·결과 화면의 참가자 카드 항목.
 /// </summary>
 public sealed record LadderParticipantCardItem(
@@ -145,7 +164,45 @@ public sealed record LadderParticipantCardItem(
     string StatusBadge,
     int? SelectedSlot,
     string PrizeText,
-    string AccentColorHex)
+    string AccentColorHex,
+    LabPet.Client.Games.LadderParticipantStatus Status = LabPet.Client.Games.LadderParticipantStatus.Joined,
+    bool CanCancelInvite = false,
+    string StatusTextColorHex = "#FF15803D",
+    string StatusBgColorHex = "#FFECFDF5")
 {
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, Brush> BrushCache = new(StringComparer.OrdinalIgnoreCase);
+
     public string SlotText => SelectedSlot is int slot ? $"{slot + 1}번 위치" : StatusBadge;
+    public Brush StatusTextBrush => ResolveBrush(StatusTextColorHex, Colors.SeaGreen);
+    public Brush StatusBgBrush => ResolveBrush(StatusBgColorHex, Color.FromRgb(236, 253, 245));
+
+    private static Brush ResolveBrush(string hex, Color fallback)
+    {
+        if (string.IsNullOrWhiteSpace(hex))
+        {
+            var fb = new SolidColorBrush(fallback);
+            fb.Freeze();
+            return fb;
+        }
+
+        return BrushCache.GetOrAdd(hex, static raw =>
+        {
+            try
+            {
+                if (ColorConverter.ConvertFromString(raw) is Color c)
+                {
+                    var b = new SolidColorBrush(c);
+                    b.Freeze();
+                    return b;
+                }
+            }
+            catch (FormatException)
+            {
+            }
+
+            var defaultBrush = new SolidColorBrush(Colors.Gray);
+            defaultBrush.Freeze();
+            return defaultBrush;
+        });
+    }
 }
