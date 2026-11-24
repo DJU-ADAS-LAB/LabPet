@@ -3,246 +3,82 @@ using System.Windows;
 namespace LabPet.Client.Views;
 
 /// <summary>
-/// 방문 펫 상단 말풍선의 화면 작업 영역 경계 보정 및 다중 방문 펫 간 충돌 회피 배치를 계산한다.
-/// 모든 좌표와 크기는 물리 픽셀 기준을 사용한다.
+/// 방문 펫별 팝업 위치를 물리 픽셀 단위로 계산한다.
 /// </summary>
 internal static class VisitorBubblePlacementCalculator
 {
-    internal static Point CalculatePlacement(
-        Rect targetPhysicalBounds,
-        Size popupPhysicalSize,
-        Rect workAreaPhysical,
-        IReadOnlyList<Rect>? occupiedBubbleBounds = null,
-        double overlapYPhysical = 8.0,
-        double gapPhysical = 8.0,
-        bool allowAboveObstacles = true)
+    private const double ComposerGapDip = 5;
+    private const double TailLengthDip = 9;
+    private const double TailStrokeInsetDip = 1;
+    private const double TailHalfWidthDip = 5;
+    private const double CardCornerInsetDip = 12;
+
+    internal readonly record struct BubblePlacement(Rect Body, Point Tip, bool IsBelowHead, double Scale);
+    internal readonly record struct TailPlacement(Point BaseLeft, Point Tip, Point BaseRight);
+
+    internal static Rect CalculateComposerPlacement(Rect nameplate, Size popup, Rect workArea, DpiScale dpi)
     {
-        var centerX = targetPhysicalBounds.Left + (targetPhysicalBounds.Width - popupPhysicalSize.Width) * 0.5;
-        var aboveY = targetPhysicalBounds.Top - popupPhysicalSize.Height + overlapYPhysical;
-        var preferredRaw = new Point(centerX, aboveY);
-
-        if (popupPhysicalSize.Width <= 0 || popupPhysicalSize.Height <= 0 || workAreaPhysical.IsEmpty)
+        var gapX = ComposerGapDip * dpi.DpiScaleX;
+        var gapY = ComposerGapDip * dpi.DpiScaleY;
+        var x = ClampStart(nameplate.Left + (nameplate.Width - popup.Width) / 2,
+            workArea.Left, workArea.Right, popup.Width);
+        var below = new Rect(new Point(x, nameplate.Bottom + gapY), popup);
+        if (workArea.Contains(below))
         {
-            return preferredRaw;
+            return below;
         }
 
-        var preferredClamped = ClampToWorkArea(preferredRaw, popupPhysicalSize, workAreaPhysical);
-        var belowY = targetPhysicalBounds.Bottom + gapPhysical;
-        var sideY = targetPhysicalBounds.Top + Math.Max(0.0, (targetPhysicalBounds.Height - popupPhysicalSize.Height) * 0.25);
-
-        var candidates = new List<Point>
+        var sideY = ClampStart(nameplate.Bottom - popup.Height, workArea.Top, workArea.Bottom, popup.Height);
+        var left = new Rect(new Point(nameplate.Left - gapX - popup.Width, sideY), popup);
+        var right = new Rect(new Point(nameplate.Right + gapX, sideY), popup);
+        var preferRight = workArea.Right - nameplate.Right >= nameplate.Left - workArea.Left;
+        var nearSide = preferRight ? right : left;
+        var farSide = preferRight ? left : right;
+        if (workArea.Contains(nearSide))
         {
-            preferredRaw
-        };
-
-        if (occupiedBubbleBounds is { Count: > 0 })
+            return nearSide;
+        }
+        if (workArea.Contains(farSide))
         {
-            foreach (var other in occupiedBubbleBounds)
-            {
-                if (other.IsEmpty)
-                {
-                    continue;
-                }
-
-                // 기존 말풍선 좌측/우측/상단 회피 후보 추가
-                candidates.Add(new Point(other.Left - popupPhysicalSize.Width - gapPhysical, aboveY));
-                candidates.Add(new Point(other.Right + gapPhysical, aboveY));
-                if (allowAboveObstacles)
-                {
-                    candidates.Add(new Point(centerX, other.Top - popupPhysicalSize.Height - gapPhysical));
-                }
-            }
+            return farSide;
         }
 
-        // 상단 공간이 부족하거나 인접 말풍선과 겹칠 때 좌·우·하단 대체 위치 추가
-        candidates.Add(new Point(targetPhysicalBounds.Left - popupPhysicalSize.Width - gapPhysical, sideY));
-        candidates.Add(new Point(targetPhysicalBounds.Right + gapPhysical, sideY));
-        candidates.Add(new Point(centerX, belowY));
-
-        var allowedSelfOverlap = Math.Max(0.0, popupPhysicalSize.Width * overlapYPhysical);
-        var bestPoint = preferredClamped;
-        var bestScore = double.MaxValue;
-
-        foreach (var rawCandidate in candidates)
-        {
-            var clamped = ClampToWorkArea(rawCandidate, popupPhysicalSize, workAreaPhysical);
-            var candidateRect = new Rect(clamped, popupPhysicalSize);
-
-            var overlapWithOthers = ComputeTotalIntersectionArea(candidateRect, occupiedBubbleBounds);
-            var selfOverlap = ComputeIntersectionArea(candidateRect, targetPhysicalBounds);
-            var excessSelfOverlap = Math.Max(0.0, selfOverlap - allowedSelfOverlap);
-            var dx = clamped.X - preferredClamped.X;
-            var dy = clamped.Y - preferredClamped.Y;
-            var distanceFromPreferred = Math.Sqrt(dx * dx + dy * dy);
-
-            var score = (overlapWithOthers * 1_000_000.0)
-                + (excessSelfOverlap * 100.0)
-                + (distanceFromPreferred * 0.01);
-
-            if (score < bestScore)
-            {
-                bestScore = score;
-                bestPoint = clamped;
-            }
-        }
-
-        return bestPoint;
+        var aboveY = ClampStart(nameplate.Top - gapY - popup.Height, workArea.Top, workArea.Bottom, popup.Height);
+        return new Rect(new Point(x, aboveY), popup);
     }
 
-    internal static Point CalculateStackedBubblePlacement(
-        Rect petPhysicalBounds,
-        Rect composerPhysicalBounds,
-        Size bubblePopupPhysicalSize,
-        Rect workAreaPhysical,
-        IReadOnlyList<Rect>? otherOccupiedBounds = null,
-        double baseOverlapYPhysical = 8.0,
-        double gapPhysical = 8.0)
+    internal static BubblePlacement CalculateBubblePlacement(Point head, Size body, Rect workArea, DpiScale dpi)
     {
-        if (composerPhysicalBounds.IsEmpty)
-        {
-            return CalculatePlacement(
-                petPhysicalBounds,
-                bubblePopupPhysicalSize,
-                workAreaPhysical,
-                otherOccupiedBounds,
-                baseOverlapYPhysical,
-                gapPhysical);
-        }
+        var insetX = Math.Min(TailStrokeInsetDip * dpi.DpiScaleX, workArea.Width / 2);
+        var insetY = Math.Min(TailStrokeInsetDip * dpi.DpiScaleY, workArea.Height / 2);
+        var tip = new Point(
+            Math.Clamp(head.X, workArea.Left + insetX, workArea.Right - insetX),
+            Math.Clamp(head.Y, workArea.Top + insetY, workArea.Bottom - insetY));
+        var tailLength = Math.Min(TailLengthDip * dpi.DpiScaleY, workArea.Height / 4);
+        var above = tip.Y - tailLength - workArea.Top;
+        var below = workArea.Bottom - tip.Y - tailLength;
+        var widthScale = Math.Min(1, workArea.Width / body.Width);
+        var isBelow = body.Height * widthScale > above && below > above;
 
-        var centerX = petPhysicalBounds.Left + (petPhysicalBounds.Width - bubblePopupPhysicalSize.Width) * 0.5;
-        var composerIsAbovePet = composerPhysicalBounds.Top < petPhysicalBounds.Top;
-        var preferredTopY = composerIsAbovePet
-            ? composerPhysicalBounds.Top - bubblePopupPhysicalSize.Height - gapPhysical
-            : petPhysicalBounds.Top - bubblePopupPhysicalSize.Height + baseOverlapYPhysical;
-        var preferredRaw = new Point(centerX, preferredTopY);
-
-        if (bubblePopupPhysicalSize.Width <= 0 || bubblePopupPhysicalSize.Height <= 0 || workAreaPhysical.IsEmpty)
-        {
-            return preferredRaw;
-        }
-
-        List<Rect> occupiedWithComposer = otherOccupiedBounds is { Count: > 0 }
-            ? [.. otherOccupiedBounds, composerPhysicalBounds]
-            : [composerPhysicalBounds];
-
-        var preferredClamped = ClampToWorkArea(preferredRaw, bubblePopupPhysicalSize, workAreaPhysical);
-        var belowY = Math.Max(petPhysicalBounds.Bottom, composerPhysicalBounds.Bottom) + gapPhysical;
-        var sideY = petPhysicalBounds.Top + Math.Max(0.0, (petPhysicalBounds.Height - bubblePopupPhysicalSize.Height) * 0.25);
-        var combinedLeft = Math.Min(petPhysicalBounds.Left, composerPhysicalBounds.Left);
-        var combinedRight = Math.Max(petPhysicalBounds.Right, composerPhysicalBounds.Right);
-
-        var candidates = new List<Point>
-        {
-            preferredRaw,
-            new(combinedLeft - bubblePopupPhysicalSize.Width - gapPhysical, composerPhysicalBounds.Top),
-            new(combinedRight + gapPhysical, composerPhysicalBounds.Top),
-            new(combinedLeft - bubblePopupPhysicalSize.Width - gapPhysical, sideY),
-            new(combinedRight + gapPhysical, sideY),
-            new(centerX, belowY),
-            new(centerX, composerPhysicalBounds.Bottom + gapPhysical)
-        };
-
-        foreach (var other in occupiedWithComposer)
-        {
-            if (other.IsEmpty)
-            {
-                continue;
-            }
-
-            candidates.Add(new Point(other.Left - bubblePopupPhysicalSize.Width - gapPhysical, preferredTopY));
-            candidates.Add(new Point(other.Right + gapPhysical, preferredTopY));
-            candidates.Add(new Point(other.Left - bubblePopupPhysicalSize.Width - gapPhysical, other.Top));
-            candidates.Add(new Point(other.Right + gapPhysical, other.Top));
-            candidates.Add(new Point(centerX, other.Top - bubblePopupPhysicalSize.Height - gapPhysical));
-        }
-
-        var bestPoint = preferredClamped;
-        var bestScore = double.MaxValue;
-
-        foreach (var rawCandidate in candidates)
-        {
-            var clamped = ClampToWorkArea(rawCandidate, bubblePopupPhysicalSize, workAreaPhysical);
-            var candidateRect = new Rect(clamped, bubblePopupPhysicalSize);
-
-            var overlapWithOccupied = ComputeTotalIntersectionArea(candidateRect, occupiedWithComposer);
-            var selfOverlap = ComputeIntersectionArea(candidateRect, petPhysicalBounds);
-            var dx = clamped.X - preferredClamped.X;
-            var dy = clamped.Y - preferredClamped.Y;
-            var distanceFromPreferred = Math.Sqrt(dx * dx + dy * dy);
-
-            var score = (overlapWithOccupied * 1_000_000.0)
-                + (selfOverlap * 100.0)
-                + (distanceFromPreferred * 0.01);
-
-            if (score < bestScore)
-            {
-                bestScore = score;
-                bestPoint = clamped;
-            }
-        }
-
-        return bestPoint;
+        // 공간이 어느 쪽에도 충분하지 않으면 전체 스택을 한 비율로 맞춰 가까운 카드를 가리지 않는다.
+        var scale = Math.Min(widthScale, (isBelow ? below : above) / body.Height);
+        var size = new Size(body.Width * scale, body.Height * scale);
+        var x = ClampStart(tip.X - size.Width / 2, workArea.Left, workArea.Right, size.Width);
+        var y = isBelow ? tip.Y + tailLength : tip.Y - tailLength - size.Height;
+        return new BubblePlacement(new Rect(new Point(x, y), size), tip, isBelow, scale);
     }
 
-    internal static Point ToRelativePopupOffset(Point chosenScreenTopLeft, Rect targetPhysicalBounds)
-        => new(chosenScreenTopLeft.X - targetPhysicalBounds.Left, chosenScreenTopLeft.Y - targetPhysicalBounds.Top);
-
-    internal static double CalculateTailOffset(
-        double targetX, double originalTipX, double cardLeft, double cardWidth, double tailWidth)
+    internal static TailPlacement CalculateTailPlacement(BubblePlacement placement, Rect nearestCard, DpiScale dpi)
     {
-        const double cornerInset = 4.0;
-        var inset = Math.Min(cardWidth / 2, tailWidth / 2 + cornerInset);
-        return Math.Clamp(targetX, cardLeft + inset, cardLeft + cardWidth - inset) - originalTipX;
+        var inset = Math.Min(CardCornerInsetDip * dpi.DpiScaleX * placement.Scale, nearestCard.Width / 4);
+        var halfWidth = Math.Min(TailHalfWidthDip * dpi.DpiScaleX * placement.Scale, nearestCard.Width / 4);
+        var center = Math.Clamp(placement.Tip.X, nearestCard.Left + inset + halfWidth,
+            nearestCard.Right - inset - halfWidth);
+        var overlap = TailStrokeInsetDip * dpi.DpiScaleY * placement.Scale;
+        var y = placement.IsBelowHead ? nearestCard.Top + overlap : nearestCard.Bottom - overlap;
+        return new TailPlacement(new Point(center - halfWidth, y), placement.Tip, new Point(center + halfWidth, y));
     }
 
-    internal static Point ClampToWorkArea(Point topLeft, Size size, Rect workArea)
-    {
-        var maxLeft = workArea.Right - size.Width;
-        var maxTop = workArea.Bottom - size.Height;
-
-        var clampedX = maxLeft < workArea.Left
-            ? workArea.Left
-            : Math.Clamp(topLeft.X, workArea.Left, maxLeft);
-        var clampedY = maxTop < workArea.Top
-            ? workArea.Top
-            : Math.Clamp(topLeft.Y, workArea.Top, maxTop);
-
-        return new Point(clampedX, clampedY);
-    }
-
-    private static double ComputeTotalIntersectionArea(Rect rect, IReadOnlyList<Rect>? others)
-    {
-        if (others is null || others.Count == 0)
-        {
-            return 0.0;
-        }
-
-        var sum = 0.0;
-        for (var i = 0; i < others.Count; i++)
-        {
-            sum += ComputeIntersectionArea(rect, others[i]);
-        }
-
-        return sum;
-    }
-
-    private static double ComputeIntersectionArea(Rect a, Rect b)
-    {
-        if (a.IsEmpty || b.IsEmpty)
-        {
-            return 0.0;
-        }
-
-        var left = Math.Max(a.Left, b.Left);
-        var top = Math.Max(a.Top, b.Top);
-        var right = Math.Min(a.Right, b.Right);
-        var bottom = Math.Min(a.Bottom, b.Bottom);
-
-        if (right <= left || bottom <= top)
-        {
-            return 0.0;
-        }
-
-        return (right - left) * (bottom - top);
-    }
+    private static double ClampStart(double start, double min, double max, double length)
+        => Math.Clamp(start, min, Math.Max(min, max - length));
 }

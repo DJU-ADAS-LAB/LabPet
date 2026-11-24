@@ -1,6 +1,7 @@
 using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Interop;
+using System.Windows.Media;
 
 namespace LabPet.Client.Interop;
 
@@ -14,6 +15,7 @@ public static partial class Win32WindowHelper
     private const int WsExToolWindow = 0x00000080;
     private const int WsExNoActivate = 0x08000000;
     private const uint SwpNoSize = 0x0001;
+    private const uint SwpNoMove = 0x0002;
     private const uint SwpNoActivate = 0x0010;
     private const uint SwpNoOwnerZOrder = 0x0200;
     private static readonly IntPtr HwndTopMost = new(-1);
@@ -94,6 +96,40 @@ public static partial class Win32WindowHelper
     [LibraryImport("user32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
     private static partial bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int x, int y, int cx, int cy, uint flags);
+
+    [LibraryImport("user32.dll")]
+    private static partial IntPtr GetWindow(IntPtr hWnd, uint command);
+
+    internal static bool IsWindowAbove(IntPtr higher, IntPtr lower)
+    {
+        const uint previousWindow = 3;
+        for (var window = GetWindow(lower, previousWindow); window != IntPtr.Zero; window = GetWindow(window, previousWindow))
+        {
+            if (window == higher)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    internal static void PlacePopupBehind(IntPtr popup, IntPtr higher)
+    {
+        if (!SetWindowPos(popup, higher, 0, 0, 0, 0, SwpNoMove | SwpNoSize | SwpNoActivate | SwpNoOwnerZOrder))
+        {
+            System.Diagnostics.Debug.WriteLine($"방문 펫 팝업 표시 순서 적용 실패 ({Marshal.GetLastPInvokeError()})");
+        }
+    }
+
+    internal static void SetPopupClickThrough(Visual visual)
+    {
+        if (PresentationSource.FromVisual(visual) is HwndSource { Handle: var handle } && handle != IntPtr.Zero)
+        {
+            var style = GetWindowLong(handle, GwlExStyle);
+            _ = SetWindowLong(handle, GwlExStyle, style | WsExTransparent | WsExNoActivate);
+        }
+    }
 
     [LibraryImport("user32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]

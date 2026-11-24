@@ -49,6 +49,24 @@
                 </Setter.Value>
             </Setter>
         </Style>
+        <DataTemplate x:Key="VisitorChatCardTemplate">
+            <Border Margin="0,2"
+                    Padding="10,5"
+                    CornerRadius="12"
+                    Background="#FFFFFAFC"
+                    BorderBrush="#FFF1BCD3"
+                    BorderThickness="1.2"
+                    HorizontalAlignment="Center"
+                    Effect="{StaticResource SoftCardShadow}">
+                <TextBlock
+                           FontSize="11.5"
+                           FontWeight="Medium"
+                           Foreground="#FF2E3440"
+                           TextAlignment="Left"
+                           TextWrapping="Wrap"
+                           MaxWidth="196" />
+            </Border>
+        </DataTemplate>
     </Window.Resources>
 
     <Grid Background="Transparent" UseLayoutRounding="True" TextOptions.TextFormattingMode="Display">
@@ -65,75 +83,41 @@
                StaysOpen="True"
                PopupAnimation="None"
                IsOpen="False">
-            <Border Padding="10,10,10,4" IsHitTestVisible="False">
-            <StackPanel x:Name="VisitorBubbleContent"
-                        HorizontalAlignment="Center"
-                        IsHitTestVisible="False"
-                        SizeChanged="VisitorBubbleContent_SizeChanged">
-                <!-- 친구 채팅 메시지 스택 (최대 5개, 오래된 순 위 → 최신 아래, 개별 만료) -->
-                <ItemsControl x:Name="VisitorChatItemsControl"
-                              Visibility="Collapsed"
-                              IsHitTestVisible="False">
-                    <ItemsControl.ItemTemplate>
-                        <DataTemplate>
-                            <Border Margin="0,0,0,4"
-                                    Padding="10,5"
-                                    CornerRadius="12"
-                                    Background="#FFFFFAFC"
-                                    BorderBrush="#FFF1BCD3"
-                                    BorderThickness="1.2"
-                                    HorizontalAlignment="Center"
-                                    Effect="{StaticResource SoftCardShadow}">
-                                <TextBlock Text="{Binding Text}"
-                                           FontSize="11.5"
-                                           FontWeight="Medium"
-                                           Foreground="#FF2E3440"
-                                           TextAlignment="Left"
-                                           TextWrapping="Wrap"
-                                           MaxWidth="196" />
-                            </Border>
-                        </DataTemplate>
-                    </ItemsControl.ItemTemplate>
-                </ItemsControl>
+            <Canvas x:Name="VisitorBubbleSurface" IsHitTestVisible="False">
+                <Path x:Name="VisitorBubbleTail"
+                      StrokeThickness="1"
+                      StrokeLineJoin="Round" />
+                <DockPanel x:Name="VisitorBubbleContent">
+                    <DockPanel.RenderTransform>
+                        <ScaleTransform x:Name="VisitorBubbleScale" />
+                    </DockPanel.RenderTransform>
+                    <Border x:Name="VisitorStatusBubble"
+                            HorizontalAlignment="Center"
+                            DockPanel.Dock="Top"
+                            Margin="0,2"
+                            Padding="9,4"
+                            CornerRadius="11"
+                            Background="#F5FFFFFF"
+                            BorderBrush="#FFFFC2D4"
+                            BorderThickness="1.2"
+                            Visibility="Collapsed"
+                            IsHitTestVisible="False"
+                            Effect="{StaticResource SoftCardShadow}">
+                        <TextBlock x:Name="VisitorStatusBubbleText"
+                                   FontSize="10.5"
+                                   FontWeight="SemiBold"
+                                   Foreground="#FF2E3440"
+                                   TextAlignment="Center"
+                                   TextWrapping="Wrap"
+                                   MaxWidth="196" />
+                    </Border>
 
-                <!-- 인사하기·노래 따라하기 등 시스템 알림 (채팅 메시지와 별도 표시되어 서로 덮어쓰지 않음) -->
-                <Border x:Name="VisitorStatusBubble"
-                        HorizontalAlignment="Center"
-                        Margin="0,0,0,2"
-                        Padding="9,4"
-                        CornerRadius="11"
-                        Background="#F5FFFFFF"
-                        BorderBrush="#FFFFC2D4"
-                        BorderThickness="1.2"
-                        Visibility="Collapsed"
-                        IsHitTestVisible="False"
-                        Effect="{StaticResource SoftCardShadow}">
-                    <TextBlock x:Name="VisitorStatusBubbleText"
-                               FontSize="10.5"
-                               FontWeight="SemiBold"
-                               Foreground="#FF2E3440"
-                               TextAlignment="Center"
-                               TextWrapping="Wrap"
-                               MaxWidth="196" />
-                </Border>
-
-                <!-- 말풍선 하단 꼬리 -->
-                <Polygon x:Name="VisitorBubbleTail"
-                         Points="0,0 10,0 5,6"
-                         Fill="#FFFFFAFC"
-                         Stroke="#FFF1BCD3"
-                         StrokeThickness="1"
-                         HorizontalAlignment="Center"
-                         Margin="0,-2,0,0">
-                    <Polygon.RenderTransform>
-                        <TranslateTransform x:Name="VisitorBubbleTailOffset" />
-                    </Polygon.RenderTransform>
-                </Polygon>
-            </StackPanel>
-            </Border>
+                    <StackPanel x:Name="VisitorChatCards" Visibility="Collapsed" />
+                </DockPanel>
+            </Canvas>
         </Popup>
 
-        <!-- 방문 펫 클릭 시 표시되는 빠른 채팅 입력 팝업 (메시지 말풍선과 분리되어 서로 겹치지 않음) -->
+        <!-- 방문 펫 클릭 시 네임태그를 기준으로 표시되는 빠른 채팅 입력 팝업 -->
         <Popup x:Name="VisitorChatComposerPopup"
                PlacementTarget="{Binding ElementName=VisitorViewport}"
                Placement="Custom"
@@ -141,51 +125,53 @@
                StaysOpen="True"
                PopupAnimation="None"
                IsOpen="False">
-            <Border Padding="8">
-            <Border x:Name="VisitorChatComposerCard"
-                    Width="226"
-                    Padding="8,6"
-                    CornerRadius="12"
-                    Background="#F7FFFFFF"
-                    BorderBrush="#FFDDE3EE"
-                    BorderThickness="1"
-                    Effect="{StaticResource SoftCardShadow}"
-                    MouseEnter="VisitorChatComposerCard_MouseEnter"
-                    MouseLeave="VisitorChatComposerCard_MouseLeave"
-                    LostMouseCapture="VisitorChatComposerCard_MouseLeave"
-                    LostKeyboardFocus="VisitorChatComposerCard_LostKeyboardFocus"
-                    SizeChanged="VisitorChatComposerCard_SizeChanged">
-                <DockPanel Background="Transparent">
-                    <Button DockPanel.Dock="Right"
-                            Content="✕"
-                            ToolTip="닫기"
-                            Focusable="False"
-                            Width="22"
-                            Height="28"
-                            Padding="0"
-                            FontSize="10.5"
-                            Margin="4,0,0,0"
-                            Click="CloseVisitorChatButton_Click" />
-                    <Button x:Name="SendVisitorChatButton"
-                            DockPanel.Dock="Right"
-                            Content="전송"
-                            Style="{StaticResource PrimaryButtonStyle}"
-                            Focusable="False"
-                            Padding="9,4"
-                            FontSize="11"
-                            Height="28"
-                            Margin="5,0,0,0"
-                            Click="SendVisitorChatButton_Click" />
-                    <TextBox x:Name="VisitorChatInput"
-                             MaxLength="100"
-                             Height="28"
-                             FontSize="11.5"
-                             Padding="7,3"
-                             TextChanged="VisitorChatInput_TextChanged"
-                             PreviewMouseDown="VisitorChatInput_PreviewMouseDown"
-                             KeyDown="VisitorChatInput_KeyDown" />
-                </DockPanel>
-            </Border>
+            <Border Padding="4,0,4,4">
+                <Border.LayoutTransform>
+                    <ScaleTransform x:Name="VisitorChatComposerScale" />
+                </Border.LayoutTransform>
+                <Border x:Name="VisitorChatComposerCard"
+                        Width="226"
+                        Padding="8,6"
+                        CornerRadius="12"
+                        Background="#F7FFFFFF"
+                        BorderBrush="#FFDDE3EE"
+                        BorderThickness="1"
+                        Effect="{StaticResource SoftCardShadow}"
+                        MouseEnter="VisitorChatComposerCard_MouseEnter"
+                        MouseLeave="VisitorChatComposerCard_MouseLeave"
+                        LostMouseCapture="VisitorChatComposerCard_MouseLeave"
+                        LostKeyboardFocus="VisitorChatComposerCard_LostKeyboardFocus">
+                    <DockPanel Background="Transparent">
+                        <Button DockPanel.Dock="Right"
+                                Content="✕"
+                                ToolTip="닫기"
+                                Focusable="False"
+                                Width="22"
+                                Height="28"
+                                Padding="0"
+                                FontSize="10.5"
+                                Margin="4,0,0,0"
+                                Click="CloseVisitorChatButton_Click" />
+                        <Button x:Name="SendVisitorChatButton"
+                                DockPanel.Dock="Right"
+                                Content="전송"
+                                Style="{StaticResource PrimaryButtonStyle}"
+                                Focusable="False"
+                                Padding="9,4"
+                                FontSize="11"
+                                Height="28"
+                                Margin="5,0,0,0"
+                                Click="SendVisitorChatButton_Click" />
+                        <TextBox x:Name="VisitorChatInput"
+                                 MaxLength="100"
+                                 Height="28"
+                                 FontSize="11.5"
+                                 Padding="7,3"
+                                 TextChanged="VisitorChatInput_TextChanged"
+                                 PreviewMouseDown="VisitorChatInput_PreviewMouseDown"
+                                 KeyDown="VisitorChatInput_KeyDown" />
+                    </DockPanel>
+                </Border>
             </Border>
         </Popup>
 

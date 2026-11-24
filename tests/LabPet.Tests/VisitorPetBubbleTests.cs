@@ -3,10 +3,15 @@ using System.Net;
 using System.Net.Sockets;
 using System.Windows;
 using System.Windows.Controls;
-using Polygon = System.Windows.Shapes.Polygon;
+using BubblePath = System.Windows.Shapes.Path;
+using System.Windows.Controls.Primitives;
+using System.Windows.Input;
+using System.Windows.Interop;
+using System.Windows.Media;
 using System.Windows.Threading;
 using LabPet.Client;
 using LabPet.Client.Audio;
+using LabPet.Client.Interop;
 using LabPet.Client.Network;
 using LabPet.Client.Rendering;
 using LabPet.Client.Social;
@@ -325,97 +330,75 @@ public sealed class VisitorPetBubbleTests
         Assert.Equal(0, stack.ActiveTimerCount);
     }
 
-    [Fact]
-    public void VisitorBubblePlacement_HandlesMoveScaleMultiMonitorAndCollisionAvoidance()
+    [Theory]
+    [InlineData(1.0, 0, 0)]
+    [InlineData(1.5, -1920, 80)]
+    [InlineData(2.0, 240, -1600)]
+    public void VisitorBubblePlacement_KeepsCardsInsideEachCornerAndPointsAtTheHead(
+        double scale, int monitorLeft, int monitorTop)
     {
-        var workAreaPrimary = new Rect(0, 0, 1920, 1040);
+        var dpi = new DpiScale(scale, scale);
+        var area = new Rect(monitorLeft, monitorTop, 1440, 900);
+        var bodySize = new Size(220 * scale, 128 * scale);
+        foreach (var x in new[] { area.Left + 4 * scale, area.Right - 4 * scale })
+        {
+            foreach (var y in new[] { area.Top + 4 * scale, area.Bottom - 4 * scale })
+            {
+                var head = new Point(x, y);
+                var placement = VisitorBubblePlacementCalculator.CalculateBubblePlacement(head, bodySize, area, dpi);
+                Assert.True(area.Contains(placement.Body));
+                Assert.Equal(head, placement.Tip);
+                Assert.Equal(y < area.Top + area.Height / 2, placement.IsBelowHead);
+                Assert.Equal(1, placement.Scale);
 
-        // 1. 이동 및 크기 변경 시에도 상단 중앙 유지
-        var petSmall = new Rect(600, 500, 140, 140);
-        var petLarge = new Rect(900, 420, 264, 279);
-        var popupSize = new Size(200, 88);
+                var nearestCard = new Rect(placement.Body.Left + 40 * scale,
+                    placement.IsBelowHead ? placement.Body.Top : placement.Body.Bottom - 28 * scale,
+                    140 * scale, 28 * scale);
+                var tail = VisitorBubblePlacementCalculator.CalculateTailPlacement(placement, nearestCard, dpi);
+                Assert.Equal(head, tail.Tip);
+                Assert.True(nearestCard.Contains(tail.BaseLeft));
+                Assert.True(nearestCard.Contains(tail.BaseRight));
+                Assert.True(placement.IsBelowHead ? tail.Tip.Y < tail.BaseLeft.Y : tail.Tip.Y > tail.BaseLeft.Y);
+                Assert.NotEqual((tail.BaseLeft.X + tail.BaseRight.X) / 2, tail.Tip.X);
+            }
+        }
+    }
 
-        var placedSmall = VisitorBubblePlacementCalculator.CalculatePlacement(petSmall, popupSize, workAreaPrimary);
-        var placedLarge = VisitorBubblePlacementCalculator.CalculatePlacement(petLarge, popupSize, workAreaPrimary);
+    [Theory]
+    [InlineData(1.0)]
+    [InlineData(1.5)]
+    [InlineData(2.0)]
+    public void VisitorComposerPlacement_UsesFiveDipBelowAndFallsBackToTheSides(double scale)
+    {
+        var dpi = new DpiScale(scale, scale);
+        var area = new Rect(-1920, -400, 1920, 1080);
+        var size = new Size(234 * scale, 46 * scale);
+        var nameplate = new Rect(area.Left + 400, area.Top + 350, 90 * scale, 20 * scale);
+        var below = VisitorBubblePlacementCalculator.CalculateComposerPlacement(nameplate, size, area, dpi);
+        Assert.Equal(5 * scale, below.Top - nameplate.Bottom);
+        Assert.Equal(nameplate.Left + nameplate.Width / 2, below.Left + below.Width / 2);
 
-        Assert.Equal(petSmall.Left + (petSmall.Width - popupSize.Width) * 0.5, placedSmall.X, precision: 2);
-        Assert.Equal(petSmall.Top - popupSize.Height + 8.0, placedSmall.Y, precision: 2);
-        Assert.Equal(petLarge.Left + (petLarge.Width - popupSize.Width) * 0.5, placedLarge.X, precision: 2);
-        Assert.Equal(petLarge.Top - popupSize.Height + 8.0, placedLarge.Y, precision: 2);
-
-        // 2. 좌상단 화면 경계(다중 모니터 음수 좌표 포함)를 벗어나지 않음
-        var secondaryMonitorArea = new Rect(-1920, 0, 1920, 1040);
-        var petAtSecondaryCorner = new Rect(-1918, 8, 176, 186);
-        var clamped = VisitorBubblePlacementCalculator.CalculatePlacement(petAtSecondaryCorner, popupSize, secondaryMonitorArea);
-        var clampedRect = new Rect(clamped, popupSize);
-
-        Assert.True(secondaryMonitorArea.Contains(clampedRect), $"보조 모니터 경계 이탈: {clampedRect} vs {secondaryMonitorArea}");
-
-        // 3. 인접한 두 방문 펫의 말풍선 충돌 회피
-        var occupiedBubble = new Rect(920, 380, 220, 96);
-        var adjacentPet = new Rect(980, 468, 176, 186);
-        var avoided = VisitorBubblePlacementCalculator.CalculatePlacement(
-            adjacentPet,
-            new Size(220, 96),
-            workAreaPrimary,
-            [occupiedBubble]);
-        var avoidedRect = new Rect(avoided, new Size(220, 96));
-
-        Assert.True(workAreaPrimary.Contains(avoidedRect));
-        Assert.False(occupiedBubble.IntersectsWith(avoidedRect), $"기존 말풍선과 겹침: {occupiedBubble} vs {avoidedRect}");
+        foreach (var x in new[] { area.Left + 1, area.Right - nameplate.Width - 1 })
+        {
+            nameplate.Location = new Point(x, area.Bottom - nameplate.Height - 1);
+            var side = VisitorBubblePlacementCalculator.CalculateComposerPlacement(nameplate, size, area, dpi);
+            Assert.True(area.Contains(side));
+            Assert.False(side.IntersectsWith(nameplate));
+            Assert.True(side.Left >= nameplate.Right || side.Right <= nameplate.Left);
+        }
     }
 
     [Fact]
-    public void VisitorBubblePlacement_StackedComposerAndBubbleNeverOverlapAcrossScreenEdges()
+    public void VisitorBubblePlacement_FitsTheWholeStackWhenNeitherSideHasEnoughRoom()
     {
-        var workArea = new Rect(0, 0, 1920, 1040);
-        var composerSize = new Size(242, 58);
-        var bubbleSize = new Size(220, 88);
-
-        // 1) 화면 중앙/하단: 말풍선은 채팅 입력창 바로 위에 쌓이며 겹치지 않는다.
-        var midPet = new Rect(600, 500, 214, 224);
-        var composerPosMid = VisitorBubblePlacementCalculator.CalculatePlacement(
-            midPet, composerSize, workArea, overlapYPhysical: 4.0, gapPhysical: 8.0);
-        var composerRectMid = new Rect(composerPosMid, composerSize);
-
-        var bubblePosMid = VisitorBubblePlacementCalculator.CalculateStackedBubblePlacement(
-            midPet, composerRectMid, bubbleSize, workArea, baseOverlapYPhysical: 8.0, gapPhysical: 8.0);
-        var bubbleRectMid = new Rect(bubblePosMid, bubbleSize);
-
-        Assert.True(workArea.Contains(composerRectMid));
-        Assert.True(workArea.Contains(bubbleRectMid));
-        Assert.False(composerRectMid.IntersectsWith(bubbleRectMid), $"중앙 배치 겹침: {composerRectMid} vs {bubbleRectMid}");
-        Assert.True(bubbleRectMid.Bottom <= composerRectMid.Top, $"말풍선이 채팅 입력창 위에 배치되어야 합니다: {bubbleRectMid} vs {composerRectMid}");
-
-        // 2) 화면 최상단 근처: 채팅창 위 공간이 부족하면 말풍선이 겹치지 않는 대체 위치로 회피한다.
-        var topPet = new Rect(600, 44, 214, 224);
-        var composerPosTop = VisitorBubblePlacementCalculator.CalculatePlacement(
-            topPet, composerSize, workArea, overlapYPhysical: 4.0, gapPhysical: 8.0);
-        var composerRectTop = new Rect(composerPosTop, composerSize);
-
-        var bubblePosTop = VisitorBubblePlacementCalculator.CalculateStackedBubblePlacement(
-            topPet, composerRectTop, bubbleSize, workArea, baseOverlapYPhysical: 8.0, gapPhysical: 8.0);
-        var bubbleRectTop = new Rect(bubblePosTop, bubbleSize);
-
-        Assert.True(workArea.Contains(composerRectTop));
-        Assert.True(workArea.Contains(bubbleRectTop));
-        Assert.False(composerRectTop.IntersectsWith(bubbleRectTop), $"최상단 배치 겹침: {composerRectTop} vs {bubbleRectTop}");
-    }
-
-    [Fact]
-    public void VisitorComposerPlacement_UsesTheSideWhenABubbleBlocksTheSpaceAboveThePet()
-    {
-        var workArea = new Rect(0, 0, 1600, 900);
-        var pet = new Rect(600, 440, 214, 175);
-        var composerSize = new Size(242, 58);
-        var occupied = new Rect(470, 310, 475, 138);
-        var composer = new Rect(VisitorBubblePlacementCalculator.CalculatePlacement(
-            pet, composerSize, workArea, [occupied], overlapYPhysical: 4, allowAboveObstacles: false), composerSize);
-
-        Assert.True(workArea.Contains(composer));
-        Assert.False(composer.IntersectsWith(occupied));
-        Assert.False(composer.IntersectsWith(pet));
-        Assert.True(composer.Bottom >= pet.Top);
+        var dpi = new DpiScale(2, 2);
+        var area = new Rect(-480, 0, 480, 420);
+        var head = new Point(-10, 240);
+        var placement = VisitorBubblePlacementCalculator.CalculateBubblePlacement(head, new Size(440, 450), area, dpi);
+        Assert.True(area.Contains(placement.Body));
+        Assert.False(placement.IsBelowHead);
+        Assert.True(placement.Body.Bottom < head.Y);
+        Assert.InRange(placement.Scale, 0.49, 0.50);
     }
 
     [Fact]
@@ -592,12 +575,7 @@ public sealed class VisitorPetBubbleTests
 
                     Assert.True(window.TryShowFriendMessage(CreateMessage(friend.PetId, "정렬 확인")));
                     await FlushUiAsync();
-                    var tail = Assert.IsType<Polygon>(window.FindName("VisitorBubbleTail"));
-                    Assert.True(tail.IsVisible);
-                    var shape = tail.RenderedGeometry.Bounds;
-                    var tailTip = tail.PointToScreen(new Point(shape.Left + shape.Width / 2, shape.Bottom));
-                    var petCenter = viewport.PointToScreen(new Point(viewport.ActualWidth / 2, 0));
-                    Assert.InRange(Math.Abs(tailTip.X - petCenter.X), 0, 1);
+                    AssertBubbleHeadAlignment(window);
 
                     // 클릭 시 쓰다듬기 대신 채팅 입력창이 열려야 한다.
                     window.HandleVisitorClick();
@@ -605,6 +583,10 @@ public sealed class VisitorPetBubbleTests
                     Assert.True(window.IsChatComposerOpen);
                     Assert.False(window.CurrentComposerPhysicalBounds.IsEmpty);
                     Assert.Equal(0, Volatile.Read(ref petInteractionCount));
+                    var composerBounds = GetScreenBounds((Border)window.FindName("VisitorChatComposerCard"));
+                    var nameplateBounds = GetScreenBounds((Border)window.FindName("VisitorNameplate"));
+                    var dpi = VisualTreeHelper.GetDpi(viewport);
+                    Assert.InRange((composerBounds.Top - nameplateBounds.Bottom) / dpi.DpiScaleY, 4, 6);
 
                     // 채팅 입력창이 열린 상태에서 수신 메시지가 와도 입력창이 유지되고 영역이 겹치지 않는다.
                     Assert.True(window.TryShowFriendMessage(CreateMessage(friend.PetId, "지금 답장하는 중이야?")));
@@ -612,6 +594,8 @@ public sealed class VisitorPetBubbleTests
 
                     Assert.True(window.IsChatComposerOpen);
                     Assert.False(window.CurrentBubblePhysicalBounds.IsEmpty);
+                    Assert.Equal(composerBounds, GetScreenBounds((Border)window.FindName("VisitorChatComposerCard")));
+                    Assert.Equal(nameplateBounds, GetScreenBounds((Border)window.FindName("VisitorNameplate")));
                     Assert.False(
                         window.CurrentBubblePhysicalBounds.IntersectsWith(window.CurrentComposerPhysicalBounds),
                         $"방문 펫 말풍선과 채팅 입력창이 겹침: {window.CurrentBubblePhysicalBounds} vs {window.CurrentComposerPhysicalBounds}");
@@ -629,7 +613,11 @@ public sealed class VisitorPetBubbleTests
                     Assert.Empty(window.ChatComposerInputText);
 
                     window.ChatComposerInputText = "이어 보내는 메시지";
-                    Assert.True(await window.SendVisitorChatMessageAsync());
+                    var input = (TextBox)window.FindName("VisitorChatInput");
+                    var key = new KeyEventArgs(Keyboard.PrimaryDevice, PresentationSource.FromVisual(input),
+                        Environment.TickCount, Key.Enter) { RoutedEvent = Keyboard.KeyDownEvent };
+                    input.RaiseEvent(key);
+                    Assert.True(key.Handled);
                     Assert.Equal("이어 보내는 메시지", await secondBubbleTcs.Task.WaitAsync(TimeSpan.FromSeconds(5)));
                     Assert.True(window.IsChatComposerOpen);
 
@@ -750,6 +738,7 @@ public sealed class VisitorPetBubbleTests
                     await FlushUiAsync();
 
                     Assert.Equal(5, window.ChatBubbleStack.Items.Count);
+                    Assert.Equal(5, ((StackPanel)window.FindName("VisitorChatCards")).Children.Count);
                     Assert.Equal(["채팅 3", "채팅 4", "채팅 5", "채팅 6", longText],
                         window.ChatBubbleStack.Items.Select(x => x.Text));
                     Assert.True(window.HasStatusBubble);
@@ -757,58 +746,6 @@ public sealed class VisitorPetBubbleTests
                     Assert.Equal(initialTop, window.Top);
                     Assert.Equal(initialHeight, window.Height);
                     Assert.False(window.CurrentBubblePhysicalBounds.IsEmpty);
-
-                    // 두 번째 방문 펫 창을 인접 배치하면 말풍선 영역이 겹치지 않도록 자동 회피
-                    var friend2 = new FriendEntry
-                    {
-                        PetId = "friend-ui-02",
-                        OwnerName = "민수",
-                        PetName = "모찌",
-                        CachedAppearance = new PetAppearance()
-                    };
-                    VisitorPetWindow? window2 = null;
-                    try
-                    {
-                        var visitors = new Dictionary<string, VisitorPetWindow>(StringComparer.OrdinalIgnoreCase)
-                        {
-                            [friend.PetId] = window
-                        };
-                        IReadOnlyList<Rect> GetOccupied(string excludePetId) => visitors
-                            .Where(kv => !string.Equals(kv.Key, excludePetId, StringComparison.OrdinalIgnoreCase)
-                                         && kv.Value.IsAvailableForMessages
-                                         && !kv.Value.CurrentBubblePhysicalBounds.IsEmpty)
-                            .Select(kv => kv.Value.CurrentBubblePhysicalBounds)
-                            .ToList();
-
-                        window2 = new VisitorPetWindow(
-                            friend2,
-                            friend2.CachedAppearance,
-                            meshFactory,
-                            audio,
-                            social,
-                            GetOccupied)
-                        {
-                            ShowActivated = false,
-                            Left = window.Left + 36,
-                            Top = window.Top
-                        };
-                        visitors[friend2.PetId] = window2;
-                        window2.Show();
-                        await FlushUiAsync();
-
-                        Assert.True(window2.TryShowFriendMessage(CreateMessage(friend2.PetId, "인접한 친구의 말풍선 테스트 메시지")));
-                        await FlushUiAsync();
-
-                        Assert.False(window2.CurrentBubblePhysicalBounds.IsEmpty);
-                        Assert.False(window.CurrentBubblePhysicalBounds.IntersectsWith(window2.CurrentBubblePhysicalBounds));
-                    }
-                    finally
-                    {
-                        if (window2 is { IsLoaded: true })
-                        {
-                            window2.Close();
-                        }
-                    }
 
                     // 50% -> 150% 크기 변경 후에도 말풍선 스택 및 창 가용성 유지
                     window.ApplyDisplaySettings(0.5, 0.8);
@@ -1116,6 +1053,206 @@ public sealed class VisitorPetBubbleTests
                 Directory.Delete(tempDir, recursive: true);
             }
         }
+    }
+
+    [Fact]
+    public async Task VisitorPopups_UseReceiveOrderWithoutMovingOrTakingFocusFromTheComposer()
+    {
+        var transport = new LanP2pTransport(udpDiscoveryPort: 0, udpMusicPort: 0, tcpControlPort: 0);
+        var store = new JsonAppDataStore(new StateMigrator(), Path.Combine(Path.GetTempPath(), "LabPet_VisitorOrder_" + Guid.NewGuid().ToString("N")));
+        await using var social = new SocialCoordinatorService(transport, store, new SoloProgressionService());
+        using var audio = new NullAudioAnalyzer();
+        var meshFactory = new ProceduralPetMeshFactory();
+
+        await WpfTestHost.RunAsync(async () =>
+        {
+            var order = new VisitorPopupOrder();
+            var firstFriend = new FriendEntry { PetId = "first", OwnerName = "유라", PetName = "구름" };
+            var secondFriend = new FriendEntry { PetId = "second", OwnerName = "민수", PetName = "모찌" };
+            var first = new VisitorPetWindow(firstFriend, firstFriend.CachedAppearance, meshFactory, audio, social, order)
+            {
+                ShowActivated = false,
+                Left = 220,
+                Top = 230
+            };
+            var second = new VisitorPetWindow(secondFriend, secondFriend.CachedAppearance, meshFactory, audio, social, order)
+            {
+                ShowActivated = false,
+                Left = 315,
+                Top = 230
+            };
+
+            try
+            {
+                first.Show();
+                second.Show();
+                await FlushUiAsync();
+
+                first.OpenChatComposer();
+                await FlushUiAsync();
+                var input = (TextBox)first.FindName("VisitorChatInput");
+                input.Text = "작성 중";
+                var focus = Keyboard.FocusedElement;
+                var composerCard = (Border)first.FindName("VisitorChatComposerCard");
+                var composerBounds = GetScreenBounds(composerCard);
+                var firstNameplate = GetScreenBounds((Border)first.FindName("VisitorNameplate"));
+                var composerHandle = GetPopupHandle(first, "VisitorChatComposerPopup");
+
+                Assert.True(first.ShowChatMessage("첫 번째 친구의 메시지"));
+                await FlushUiAsync();
+                var firstHandle = GetPopupHandle(first, "VisitorBubblePopup");
+                var firstBounds = first.CurrentBubblePhysicalBounds;
+
+                Assert.True(second.ShowChatMessage("두 번째 친구의 메시지"));
+                await FlushUiAsync();
+                var secondHandle = GetPopupHandle(second, "VisitorBubblePopup");
+                Assert.True(first.CurrentBubblePhysicalBounds.IntersectsWith(second.CurrentBubblePhysicalBounds));
+                Assert.Equal(firstBounds, first.CurrentBubblePhysicalBounds);
+                Assert.True(Win32WindowHelper.IsWindowAbove(secondHandle, firstHandle));
+                Assert.True(Win32WindowHelper.IsWindowAbove(composerHandle, secondHandle));
+
+                var secondBounds = second.CurrentBubblePhysicalBounds;
+                Assert.True(first.ShowChatMessage("첫 번째 친구의 최신 메시지", durationMs: 900));
+                await FlushUiAsync();
+                Assert.True(Win32WindowHelper.IsWindowAbove(firstHandle, secondHandle));
+                Assert.True(Win32WindowHelper.IsWindowAbove(composerHandle, firstHandle));
+                Assert.Equal(secondBounds, second.CurrentBubblePhysicalBounds);
+                Assert.Same(focus, Keyboard.FocusedElement);
+
+                await WaitUntilAsync(() => first.ChatBubbleStack.Items.Count == 1);
+                await FlushUiAsync();
+                var firstCards = (StackPanel)first.FindName("VisitorChatCards");
+                Assert.Single(firstCards.Children);
+                Assert.Equal(firstBounds, first.CurrentBubblePhysicalBounds);
+                Assert.Equal(secondBounds, second.CurrentBubblePhysicalBounds);
+                Assert.True(Win32WindowHelper.IsWindowAbove(firstHandle, secondHandle));
+
+                // 입력창의 실제 화면 영역에 다른 펫의 말풍선을 겹쳐도 입력창 HWND가 위에 있어야 한다.
+                Assert.True(Win32WindowHelper.TryGetWindowPhysicalBounds(second, out var petWindow));
+                var secondHead = second.GetPopupHeadPhysical();
+                var overlappingY = (int)Math.Round(petWindow.Top + composerBounds.Bottom + 6 - secondHead.Y);
+                Assert.True(Win32WindowHelper.MoveWindowPhysical(second, (int)petWindow.Left, overlappingY));
+                await FlushUiAsync();
+                Assert.True(second.CurrentBubblePhysicalBounds.IntersectsWith(composerBounds));
+                Assert.True(Win32WindowHelper.IsWindowAbove(firstHandle, secondHandle));
+                Assert.True(Win32WindowHelper.IsWindowAbove(composerHandle, firstHandle));
+
+                second.ApplyDisplaySettings(1.25, 0.9);
+                await FlushUiAsync();
+                Assert.Equal(firstHandle, GetPopupHandle(first, "VisitorBubblePopup"));
+                Assert.Equal(secondHandle, GetPopupHandle(second, "VisitorBubblePopup"));
+                Assert.Equal(composerHandle, GetPopupHandle(first, "VisitorChatComposerPopup"));
+                Assert.True(Win32WindowHelper.IsWindowAbove(firstHandle, secondHandle));
+                Assert.True(Win32WindowHelper.IsWindowAbove(composerHandle, firstHandle));
+                Assert.Same(focus, Keyboard.FocusedElement);
+                Assert.Equal("작성 중", input.Text);
+                Assert.Equal(composerBounds, GetScreenBounds(composerCard));
+                Assert.Equal(firstNameplate, GetScreenBounds((Border)first.FindName("VisitorNameplate")));
+            }
+            finally
+            {
+                second.Close();
+                first.Close();
+            }
+        }).WaitAsync(TimeSpan.FromSeconds(15));
+    }
+
+    [Fact]
+    public async Task VisitorPopups_KeepTheTailOnTheHeadAndNewestCardNearestAtAllDesktopCorners()
+    {
+        var transport = new LanP2pTransport(udpDiscoveryPort: 0, udpMusicPort: 0, tcpControlPort: 0);
+        var store = new JsonAppDataStore(new StateMigrator(), Path.Combine(Path.GetTempPath(), "LabPet_VisitorEdges_" + Guid.NewGuid().ToString("N")));
+        await using var social = new SocialCoordinatorService(transport, store, new SoloProgressionService());
+        using var audio = new NullAudioAnalyzer();
+
+        await WpfTestHost.RunAsync(async () =>
+        {
+            var friend = new FriendEntry { PetId = "corner", OwnerName = "유라", PetName = "구름" };
+            var window = new VisitorPetWindow(friend, friend.CachedAppearance, new ProceduralPetMeshFactory(), audio, social)
+            {
+                ShowActivated = false,
+                Left = 100,
+                Top = 100
+            };
+
+            try
+            {
+                window.Show();
+                await FlushUiAsync();
+                Assert.True(Win32WindowHelper.TryGetNearestWorkArea(window, out var area));
+                var viewport = (Viewport3D)window.FindName("VisitorViewport");
+                var dpi = VisualTreeHelper.GetDpi(viewport);
+                Assert.True(window.ShowChatMessage("먼저 온 메시지는 더 멀리 표시됩니다."));
+                Assert.True(window.ShowChatMessage("최신 메시지"));
+                await FlushUiAsync();
+
+                foreach (var x in new[] { area.Left + 6 * dpi.DpiScaleX, area.Right - 6 * dpi.DpiScaleX })
+                {
+                    foreach (var y in new[] { area.Top + 6 * dpi.DpiScaleY, area.Bottom - 6 * dpi.DpiScaleY })
+                    {
+                        Assert.True(Win32WindowHelper.TryGetWindowPhysicalBounds(window, out var bounds));
+                        var head = window.GetPopupHeadPhysical();
+                        Assert.True(Win32WindowHelper.MoveWindowPhysical(window,
+                            (int)Math.Round(bounds.Left + x - head.X), (int)Math.Round(bounds.Top + y - head.Y)));
+                        await FlushUiAsync();
+
+                        var cards = (StackPanel)window.FindName("VisitorChatCards");
+                        var isBelowHead = y < area.Top + area.Height / 2;
+                        var index = isBelowHead ? 0 : cards.Children.Count - 1;
+                        var card = Assert.IsType<Border>(cards.Children[index]);
+                        Assert.Equal("최신 메시지", Assert.IsType<BubbleLine>(card.DataContext).Text);
+                        var cardBounds = GetScreenBounds(card);
+                        Assert.True(area.Contains(cardBounds));
+                        var tailBase = AssertBubbleHeadAlignment(window);
+                        Assert.True(cardBounds.Contains(tailBase), $"카드 {cardBounds}, 꼬리 밑변 {tailBase}, 모서리 {x},{y}");
+                        Assert.InRange(Math.Abs(tailBase.X - x), 0, 22 * dpi.DpiScaleX);
+                        Assert.True(isBelowHead ? cardBounds.Top > y : cardBounds.Bottom < y);
+                    }
+                }
+
+                // 이름표를 하단에 두었을 때 실제 전송 카드가 이름표 옆의 작업 영역에 남는다.
+                var nameplate = (Border)window.FindName("VisitorNameplate");
+                Assert.True(Win32WindowHelper.TryGetWindowPhysicalBounds(window, out var current));
+                var initialNameplate = GetScreenBounds(nameplate);
+                Assert.True(Win32WindowHelper.MoveWindowPhysical(window,
+                    (int)Math.Round(current.Left + area.Right - initialNameplate.Right - 6),
+                    (int)Math.Round(current.Top + area.Bottom - initialNameplate.Bottom - 4)));
+                await FlushUiAsync();
+                window.OpenChatComposer();
+                await FlushUiAsync();
+                var nameplateBounds = GetScreenBounds(nameplate);
+                var composerBounds = GetScreenBounds((Border)window.FindName("VisitorChatComposerCard"));
+                Assert.True(area.Contains(composerBounds));
+                Assert.True(composerBounds.Right < nameplateBounds.Left);
+            }
+            finally
+            {
+                window.Close();
+            }
+        }).WaitAsync(TimeSpan.FromSeconds(15));
+    }
+
+    private static Point AssertBubbleHeadAlignment(VisitorPetWindow window)
+    {
+        var tail = Assert.IsType<BubblePath>(window.FindName("VisitorBubbleTail"));
+        Assert.True(tail.IsVisible);
+        var geometry = Assert.IsType<PathGeometry>(tail.Data);
+        var figure = Assert.Single(geometry.Figures);
+        var tip = tail.PointToScreen(Assert.IsType<LineSegment>(figure.Segments[0]).Point);
+        var head = window.GetPopupHeadPhysical();
+        Assert.InRange((tip - head).Length, 0, 1.5);
+        return tail.PointToScreen(figure.StartPoint);
+    }
+
+    private static Rect GetScreenBounds(FrameworkElement element)
+        => new(element.PointToScreen(new Point()), element.PointToScreen(new Point(element.ActualWidth, element.ActualHeight)));
+
+    private static IntPtr GetPopupHandle(VisitorPetWindow window, string name)
+    {
+        var popup = Assert.IsType<Popup>(window.FindName(name));
+        var source = Assert.IsType<HwndSource>(PresentationSource.FromVisual(popup.Child));
+        Assert.NotEqual(IntPtr.Zero, source.Handle);
+        return source.Handle;
     }
 
     private static async Task FlushUiAsync()

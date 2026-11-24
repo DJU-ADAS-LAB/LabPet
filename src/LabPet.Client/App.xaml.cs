@@ -28,7 +28,7 @@ public partial class App : Application
     private PetWindow? _petWindow;
     private GameInviteCardWindow? _inviteCardWindow;
     private readonly Dictionary<string, VisitorPetWindow> _visitorWindows = new(StringComparer.OrdinalIgnoreCase);
-    private bool _isRepositioningVisitorBubbles;
+    private readonly VisitorPopupOrder _visitorPopupOrder = new();
 
     protected override async void OnStartup(StartupEventArgs e)
     {
@@ -274,8 +274,7 @@ public partial class App : Application
             _serviceProvider.GetRequiredService<IPetMeshFactory>(),
             _serviceProvider.GetRequiredService<IAudioAnalyzer>(),
             _serviceProvider.GetRequiredService<SocialCoordinatorService>(),
-            GetOccupiedVisitorBubbleBounds,
-            RepositionOtherVisitorBubbles,
+            _visitorPopupOrder,
             target => CloseOtherVisitorChatComposers(_visitorWindows.Values, target));
 
         visitor.ApplyDisplaySettings(petVm.PetScale, petVm.PetOpacity);
@@ -308,57 +307,6 @@ public partial class App : Application
         }
 
         _serviceProvider?.GetRequiredService<PetWindowViewModel>().NotifyVisitorStateChanged();
-        RepositionOtherVisitorBubbles();
-    }
-
-    private IReadOnlyList<Rect> GetOccupiedVisitorBubbleBounds(string excludePetId)
-    {
-        List<Rect>? bounds = null;
-        foreach (var (petId, visitor) in _visitorWindows)
-        {
-            if (string.Equals(petId, excludePetId, StringComparison.OrdinalIgnoreCase)
-                || !visitor.IsAvailableForMessages)
-            {
-                continue;
-            }
-
-            var rect = visitor.CurrentBubblePhysicalBounds;
-            if (!rect.IsEmpty)
-            {
-                bounds ??= [];
-                bounds.Add(rect);
-            }
-
-            var composerRect = visitor.CurrentComposerPhysicalBounds;
-            if (!composerRect.IsEmpty)
-            {
-                bounds ??= [];
-                bounds.Add(composerRect);
-            }
-        }
-
-        return bounds ?? (IReadOnlyList<Rect>)[];
-    }
-
-    private void RepositionOtherVisitorBubbles()
-    {
-        if (_isRepositioningVisitorBubbles || _visitorWindows.Count == 0)
-        {
-            return;
-        }
-
-        _isRepositioningVisitorBubbles = true;
-        try
-        {
-            foreach (var visitor in _visitorWindows.Values.ToList())
-            {
-                visitor.RepositionBubblePopup();
-            }
-        }
-        finally
-        {
-            _isRepositioningVisitorBubbles = false;
-        }
     }
 
     private void SyncVisitorDisplaySettings(double scale, double opacity)
