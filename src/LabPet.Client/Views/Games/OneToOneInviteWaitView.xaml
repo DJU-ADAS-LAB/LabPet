@@ -3,6 +3,7 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              SnapsToDevicePixels="True"
              UseLayoutRounding="True">
+    <ScrollViewer x:Name="InviteWaitScroll" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" CanContentScroll="False">
     <Border Style="{StaticResource HubCardStyle}"
             Padding="22"
             MaxWidth="640"
@@ -238,7 +239,7 @@
                            FontWeight="Bold"
                            Foreground="{StaticResource HubAccentTextBrush}" />
                 <TextBlock DockPanel.Dock="Right"
-                           Text="상대가 수락하면 즉시 게임이 시작됩니다"
+                           Text="양쪽 준비 확인 후 시작"
                            FontSize="11"
                            Foreground="{StaticResource GameTextMutedBrush}" />
             </DockPanel>
@@ -250,7 +251,7 @@
                          Background="{StaticResource GameSubtleFillBrush}"
                          Margin="0,0,0,14" />
 
-            <Button Content="초대 취소"
+            <Button x:Name="CancelInviteWait" Content="초대 취소"
                     Command="{Binding CancelCommand}"
                     IsEnabled="{Binding CanCancel}"
                     Style="{StaticResource GameSecondaryButtonStyle}"
@@ -258,4 +259,5 @@
                     HorizontalAlignment="Stretch" />
         </StackPanel>
     </Border>
+    </ScrollViewer>
 </UserControl>

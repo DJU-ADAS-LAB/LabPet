@@ -91,11 +91,23 @@ public static class RpsGameEngine
         }
     }
 
+    public const string RockEmoji = "✊";
+    public const string PaperEmoji = "✋";
+    public const string ScissorsEmoji = "✌️";
+
+    public static string GetEmoji(RpsMove move) => move switch
+    {
+        RpsMove.Rock => RockEmoji,
+        RpsMove.Paper => PaperEmoji,
+        RpsMove.Scissors => ScissorsEmoji,
+        _ => "?"
+    };
+
     public static string FormatKorean(RpsMove move) => move switch
     {
-        RpsMove.Rock => "✊ 바위",
-        RpsMove.Paper => "🖐 보",
-        RpsMove.Scissors => "✌️ 가위",
-        _ => "✊ 바위"
+        RpsMove.Rock => "바위",
+        RpsMove.Paper => "보",
+        RpsMove.Scissors => "가위",
+        _ => "?"
     };
 }

@@ -144,7 +144,7 @@
                            FontSize="12.5"
                            FontWeight="SemiBold"
                            Foreground="{StaticResource GameTextSecondaryBrush}"
-                           TextAlignment="Center" />
+                           TextAlignment="Center" TextWrapping="Wrap" />
             </Grid>
         </Border>
 

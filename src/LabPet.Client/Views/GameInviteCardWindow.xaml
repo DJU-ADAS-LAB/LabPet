@@ -35,8 +35,12 @@
 
         <StackPanel>
             <!-- 상단: 친구 펫 초상 + 이름 + 게임 이름 + 남은 시간 -->
-            <DockPanel LastChildFill="False" Margin="0,0,0,10">
-                <StackPanel DockPanel.Dock="Left" Orientation="Horizontal" VerticalAlignment="Center">
+            <Grid Margin="0,0,0,10">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <DockPanel VerticalAlignment="Center" Margin="0,0,8,0">
                     <Border Width="44"
                             Height="44"
                             CornerRadius="12"
@@ -46,22 +50,22 @@
                             Margin="0,0,10,0">
                         <Image Source="{Binding IncomingInvitePortrait}" Margin="3" RenderOptions.BitmapScalingMode="HighQuality" />
                     </Border>
-                    <StackPanel VerticalAlignment="Center" MaxWidth="144">
-                        <TextBlock Text="{Binding IncomingInvite.SenderName, FallbackValue=''}"
+                    <StackPanel VerticalAlignment="Center">
+                        <TextBlock x:Name="InviteSenderName" Text="{Binding IncomingInvite.SenderName, FallbackValue=''}"
                                    FontSize="13.5"
                                    FontWeight="Bold"
                                    Foreground="{StaticResource GameTextPrimaryBrush}"
-                                   TextTrimming="CharacterEllipsis" />
+                                   TextWrapping="Wrap" />
                         <TextBlock Text="{Binding IncomingInvite.GameDisplayName, FallbackValue=''}"
                                    FontSize="12"
                                    FontWeight="SemiBold"
                                    Foreground="{StaticResource GamePinkBrush}"
                                    Margin="0,2,0,0" />
                     </StackPanel>
-                </StackPanel>
+                </DockPanel>
 
                 <!-- 남은 수락 시간 배지 -->
-                <Border DockPanel.Dock="Right"
+                <Border Grid.Column="1"
                         VerticalAlignment="Top"
                         Background="{StaticResource GameSubtleFillBrush}"
                         CornerRadius="9"
@@ -79,7 +83,7 @@
                         </TextBlock>
                     </StackPanel>
                 </Border>
-            </DockPanel>
+            </Grid>
 
             <!-- 참가비 · 코인 충족 여부 · 사다리 상품 정보 -->
             <StackPanel Margin="0,0,0,10">
@@ -132,15 +136,15 @@
                         </Grid.ColumnDefinitions>
                         <StackPanel Grid.Column="0">
                             <TextBlock Text="필요 코인" FontSize="10" Foreground="{StaticResource GameTextMutedBrush}" />
-                            <TextBlock Text="{Binding IncomingInviteRequiredCoinsText}" FontSize="11.5" FontWeight="Bold" Foreground="{StaticResource GameTextPrimaryBrush}" Margin="0,1,0,0" />
+                            <TextBlock Text="{Binding IncomingInviteRequiredCoinsText}" FontSize="11.5" FontWeight="Bold" Foreground="{StaticResource GameTextPrimaryBrush}" Margin="0,1,0,0" TextWrapping="Wrap" />
                         </StackPanel>
                         <StackPanel Grid.Column="1">
                             <TextBlock Text="보유 코인" FontSize="10" Foreground="{StaticResource GameTextMutedBrush}" />
-                            <TextBlock Text="{Binding IncomingInviteCurrentCoinsText}" FontSize="11.5" FontWeight="Bold" Foreground="{StaticResource GameCoinBrush}" Margin="0,1,0,0" />
+                            <TextBlock Text="{Binding IncomingInviteCurrentCoinsText}" FontSize="11.5" FontWeight="Bold" Foreground="{StaticResource GameCoinBrush}" Margin="0,1,0,0" TextWrapping="Wrap" />
                         </StackPanel>
                         <StackPanel Grid.Column="2" Visibility="{Binding HasIncomingInviteInsufficientCoins, Converter={StaticResource BoolToVis}}">
                             <TextBlock Text="부족 코인" FontSize="10" Foreground="{StaticResource GameLossBrush}" />
-                            <TextBlock Text="{Binding IncomingInviteShortfallText}" FontSize="11.5" FontWeight="Bold" Foreground="{StaticResource GameLossBrush}" Margin="0,1,0,0" />
+                            <TextBlock Text="{Binding IncomingInviteShortfallText}" FontSize="11.5" FontWeight="Bold" Foreground="{StaticResource GameLossBrush}" Margin="0,1,0,0" TextWrapping="Wrap" />
                         </StackPanel>
                     </Grid>
                 </Border>
@@ -150,7 +154,7 @@
                         CornerRadius="9"
                         Padding="9,6"
                         Margin="0,2,0,0">
-                    <TextBlock FontSize="11.5"
+                    <TextBlock x:Name="InvitePrizeSummary" FontSize="11.5"
                                FontWeight="SemiBold"
                                Foreground="{StaticResource GameTextSecondaryBrush}"
                                TextWrapping="Wrap">
@@ -184,7 +188,7 @@
                         Height="36"
                         Focusable="False" />
 
-                <Button Grid.Column="2"
+                <Button x:Name="InviteAccept" Grid.Column="2"
                         Command="{Binding AcceptIncomingInviteCommand}"
                         IsEnabled="{Binding CanAcceptIncomingInvite}"
                         Height="36"

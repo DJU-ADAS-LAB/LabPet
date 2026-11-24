@@ -1,8 +1,18 @@
 using System.Globalization;
 using System.Windows;
 using System.Windows.Data;
+using LabPet.Client.Games;
 
 namespace LabPet.Client.Views.Games;
+
+public sealed class RpsMoveEmojiConverter : IValueConverter
+{
+    public object Convert(object? value, Type targetType, object? parameter, CultureInfo culture)
+        => value is RpsMove move ? RpsGameEngine.GetEmoji(move) : "?";
+
+    public object ConvertBack(object? value, Type targetType, object? parameter, CultureInfo culture)
+        => Binding.DoNothing;
+}
 
 /// <summary>
 /// enum 값을 ConverterParameter 문자열과 비교해 bool을 반환한다. (라디오/필 버튼 바인딩용)

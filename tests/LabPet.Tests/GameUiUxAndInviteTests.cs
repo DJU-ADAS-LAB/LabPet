@@ -4,6 +4,7 @@ using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Text.Json;
 using System.Windows;
+using System.Windows.Controls;
 using System.Windows.Interop;
 using System.Windows.Threading;
 using LabPet.Client.Audio;
@@ -304,6 +305,168 @@ public sealed class GameUiUxAndInviteTests : IAsyncLifetime
 
             return Task.CompletedTask;
         });
+    }
+
+    [Fact]
+    public async Task InviteBannerAndDesktopCard_KeepLongContentAndActionsWithinTheLayout()
+    {
+        await WpfTestHost.RunAsync(async () =>
+        {
+            var petVm = new PetWindowViewModel(_hostStore, _hostSocial);
+            petVm.ApplyProfile(_hostProfile);
+            using var games = new CoinGamesViewModel(_hostStore, new SoloProgressionService(), _hostSocial);
+            games.BindProfile(_hostProfile);
+            var portraits = new PetPortraitRenderer(new ProceduralPetMeshFactory());
+            var sender = "길이가 긴 친구 이름과 펫 이름을 모두 보여 주는 테스트";
+            var prizes = string.Join(", ", Enumerable.Repeat("사무실에서 함께 쓰는 간식 선택권 ×1", 6));
+            games.IncomingInviteStatus = GameInviteStatus.Pending;
+            games.IncomingInviteRemainingSeconds = 19;
+            games.IncomingInvite = new IncomingGameInvite(
+                _guestProfile.PetId, sender, _guestAsFriend, LabLadderEngine.GameTypeId,
+                Guid.NewGuid().ToString("N"), 30, PrizeSummary: prizes);
+
+            HubWindow? hub = null;
+            GamesPageView? gamesPage = null;
+            HubNavigationService? navigation = null;
+            navigation = new HubNavigationService(() =>
+            {
+                var shell = new HubViewModel(navigation!, petVm, games, portraits) { IsSidebarCollapsed = false };
+                return hub = new HubWindow(shell, _ => gamesPage = new GamesPageView(games, petVm), new HubWindowStateStore(_hostStore.DataDirectory));
+            });
+            var card = new GameInviteCardWindow(games) { Left = -20000, Top = -20000 };
+            try
+            {
+                await navigation.NavigateAsync(new NavigationRequest(HubPage.Games));
+                hub!.Left = hub.Top = -20000;
+                hub.Width = hub.MinWidth;
+                hub.Height = hub.MinHeight;
+                hub.UpdateLayout();
+                card.Show();
+                card.UpdateLayout();
+                await WpfTestHost.FlushAsync();
+
+                var banner = Assert.IsType<Border>(hub.FindName("GameInviteBanner"));
+                var bannerSummary = Assert.IsType<TextBlock>(hub.FindName("GameInviteBannerSummary"));
+                var bannerAccept = Assert.IsType<Button>(hub.FindName("GameInviteBannerAccept"));
+                Assert.Contains(prizes, bannerSummary.Text);
+                Assert.True(bannerSummary.ActualHeight > bannerSummary.FontSize * 2);
+                var summaryBounds = AssertWithin(banner, bannerSummary);
+                var actionBounds = AssertWithin(banner, bannerAccept);
+                Assert.True(summaryBounds.Right < actionBounds.Left);
+                var dashboard = Assert.IsType<GamesHubView>(gamesPage!.GamesHub);
+                var dashboardScroll = Assert.IsType<ScrollViewer>(dashboard.FindName("DashboardCardsScroll"));
+                Assert.True(dashboardScroll.ScrollableHeight > 0);
+                AssertWithin(dashboardScroll, Assert.IsType<TextBlock>(dashboard.FindName("RpsDashboardTitle")));
+                dashboardScroll.ScrollToBottom();
+                hub.UpdateLayout();
+                AssertWithin(dashboardScroll, Assert.IsType<TextBlock>(dashboard.FindName("LadderDashboardTitle")));
+
+                var cardRoot = Assert.IsType<Border>(card.FindName("InviteCardRoot"));
+                var cardSender = Assert.IsType<TextBlock>(card.FindName("InviteSenderName"));
+                var cardPrizes = Assert.IsType<TextBlock>(card.FindName("InvitePrizeSummary"));
+                Assert.Equal(sender, cardSender.Text);
+                Assert.Contains(prizes, new System.Windows.Documents.TextRange(cardPrizes.ContentStart, cardPrizes.ContentEnd).Text);
+                Assert.True(cardSender.ActualHeight > cardSender.FontSize * 2);
+                Assert.True(cardPrizes.ActualHeight > cardPrizes.FontSize * 2);
+                AssertWithin(cardRoot, cardPrizes);
+                AssertWithin(cardRoot, Assert.IsType<Button>(card.FindName("InviteAccept")));
+            }
+            finally
+            {
+                card.Close();
+                hub?.Close();
+                portraits.ClearCache();
+            }
+        });
+    }
+
+    [Fact]
+    public async Task CompactGameViews_KeepInviteActionsAndGestureEmojiReachable()
+    {
+        await WpfTestHost.RunAsync(async () =>
+        {
+            using var games = new CoinGamesViewModel(_hostStore, new SoloProgressionService(), _hostSocial);
+            games.BindProfile(_hostProfile);
+            var wait = new OneToOneInviteWaitView
+            {
+                DataContext = new OneToOneInviteWaitState
+                {
+                    GameTitle = "타이핑 대결",
+                    OpponentDisplayName = "아주 긴 상대방 펫 이름과 사용자 이름",
+                    StatusDetailText = string.Concat(Enumerable.Repeat("상대가 초대를 등록하고 준비할 때까지 기다리는 중입니다. ", 4))
+                }
+            };
+            var rps = new RpsGameView { DataContext = games };
+            var window = new Window { Left = -20000, Top = -20000, Width = 548, Height = 330, Content = wait, ShowActivated = false };
+            try
+            {
+                window.Show();
+                window.UpdateLayout();
+                var waitScroll = Assert.IsType<ScrollViewer>(wait.FindName("InviteWaitScroll"));
+                Assert.True(waitScroll.ScrollableHeight > 0);
+                waitScroll.ScrollToBottom();
+                window.UpdateLayout();
+                AssertWithin(waitScroll, Assert.IsType<Button>(wait.FindName("CancelInviteWait")));
+
+                games.RpsPhase = RpsPhase.Choosing;
+                games.CanChooseRpsMove = true;
+                games.RpsMySelectedMove = RpsMove.Rock;
+                window.Content = rps;
+                window.UpdateLayout();
+                await WpfTestHost.FlushAsync();
+                var arenaScroll = Assert.IsType<ScrollViewer>(rps.FindName("RpsArenaScroll"));
+                Assert.True(arenaScroll.ScrollableHeight > 0);
+                arenaScroll.ScrollToBottom();
+                window.UpdateLayout();
+
+                foreach (var (name, emoji) in new[] { ("ScissorsChoiceEmoji", "✌️"), ("RockChoiceEmoji", "✊"), ("PaperChoiceEmoji", "✋") })
+                {
+                    var glyph = Assert.IsType<TextBlock>(rps.FindName(name));
+                    Assert.Equal(emoji, glyph.Text);
+                    AssertWithin(arenaScroll, glyph);
+                }
+
+                var myMove = Assert.IsType<TextBlock>(rps.FindName("RpsMyMoveEmoji"));
+                var opponent = Assert.IsType<TextBlock>(rps.FindName("RpsOpponentMoveEmoji"));
+                Assert.Equal("✊", myMove.Text);
+                Assert.False(opponent.IsVisible);
+                games.RpsRevealedOpponentMove = RpsMove.Paper;
+                games.RpsPhase = RpsPhase.Result;
+                arenaScroll.ScrollToTop();
+                window.UpdateLayout();
+                Assert.Equal("✋", opponent.Text);
+                AssertWithin(arenaScroll, myMove);
+                AssertWithin(arenaScroll, opponent);
+
+                games.LadderStage = LadderStage.Lobby;
+                games.LadderRoomPrizesText = string.Concat(Enumerable.Repeat("사무실에서 쓰는 간식 선택권 ×1, ", 6));
+                games.LadderStatusText = "모든 응답이 끝났습니다. 참가자를 확정하면 위치를 선택할 수 있습니다.";
+                games.ShowConfirmLadderButton = true;
+                var ladder = new LadderGameView { DataContext = games };
+                window.Content = ladder;
+                window.UpdateLayout();
+                await WpfTestHost.FlushAsync();
+                var lobbyPrizes = Assert.IsType<TextBlock>(ladder.FindName("LobbyPrizeText"));
+                Assert.True(lobbyPrizes.ActualHeight > lobbyPrizes.FontSize * 2);
+                AssertWithin(ladder, lobbyPrizes);
+                AssertWithin(ladder, Assert.IsType<Button>(ladder.FindName("LobbyConfirmButton")));
+            }
+            finally
+            {
+                window.Close();
+            }
+        });
+    }
+
+    private static Rect AssertWithin(FrameworkElement container, FrameworkElement element)
+    {
+        Assert.True(element.IsVisible);
+        Assert.True(element.ActualWidth > 0 && element.ActualHeight > 0);
+        var bounds = element.TransformToAncestor(container).TransformBounds(new Rect(element.RenderSize));
+        Assert.True(bounds.Left >= -1 && bounds.Top >= -1
+            && bounds.Right <= container.ActualWidth + 1 && bounds.Bottom <= container.ActualHeight + 1,
+            $"요소 {element.Name} 배치 {bounds}, 상위 영역 {container.RenderSize}");
+        return bounds;
     }
 
     [Fact]
