@@ -27,9 +27,11 @@ Windows 바탕화면 위에서 투명 창으로 상주하는 **3D 커스텀 데�
 
 ## 빌드 · 테스트 · 실행
 
-`main` 푸시와 `main` 대상 PR에서 공통 Windows 빌드·테스트·패키징을 자동 실행한다. [Windows 검증 워크플로](.github/workflows/verify.yml)
+`main` 푸시와 `main` 대상 PR에서는 Release 빌드와 전체 단위 테스트를 실행한다. [Windows 검증 워크플로](.github/workflows/verify.yml) · [Windows 릴리스 워크플로](.github/workflows/release.yml)
 ```powershell
-pwsh -NoProfile -File scripts/Verify.ps1
+dotnet restore LabPet.slnx
+dotnet build LabPet.slnx -c Release --no-restore
+dotnet test LabPet.slnx -c Release --no-build --no-restore
 dotnet run --project src/LabPet.Client/LabPet.Client.csproj
 ```
 

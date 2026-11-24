@@ -23,7 +23,7 @@
 
 ## 3. 로컬 환경, 빌드·테스트·실행 명령
 - **SDK**: `.NET 10.0.404` ([global.json](global.json) 고정)
-- **공통 검증**: `pwsh -NoProfile -File scripts/Verify.ps1` ([검증 스크립트](scripts/Verify.ps1))
+- **릴리스 빌드 및 전체 테스트**: `dotnet restore LabPet.slnx; dotnet build LabPet.slnx -c Release --no-restore; dotnet test LabPet.slnx -c Release --no-build --no-restore`
 - **클라이언트 실행**: `dotnet run --project src/LabPet.Client/LabPet.Client.csproj`
 
 ## 4. 아키텍처 및 핵심 디렉터리·모듈 맵
@@ -70,12 +70,12 @@
 
 ## 7. 필수 검증 및 배포 규칙
 
-1. 코드 변경 완료 후 [공통 검증](scripts/Verify.ps1)을 실행한다.
-2. Debug와 Release 각각의 빌드 및 전체 테스트를 확인한다.
-3. 배포 전에 Windows x64 self-contained Publish와 Velopack 패키징 및 필수 파일을 확인한다.
-4. 로컬 사전 검증과 동일 커밋의 원격 `main` 검증이 실패하거나 완료되지 않은 경우 배포 태그를 생성하지 않는다. [릴리스 스크립트](scripts/Release.ps1)
+1. 코드 변경 완료 후 `dotnet build LabPet.slnx -c Release` 및 `dotnet test LabPet.slnx -c Release --no-build` 전체 테스트를 실행한다([검증 워크플로](.github/workflows/verify.yml)는 일반 Push와 PR에서 Release 빌드·테스트만 수행한다).
+2. 배포 전에는 `dotnet publish src/LabPet.Client/LabPet.Client.csproj -c Release -r win-x64 --self-contained true` 및 공식 Velopack CLI(`vpk`) 기반 단일 패키징([릴리스 워크플로](.github/workflows/release.yml))을 확인한다.
+3. 실제 배포는 `v*.*.*` 태그 푸시로 [릴리스 워크플로](.github/workflows/release.yml) 단일 워크플로에서 진행하며, [클라이언트 프로젝트](src/LabPet.Client/LabPet.Client.csproj)의 `<Version>`과 태그가 일치하고 로컬 검증이 끝난 경우에만 태그를 생성한다.
+4. 패키징은 이전 공식 릴리스 다운로드(`vpk download github`) → 단일 `vpk pack` → `vpk upload github --publish` 공식 CLI 흐름을 사용하며, 이전 릴리스를 받지 못하거나 차분 생성에 실패한 경우에만 전체 업데이트 패키지로 대체한다.
 5. 릴리스 작업 전 [배포 운영 가이드](docs/배포_운영_가이드.md)와 [배포 장애 및 재발 방지](docs/배포_장애_및_재발방지.md)를 확인한다. 새 오류의 로그, 원인과 재발 방지 검증을 장애 문서에 기록한다.
 6. 테스트를 삭제·무시하거나 임의 지연 또는 무조건 재시도로 오류를 숨기지 않는다.
-7. 배포 성공 보고 전에 Actions 결과와 공개 Release, 설치 프로그램, 전체 업데이트 패키지, 자동 업데이트 피드의 실제 버전을 확인한다.
+7. 배포 성공 보고 전에 Actions 결과와 공개 Release, 설치 프로그램, 포터블 ZIP, 전체/차분 업데이트 패키지, 자동 업데이트 피드(`releases.win.json` · `RELEASES`)의 실제 버전을 확인한다.
 8. 실행한 검증과 미실행 검증을 구분해 기록한다.
 9. 원격 푸시와 실제 배포는 사용자의 명시적 승인에 따른다.

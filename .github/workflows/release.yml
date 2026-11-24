@@ -7,14 +7,13 @@ on:
 
 permissions:
   contents: write
-  actions: read
 
 concurrency:
   group: labpet-windows-release
   cancel-in-progress: false
 
 jobs:
-  publish-verified-release:
+  release:
     runs-on: windows-latest
     timeout-minutes: 20
     env:
@@ -23,27 +22,132 @@ jobs:
       - uses: actions/checkout@v6
         with:
           persist-credentials: false
+
       - uses: actions/setup-dotnet@v5
         with:
           global-json-file: global.json
-      - name: 태그 커밋의 검증 성공 기록 확인
-        id: verification
+
+      - name: 버전 및 Velopack 버전 확인
+        id: meta
         shell: pwsh
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: ./scripts/Release.ps1 -ResolveVerification
-      - name: 같은 커밋의 검증 패키지 다운로드
-        uses: actions/download-artifact@v8
-        with:
-          name: ${{ steps.verification.outputs.artifact }}
-          path: ${{ runner.temp }}/labpet-release-packages
-          github-token: ${{ github.token }}
-          run-id: ${{ steps.verification.outputs.run-id }}
-      - name: 릴리스 초안에 업로드하고 검증 후 공개
-        shell: pwsh
-        env:
-          GH_TOKEN: ${{ github.token }}
-          LABPET_VERIFY_RUN: ${{ steps.verification.outputs.run-id }}
-          LABPET_VERIFY_ATTEMPT: ${{ steps.verification.outputs.attempt }}
         run: |
-          ./scripts/Release.ps1 -Publish -PackageDirectory (Join-Path $env:RUNNER_TEMP 'labpet-release-packages') -RunId $env:LABPET_VERIFY_RUN -RunAttempt $env:LABPET_VERIFY_ATTEMPT
+          [xml]$csproj = Get-Content -LiteralPath src/LabPet.Client/LabPet.Client.csproj -Raw
+          $version = $csproj.SelectSingleNode('/Project/PropertyGroup/Version').InnerText.Trim()
+          $vpkVersion = $csproj.SelectSingleNode('/Project/ItemGroup/PackageReference[@Include="Velopack"]').GetAttribute('Version').Trim()
+          if ($version -cnotmatch '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$') {
+            throw "클라이언트 Version은 세 자리 SemVer여야 합니다: $version"
+          }
+          if ("${{ github.ref_name }}" -cne "v$version") {
+            throw "태그(${{ github.ref_name }})와 프로젝트 버전(v$version)이 일치하지 않습니다."
+          }
+          "version=$version" >> $env:GITHUB_OUTPUT
+          "tag=v$version" >> $env:GITHUB_OUTPUT
+          "velopack_version=$vpkVersion" >> $env:GITHUB_OUTPUT
+
+      - name: Release 복원 · 빌드 · 테스트
+        shell: pwsh
+        run: |
+          dotnet restore LabPet.slnx
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          dotnet build LabPet.slnx -c Release --no-restore
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          dotnet test LabPet.slnx -c Release --no-build --no-restore --blame-hang-timeout 30s
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Windows x64 self-contained Publish
+        shell: pwsh
+        env:
+          LABPET_SERVER_URL: ${{ secrets.LABPET_SERVER_URL || vars.LABPET_SERVER_URL }}
+        run: |
+          $publishArgs = @(
+            'publish', 'src/LabPet.Client/LabPet.Client.csproj',
+            '-c', 'Release',
+            '-r', 'win-x64',
+            '--self-contained', 'true',
+            "-p:Version=${{ steps.meta.outputs.version }}",
+            '-o', './publish/win-x64'
+          )
+          if (-not [string]::IsNullOrWhiteSpace($env:LABPET_SERVER_URL)) {
+            $publishArgs += "-p:LabPetDefaultServerUrl=$($env:LABPET_SERVER_URL.Trim())"
+          }
+          dotnet @publishArgs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Velopack CLI (vpk) 설치
+        shell: pwsh
+        run: |
+          dotnet tool install -g vpk --version "${{ steps.meta.outputs.velopack_version }}"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: 이전 릴리스 다운로드 및 단일 Velopack 패키징
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $false
+
+          $ver = "${{ steps.meta.outputs.version }}"
+          $repoUrl = "${{ github.server_url }}/${{ github.repository }}"
+          $releasesDir = "./Releases"
+          New-Item -ItemType Directory -Path $releasesDir -Force | Out-Null
+
+          $hasPrevious = $false
+          vpk download github `
+            --repoUrl $repoUrl `
+            --token "${{ github.token }}" `
+            --outputDir $releasesDir
+          if ($LASTEXITCODE -eq 0 -and @(Get-ChildItem -LiteralPath $releasesDir -File -Filter 'LabPet-*-full.nupkg').Count -gt 0) {
+            $hasPrevious = $true
+          } else {
+            Write-Warning "이전 릴리스 전체 패키지를 찾지 못해 전체 업데이트 패키지로 생성합니다."
+            Remove-Item -Path (Join-Path $releasesDir '*') -Recurse -Force -ErrorAction SilentlyContinue
+          }
+
+          $packArgs = @(
+            'pack',
+            '--runtime', 'win-x64',
+            '-u', 'LabPet',
+            '-v', $ver,
+            '-p', './publish/win-x64',
+            '-e', 'LabPet.Client.exe',
+            '-i', './src/LabPet.Client/Assets/app.ico',
+            '-o', $releasesDir
+          )
+
+          vpk @packArgs
+          if ($LASTEXITCODE -ne 0 -and $hasPrevious) {
+            Write-Warning "차분 패키징에 실패하여 이전 패키지를 비우고 전체 업데이트 패키지로 대체 생성합니다."
+            Remove-Item -Path (Join-Path $releasesDir '*') -Recurse -Force -ErrorAction SilentlyContinue
+            vpk @packArgs
+          }
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+          foreach ($required in @(
+            'LabPet-win-Setup.exe',
+            'LabPet-win-Portable.zip',
+            "LabPet-$ver-full.nupkg",
+            'releases.win.json',
+            'RELEASES'
+          )) {
+            $item = Get-Item -LiteralPath (Join-Path $releasesDir $required) -ErrorAction Stop
+            if ($item.Length -le 0) { throw "필수 릴리스 파일이 비어 있습니다: $required" }
+          }
+
+          $deltaPath = Join-Path $releasesDir "LabPet-$ver-delta.nupkg"
+          if (Test-Path -LiteralPath $deltaPath -PathType Leaf) {
+            Write-Host "차분 + 전체 패키지 생성 완료: $deltaPath"
+          } else {
+            Write-Host "전체 업데이트 전용 패키지 생성 완료: LabPet-$ver-full.nupkg"
+          }
+
+      - name: GitHub Release 업로드 및 공개
+        shell: pwsh
+        run: |
+          vpk upload github `
+            --repoUrl "${{ github.server_url }}/${{ github.repository }}" `
+            --token "${{ github.token }}" `
+            --outputDir ./Releases `
+            --publish `
+            --tag "${{ steps.meta.outputs.tag }}" `
+            --releaseName "LabPet ${{ steps.meta.outputs.tag }}" `
+            --targetCommitish "${{ github.sha }}"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

@@ -11,6 +11,17 @@ namespace LabPet.Tests;
 public sealed class UpgradeAndUpdateTests
 {
     [Fact]
+    public void UpdateSourceOptions_DefaultsPreserveOfficialStaticFeedAndRepoUrl()
+    {
+        var defaults = new UpdateSourceOptions();
+
+        Assert.Equal(UpdateProviderKind.SimpleWeb, defaults.Provider);
+        Assert.Equal("https://github.com/DJU-ADAS-LAB/LabPet", defaults.GitHubRepoUrl);
+        Assert.Equal("https://github.com/DJU-ADAS-LAB/LabPet/releases/latest/download", defaults.SimpleWebFeedUrl);
+        Assert.IsType<SimpleWebSource>(defaults.CreateUpdateSource());
+    }
+
+    [Fact]
     public void UpdateSourceOptions_SwitchesBetweenGitHubAndSimpleWebSource()
     {
         var ghOptions = new UpdateSourceOptions
