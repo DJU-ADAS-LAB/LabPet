@@ -1,4 +1,4 @@
-#Requires -Version 7.2
+﻿#Requires -Version 7.2
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version 3.0
@@ -25,9 +25,9 @@ function Invoke-LabPetCommand {
 }
 
 function Get-LabPetGit {
-    param([Parameter(ValueFromRemainingArguments)][string[]]$Arguments)
-    $result = & git -C $LabPetRoot @Arguments
-    if ($LASTEXITCODE -ne 0) { throw "Git $($Arguments[0]) 실패 ($LASTEXITCODE)" }
+    # -Arguments 파라미터 이름의 축약(-a 등)과 git 옵션 충돌을 막기 위해 $args를 그대로 전달한다.
+    $result = & git -C $LabPetRoot @args
+    if ($LASTEXITCODE -ne 0) { throw "Git $($args[0]) 실패 ($LASTEXITCODE)" }
     return $result
 }
 
