@@ -42,7 +42,7 @@ public sealed partial class CoinGamesViewModel
 
     private async Task WaitForRpsDeadlineAsync(string sessionId)
     {
-        await Task.Delay(RpsRoundTimeout);
+        if (!await WaitForGameTimerAsync(RpsRoundTimeout) || _disposed) return;
         if (IsRpsInMatch && _rpsSessionId == sessionId)
         {
             await RefundRpsRoundAsync("가위바위보 확인 시간이 지나 배팅 코인을 반환했습니다.");

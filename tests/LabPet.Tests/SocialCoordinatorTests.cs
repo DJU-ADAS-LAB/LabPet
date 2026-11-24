@@ -528,6 +528,54 @@ public sealed class SocialCoordinatorTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task PetViewModelShutdown_FlushesTheLatestDebouncedAppearance()
+    {
+        await using var pet = new PetWindowViewModel(_store, _host);
+        pet.PetScale = 1.1;
+        pet.PetScale = 1.25;
+        pet.PetOpacity = 0.65;
+
+        await pet.DisposeAsync();
+
+        var saved = await _store.LoadProfileAsync();
+        Assert.Equal(1.25, saved.PetScale);
+        Assert.Equal(0.65, saved.PetOpacity);
+    }
+
+    [Fact]
+    public async Task DisposeAsync_DrainsAnAcceptedIncomingMessageBeforeReleasingStorage()
+    {
+        var writeStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var allowWrite = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        _coordinationStore.BeforeSaveFriendsAsync = () =>
+        {
+            writeStarted.TrySetResult();
+            return allowWrite.Task;
+        };
+        var received = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+        _host.FriendMessageReceived += (_, message) => received.TrySetResult(message.Text);
+
+        Task? shutdown = null;
+        try
+        {
+            Assert.True(await _guestTransport.SendBubbleMessageAsync(_hostAsFriend, "종료 중 저장 확인"));
+            await writeStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            shutdown = _host.DisposeAsync().AsTask();
+            Assert.False(shutdown.IsCompleted);
+            Assert.Same(shutdown, _host.DisposeAsync().AsTask());
+        }
+        finally
+        {
+            allowWrite.TrySetResult();
+        }
+
+        await shutdown.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal("종료 중 저장 확인", await received.Task.WaitAsync(TimeSpan.FromSeconds(5)));
+        Assert.Equal(2, Assert.Single((await _store.LoadFriendsAsync()).Friends).Intimacy);
+        Assert.False(await _host.SendBubbleMessageAsync(Assert.Single(_host.Friends), "종료 후 전송"));
+    }
+
+    [Fact]
     public async Task FriendRegistration_AcceptAloneSavesTheSameKeyOnBothPeers()
     {
         var requesterTransport = new LanP2pTransport(udpDiscoveryPort: 0, udpMusicPort: 0, tcpControlPort: 0);
@@ -571,7 +619,10 @@ public sealed class SocialCoordinatorTests : IAsyncLifetime
         Assert.Equal(_hostProfile.PetId, hostEntry.PetId);
         Assert.Equal(ProtocolConstants.PairSecretByteLength, Convert.FromBase64String(hostEntry.PairSecretBase64).Length);
         Assert.Equal(hostEntry.PairSecretBase64, requesterEntry.PairSecretBase64);
+        var received = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+        _host.FriendMessageReceived += (_, message) => received.TrySetResult(message.Text);
         Assert.True(await requester.SendBubbleMessageAsync(hostEntry, "등록 직후 메시지"));
+        Assert.Equal("등록 직후 메시지", await received.Task.WaitAsync(TimeSpan.FromSeconds(5)));
     }
 
     [Fact]

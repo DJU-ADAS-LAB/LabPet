@@ -625,8 +625,7 @@ public sealed partial class CoinGamesViewModel
     private async Task WaitForLadderAdmissionAsync(InviteExchange exchange)
     {
         var delay = exchange.Deadline - DateTimeOffset.UtcNow + InviteRetryInterval;
-        if (delay > TimeSpan.Zero)
-            await Task.Delay(delay);
+        if (delay > TimeSpan.Zero && !await WaitForGameTimerAsync(delay)) return;
 
         RunOnUi(() =>
         {

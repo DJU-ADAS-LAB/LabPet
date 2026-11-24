@@ -87,6 +87,8 @@ public sealed class GcpSignalRTransport : ISocialTransport
     private readonly ConcurrentDictionary<string, ControlReplayWindow> _replayWindows = new(StringComparer.OrdinalIgnoreCase);
     private volatile Dictionary<string, FriendEntry> _friendsByPetId = new(StringComparer.OrdinalIgnoreCase);
 
+    private readonly SemaphoreSlim _lifecycle = new(1, 1);
+    private AsyncOperationLifetime _background = new();
     private readonly object _stateLock = new();
     private readonly object _pairingLock = new();
     private readonly Dictionary<string, OutgoingPairing> _outgoingPairings = new(StringComparer.Ordinal);
@@ -140,7 +142,20 @@ public sealed class GcpSignalRTransport : ISocialTransport
         _httpHandlerFactory = httpHandlerFactory;
     }
 
-    public async Task StartAsync(
+    public async Task StartAsync(PetProfile localProfile, IReadOnlyList<FriendEntry> friends, CancellationToken cancellationToken = default)
+    {
+        await _lifecycle.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            await StartCoreAsync(localProfile, friends, cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            _lifecycle.Release();
+        }
+    }
+
+    private async Task StartCoreAsync(
         PetProfile localProfile,
         IReadOnlyList<FriendEntry> friends,
         CancellationToken cancellationToken = default)
@@ -180,6 +195,7 @@ public sealed class GcpSignalRTransport : ISocialTransport
             ct = _cts.Token;
             hub = BuildHubConnection(baseUri);
             _hub = hub;
+            _background = new AsyncOperationLifetime();
             IsRunning = true;
         }
 
@@ -190,10 +206,24 @@ public sealed class GcpSignalRTransport : ISocialTransport
 
     public async Task StopAsync(CancellationToken cancellationToken = default)
     {
+        await _lifecycle.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            await StopCoreAsync().ConfigureAwait(false);
+        }
+        finally
+        {
+            _lifecycle.Release();
+        }
+    }
+
+    private async Task StopCoreAsync()
+    {
         HubConnection? hub;
         Task? loopTask;
         CancellationTokenSource? cts;
         ECDsa? key;
+        Task background;
 
         lock (_stateLock)
         {
@@ -203,6 +233,7 @@ public sealed class GcpSignalRTransport : ISocialTransport
             }
 
             IsRunning = false;
+            background = _background.DrainAsync();
             cts = _cts;
             _cts = null;
             hub = _hub;
@@ -231,21 +262,27 @@ public sealed class GcpSignalRTransport : ISocialTransport
             }
         }
 
-        try { cts?.Cancel(); } catch { }
-
-        if (hub is not null)
+        try
         {
-            try { await hub.StopAsync(cancellationToken).ConfigureAwait(false); } catch { }
-            try { await hub.DisposeAsync().ConfigureAwait(false); } catch { }
+            cts?.Cancel();
+            if (hub is not null)
+            {
+                try { await hub.StopAsync().ConfigureAwait(false); }
+                finally { await hub.DisposeAsync().ConfigureAwait(false); }
+            }
         }
-
-        if (loopTask is not null)
+        finally
         {
-            try { await loopTask.WaitAsync(TimeSpan.FromSeconds(2), cancellationToken).ConfigureAwait(false); } catch { }
+            try
+            {
+                await Task.WhenAll(loopTask ?? Task.CompletedTask, background).ConfigureAwait(false);
+            }
+            finally
+            {
+                cts?.Dispose();
+                key?.Dispose();
+            }
         }
-
-        try { cts?.Dispose(); } catch { }
-        key?.Dispose();
     }
 
     public async Task UpdateLocalPresenceAsync(LocalPresenceState presence, CancellationToken cancellationToken = default)
@@ -327,11 +364,18 @@ public sealed class GcpSignalRTransport : ISocialTransport
             RaisePeersChanged();
         }
 
-        var hub = _hub;
-        if (IsRunning && hub is { State: HubConnectionState.Connected })
+        HubConnection? hub;
+        CancellationToken token;
+        IDisposable? operation;
+        lock (_stateLock)
         {
-            var ids = map.Keys.ToList();
-            _ = SyncKnownFriendsWithServerAsync(hub, ids);
+            hub = _hub;
+            token = _cts?.Token ?? new CancellationToken(canceled: true);
+            operation = IsRunning && hub is { State: HubConnectionState.Connected } ? _background.TryBegin() : null;
+        }
+        if (hub is not null && operation is not null)
+        {
+            _ = SyncKnownFriendsWithServerAsync(hub, map.Keys.ToList(), operation, token);
         }
     }
 
@@ -929,14 +973,14 @@ public sealed class GcpSignalRTransport : ISocialTransport
         }
     }
 
-    private async Task SyncKnownFriendsWithServerAsync(HubConnection hub, List<string> friendIds)
+    private async Task SyncKnownFriendsWithServerAsync(HubConnection hub, List<string> friendIds, IDisposable operation, CancellationToken ct)
     {
+        using var work = operation;
         try
         {
-            var ct = _cts?.Token ?? CancellationToken.None;
             var list = await hub.InvokeAsync<List<RemoteFriendStateDto>>(
                 SocialHubConstants.SyncKnownFriendsMethod, friendIds, ct).ConfigureAwait(false);
-            ReplaceAllRemotePeers(list);
+            if (!ct.IsCancellationRequested) { ReplaceAllRemotePeers(list); }
         }
         catch
         {

@@ -9,6 +9,8 @@ obj/
 TestResults/
 publish/
 Releases/
+/.artifacts/
+*_wpftmp.csproj
 
 # Rider / VS Code
 .idea/

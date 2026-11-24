@@ -49,6 +49,8 @@ public sealed partial class LanP2pTransport : ISocialTransport
     private readonly ConcurrentDictionary<string, MusicSequenceWindow> _musicReceiveWindows = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, ControlReplayWindow> _replayWindows = new(StringComparer.OrdinalIgnoreCase);
 
+    private readonly SemaphoreSlim _lifecycle = new(1, 1);
+    private AsyncOperationLifetime _background = new();
     private readonly object _stateLock = new();
     private CancellationTokenSource? _cts;
     private UdpClient? _discoveryUdp;
@@ -87,7 +89,20 @@ public sealed partial class LanP2pTransport : ISocialTransport
 
     public int BoundTcpPort => _boundTcpPort;
 
-    public Task StartAsync(PetProfile localProfile, IReadOnlyList<FriendEntry> friends, CancellationToken cancellationToken = default)
+    public async Task StartAsync(PetProfile localProfile, IReadOnlyList<FriendEntry> friends, CancellationToken cancellationToken = default)
+    {
+        await _lifecycle.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            await StartCoreAsync(localProfile, friends, cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            _lifecycle.Release();
+        }
+    }
+
+    private Task StartCoreAsync(PetProfile localProfile, IReadOnlyList<FriendEntry> friends, CancellationToken cancellationToken = default)
     {
         lock (_stateLock)
         {
@@ -133,6 +148,7 @@ public sealed partial class LanP2pTransport : ISocialTransport
                 return Task.CompletedTask;
             }
 
+            _background = new AsyncOperationLifetime();
             IsRunning = true;
             var ct = _cts.Token;
             _transportTasks =
@@ -147,7 +163,21 @@ public sealed partial class LanP2pTransport : ISocialTransport
 
     public async Task StopAsync(CancellationToken cancellationToken = default)
     {
+        await _lifecycle.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            await StopCoreAsync().ConfigureAwait(false);
+        }
+        finally
+        {
+            _lifecycle.Release();
+        }
+    }
+
+    private async Task StopCoreAsync()
+    {
         Task[] tasks;
+        Task background;
         lock (_stateLock)
         {
             if (!IsRunning)
@@ -156,6 +186,7 @@ public sealed partial class LanP2pTransport : ISocialTransport
             }
 
             IsRunning = false;
+            background = _background.DrainAsync();
             try { _cts?.Cancel(); } catch { }
             try { _tcpListener?.Stop(); } catch { }
             try { _discoveryUdp?.Dispose(); } catch { }
@@ -181,7 +212,7 @@ public sealed partial class LanP2pTransport : ISocialTransport
             }
         }
 
-        await Task.WhenAll(tasks).WaitAsync(cancellationToken).ConfigureAwait(false);
+        await Task.WhenAll(tasks.Append(background)).ConfigureAwait(false);
     }
 
     public Task UpdateLocalPresenceAsync(LocalPresenceState presence, CancellationToken cancellationToken = default)
@@ -193,25 +224,40 @@ public sealed partial class LanP2pTransport : ISocialTransport
             || previous.IsMusicActive != presence.IsMusicActive
             || previous.Level != presence.Level))
         {
-            var ct = _cts?.Token ?? cancellationToken;
-            if (!ct.IsCancellationRequested)
+            var operation = BeginBackgroundWork(out var ct);
+            if (operation is not null)
             {
-                _ = Task.Run(async () =>
-                {
-                    try
-                    {
-                        await SendHelloBroadcastOnceAsync(ct).ConfigureAwait(false);
-                    }
-                    catch
-                    {
-                        // 즉시 브로드캐스트 실패 시 다음 주기 송신으로 보완
-                    }
-                }, ct);
+                _ = BroadcastPresenceAsync(operation, ct);
                 PushPresenceToOnlineFriends(ct);
             }
         }
 
         return Task.CompletedTask;
+    }
+
+    private IDisposable? BeginBackgroundWork(out CancellationToken token)
+    {
+        lock (_stateLock)
+        {
+            token = _cts?.Token ?? new CancellationToken(canceled: true);
+            return IsRunning ? _background.TryBegin() : null;
+        }
+    }
+
+    private async Task BroadcastPresenceAsync(IDisposable operation, CancellationToken ct)
+    {
+        using (operation)
+        {
+            try
+            {
+                await SendHelloBroadcastOnceAsync(ct).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) { }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Trace.TraceWarning("LAN 즉시 프레즌스 송신 실패: {0}", ex.Message);
+            }
+        }
     }
 
     public void UpdateKnownFriends(IReadOnlyList<FriendEntry> friends)

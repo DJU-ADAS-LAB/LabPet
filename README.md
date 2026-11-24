@@ -27,10 +27,9 @@ Windows 바탕화면 위에서 투명 창으로 상주하는 **3D 커스텀 데�
 
 ## 빌드 · 테스트 · 실행
 
-`main` 푸시와 `main` 대상 PR에서 Windows 빌드와 테스트를 자동 실행한다. [Windows 검증 워크플로](.github/workflows/verify.yml)
+`main` 푸시와 `main` 대상 PR에서 공통 Windows 빌드·테스트·패키징을 자동 실행한다. [Windows 검증 워크플로](.github/workflows/verify.yml)
 ```powershell
-dotnet build LabPet.slnx -c Debug
-dotnet test LabPet.slnx -c Debug
+pwsh -NoProfile -File scripts/Verify.ps1
 dotnet run --project src/LabPet.Client/LabPet.Client.csproj
 ```
 
@@ -45,7 +44,8 @@ dotnet run --project src/LabPet.Client/LabPet.Client.csproj
 - [05. 일자별 변경 이력 (2026-11-21)](docs/05_변경이력/2026-11-21.md)
 - [05. 일자별 변경 이력 (2026-11-22)](docs/05_변경이력/2026-11-22.md)
 - [06. 배포 · 자동 업데이트 · 방화벽 및 SmartScreen 가이드](docs/06_배포_자동업데이트_및_방화벽가이드.md)
-- [07. 향후 LabPet.Server (GCP SignalR + Firestore) 확장 가이드](docs/07_GCP_클라우드_확장가이드.md)
+- [Windows 배포 운영](docs/배포_운영_가이드.md) · [배포 장애 및 재발 방지](docs/배포_장애_및_재발방지.md)
+- [07. LabPet.Server GCP 운영 가이드](docs/07_GCP_클라우드_확장가이드.md)
 - [08-0. 기능명세서 개요 및 RTM](docs/08_기능명세서/08-0_기능명세서_개요.md)
   - [08-1. 코어 3D · 온보딩 · 분리 저장소 명세](docs/08_기능명세서/08-1_코어3D_온보딩_저장소.md)
   - [08-2. 오디오 반응 및 개인 성장 명세](docs/08_기능명세서/08-2_오디오반응_및_개인성장.md)

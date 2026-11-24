@@ -26,6 +26,7 @@ public sealed class LoopbackAudioAnalyzer : IAudioAnalyzer, IMMNotificationClien
 
     private readonly AudioSpectrumProcessor _processor = new();
     private readonly Stopwatch _clock = Stopwatch.StartNew();
+    private readonly AsyncOperationLifetime _reconnectWork = new();
     private readonly object _lifecycleLock = new();
     private readonly float[] _sampleRing = new float[AudioSpectrumProcessor.FftLength];
 
@@ -344,6 +345,7 @@ public sealed class LoopbackAudioAnalyzer : IAudioAnalyzer, IMMNotificationClien
     private void ScheduleReconnect()
     {
         CancellationToken token;
+        IDisposable? operation;
         lock (_lifecycleLock)
         {
             if (!_isStarted || _isDisposed)
@@ -354,10 +356,17 @@ public sealed class LoopbackAudioAnalyzer : IAudioAnalyzer, IMMNotificationClien
             CancelPendingReconnectLocked();
             _reconnectCts = new CancellationTokenSource();
             token = _reconnectCts.Token;
+            operation = _reconnectWork.TryBegin();
+        }
+
+        if (operation is null)
+        {
+            return;
         }
 
         _ = Task.Run(async () =>
         {
+            using var work = operation;
             try
             {
                 // 스피커↔블루투스 이어폰 전환 안정화를 위한 짧은 디바운스
@@ -374,7 +383,7 @@ public sealed class LoopbackAudioAnalyzer : IAudioAnalyzer, IMMNotificationClien
             {
                 // 새 장치 변경 이벤트로 대체됨
             }
-        }, token);
+        });
     }
 
     private void CancelPendingReconnectLocked()
@@ -427,6 +436,8 @@ public sealed class LoopbackAudioAnalyzer : IAudioAnalyzer, IMMNotificationClien
             _isDisposed = true;
         }
 
+        var drain = _reconnectWork.DrainAsync();
         Stop();
+        drain.GetAwaiter().GetResult();
     }
 }

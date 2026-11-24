@@ -6,17 +6,21 @@ namespace LabPet.Client.Updates;
 /// Velopack 기반 백그라운드 차분 자동 업데이트 서비스.
 /// 앱 시작 시, 5분 주기, LAN 피어 신버전 감지 시, 또는 사용자 수동 확인 시 업데이트를 내려받고 재시작 적용을 제공한다.
 /// </summary>
-public sealed class UpdateService : IDisposable
+public sealed class UpdateService : IDisposable, IAsyncDisposable
 {
     private static readonly TimeSpan PeriodicCheckInterval = TimeSpan.FromMinutes(5);
     private static readonly TimeSpan PeerHintCooldown = TimeSpan.FromMinutes(2);
 
     private readonly UpdateSourceOptions _options;
+    private readonly object _lifecycle = new();
+    private readonly AsyncOperationLifetime _checks = new();
+    private readonly CancellationTokenSource _stopCts = new();
+    private readonly Lazy<Task> _shutdown;
     private readonly SemaphoreSlim _checkLock = new(1, 1);
 
     private UpdateManager? _manager;
     private UpdateInfo? _pendingUpdate;
-    private CancellationTokenSource? _periodicCts;
+    private Task? _periodicCheck;
     private DateTimeOffset _lastPeerHintCheckUtc = DateTimeOffset.MinValue;
 
     public bool IsUpdateReady => _pendingUpdate is not null;
@@ -28,50 +32,52 @@ public sealed class UpdateService : IDisposable
     public UpdateService(UpdateSourceOptions? options = null)
     {
         _options = options ?? new UpdateSourceOptions();
+        _shutdown = new Lazy<Task>(ShutdownAsync);
     }
 
     public void StartPeriodicChecks(bool silentAutoApplyOnStartup = false)
     {
-        if (_periodicCts is not null)
+        lock (_lifecycle)
         {
-            return;
+            if (_periodicCheck is not null || _stopCts.IsCancellationRequested)
+            {
+                return;
+            }
+            _periodicCheck = RunPeriodicChecksAsync(silentAutoApplyOnStartup, _stopCts.Token);
         }
+    }
 
-        _periodicCts = new CancellationTokenSource();
-        var ct = _periodicCts.Token;
-
-        _ = Task.Run(async () =>
+    private async Task RunPeriodicChecksAsync(bool silentAutoApplyOnStartup, CancellationToken ct)
+    {
+        try
         {
-            try
+            // Windows 부팅 직후 Wi-Fi/LAN 연결 안정화를 위해 8초 대기 후 첫 확인
+            await Task.Delay(TimeSpan.FromSeconds(8), ct).ConfigureAwait(false);
+            var updated = await CheckAndDownloadUpdatesAsync(
+                isManualCheck: false,
+                silentAutoApply: silentAutoApplyOnStartup,
+                ct).ConfigureAwait(false);
+
+            // 부팅 직후 네트워크가 아직 안 붙었을 수 있으므로 1회 재시도 (20초 후)
+            if (silentAutoApplyOnStartup && !updated && !IsUpdateReady)
             {
-                // Windows 부팅 직후 Wi-Fi/LAN 연결 안정화를 위해 8초 대기 후 첫 확인
-                await Task.Delay(TimeSpan.FromSeconds(8), ct).ConfigureAwait(false);
-                var updated = await CheckAndDownloadUpdatesAsync(
+                await Task.Delay(TimeSpan.FromSeconds(20), ct).ConfigureAwait(false);
+                await CheckAndDownloadUpdatesAsync(
                     isManualCheck: false,
-                    silentAutoApply: silentAutoApplyOnStartup,
+                    silentAutoApply: true,
                     ct).ConfigureAwait(false);
-
-                // 부팅 직후 네트워크가 아직 안 붙었을 수 있으므로 1회 재시도 (20초 후)
-                if (silentAutoApplyOnStartup && !updated && !IsUpdateReady)
-                {
-                    await Task.Delay(TimeSpan.FromSeconds(20), ct).ConfigureAwait(false);
-                    await CheckAndDownloadUpdatesAsync(
-                        isManualCheck: false,
-                        silentAutoApply: true,
-                        ct).ConfigureAwait(false);
-                }
-
-                using var timer = new PeriodicTimer(PeriodicCheckInterval);
-                while (await timer.WaitForNextTickAsync(ct).ConfigureAwait(false))
-                {
-                    await CheckAndDownloadUpdatesAsync(isManualCheck: false, silentAutoApply: false, ct).ConfigureAwait(false);
-                }
             }
-            catch (OperationCanceledException)
+
+            using var timer = new PeriodicTimer(PeriodicCheckInterval);
+            while (await timer.WaitForNextTickAsync(ct).ConfigureAwait(false))
             {
-                // 정상 종료
+                await CheckAndDownloadUpdatesAsync(isManualCheck: false, silentAutoApply: false, ct).ConfigureAwait(false);
             }
-        }, ct);
+        }
+        catch (OperationCanceledException)
+        {
+            // 정상 종료
+        }
     }
 
     /// <summary>
@@ -91,7 +97,13 @@ public sealed class UpdateService : IDisposable
         }
 
         _lastPeerHintCheckUtc = now;
-        _ = Task.Run(() => CheckAndDownloadUpdatesAsync(isManualCheck: false));
+        _ = RunPeerHintCheckAsync();
+    }
+
+    private async Task RunPeerHintCheckAsync()
+    {
+        try { await CheckAndDownloadUpdatesAsync(isManualCheck: false).ConfigureAwait(false); }
+        catch (OperationCanceledException) { }
     }
 
     public Task<bool> CheckAndDownloadUpdatesAsync(bool isManualCheck, CancellationToken cancellationToken = default)
@@ -102,7 +114,15 @@ public sealed class UpdateService : IDisposable
         bool silentAutoApply,
         CancellationToken cancellationToken)
     {
-        await _checkLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+        using var operation = _checks.TryBegin();
+        if (operation is null)
+        {
+            return false;
+        }
+
+        using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _stopCts.Token);
+        var token = linked.Token;
+        await _checkLock.WaitAsync(token).ConfigureAwait(false);
         try
         {
             _manager ??= new UpdateManager(_options.CreateUpdateSource());
@@ -130,6 +150,7 @@ public sealed class UpdateService : IDisposable
             }
 
             var updateInfo = await _manager.CheckForUpdatesAsync().ConfigureAwait(false);
+            token.ThrowIfCancellationRequested();
             if (updateInfo is null)
             {
                 if (isManualCheck)
@@ -140,7 +161,7 @@ public sealed class UpdateService : IDisposable
                 return false;
             }
 
-            await _manager.DownloadUpdatesAsync(updateInfo, cancelToken: cancellationToken).ConfigureAwait(false);
+            await _manager.DownloadUpdatesAsync(updateInfo, cancelToken: token).ConfigureAwait(false);
             _pendingUpdate = updateInfo;
 
             // Windows 시작 자동 실행(--autostart) 시에는 팝업 없이 백그라운드 다운로드 후 즉시 재시작 적용
@@ -180,18 +201,27 @@ public sealed class UpdateService : IDisposable
         _manager.ApplyUpdatesAndRestart(_pendingUpdate);
     }
 
-    public void Dispose()
+    public void Dispose() => _shutdown.Value.GetAwaiter().GetResult();
+
+    public ValueTask DisposeAsync() => new(_shutdown.Value);
+
+    private async Task ShutdownAsync()
     {
+        var drain = _checks.DrainAsync();
+        Task? periodic;
+        lock (_lifecycle)
+        {
+            _stopCts.Cancel();
+            periodic = _periodicCheck;
+        }
         try
         {
-            _periodicCts?.Cancel();
-            _periodicCts?.Dispose();
+            await Task.WhenAll(drain, periodic ?? Task.CompletedTask).ConfigureAwait(false);
         }
-        catch
+        finally
         {
-            // 무시
+            _checkLock.Dispose();
+            _stopCts.Dispose();
         }
-
-        _checkLock.Dispose();
     }
 }

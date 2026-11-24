@@ -7,90 +7,43 @@ on:
 
 permissions:
   contents: write
+  actions: read
+
+concurrency:
+  group: labpet-windows-release
+  cancel-in-progress: false
 
 jobs:
-  build-and-release:
+  publish-verified-release:
     runs-on: windows-latest
+    timeout-minutes: 20
     env:
-      VELOPACK_VERSION: "1.2.161"
       DOTNET_NOLOGO: "true"
-
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v6
-
-      - name: Setup .NET 10 SDK
-        uses: actions/setup-dotnet@v5
+      - uses: actions/checkout@v6
         with:
-          dotnet-version: "10.0.x"
-
-      - name: Extract semantic version from tag
-        id: version
+          persist-credentials: false
+      - uses: actions/setup-dotnet@v5
+        with:
+          global-json-file: global.json
+      - name: 태그 커밋의 검증 성공 기록 확인
+        id: verification
         shell: pwsh
-        run: |
-          $tag = "${{ github.ref_name }}"
-          $ver = $tag.TrimStart('v')
-          echo "version=$ver" >> $env:GITHUB_OUTPUT
-          echo "tag=$tag" >> $env:GITHUB_OUTPUT
-
-      - name: Restore and run unit tests
-        shell: pwsh
-        run: |
-          dotnet restore LabPet.slnx
-          dotnet test LabPet.slnx -c Release --no-restore
-
-      - name: Publish LabPet.Client (win-x64 self-contained)
         env:
-          LABPET_SERVER_URL: ${{ secrets.LABPET_SERVER_URL || vars.LABPET_SERVER_URL }}
+          GH_TOKEN: ${{ github.token }}
+        run: ./scripts/Release.ps1 -ResolveVerification
+      - name: 같은 커밋의 검증 패키지 다운로드
+        uses: actions/download-artifact@v8
+        with:
+          name: ${{ steps.verification.outputs.artifact }}
+          path: ${{ runner.temp }}/labpet-release-packages
+          github-token: ${{ github.token }}
+          run-id: ${{ steps.verification.outputs.run-id }}
+      - name: 릴리스 초안에 업로드하고 검증 후 공개
         shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          LABPET_VERIFY_RUN: ${{ steps.verification.outputs.run-id }}
+          LABPET_VERIFY_ATTEMPT: ${{ steps.verification.outputs.attempt }}
         run: |
-          $publishArgs = @(
-            'publish', 'src/LabPet.Client/LabPet.Client.csproj',
-            '-c', 'Release',
-            '-r', 'win-x64',
-            '--self-contained', 'true',
-            "-p:Version=${{ steps.version.outputs.version }}",
-            '-o', './publish/win-x64'
-          )
-          if (-not [string]::IsNullOrWhiteSpace($env:LABPET_SERVER_URL)) {
-            $publishArgs += "-p:LabPetDefaultServerUrl=$($env:LABPET_SERVER_URL.Trim())"
-          }
-          dotnet @publishArgs
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-
-      - name: Install Velopack CLI (vpk) matching NuGet version
-        shell: pwsh
-        run: |
-          dotnet tool install -g vpk --version ${{ env.VELOPACK_VERSION }}
-
-      - name: Download previous GitHub release for delta package generation
-        continue-on-error: true
-        shell: pwsh
-        run: |
-          vpk download github `
-            --repoUrl "${{ github.server_url }}/${{ github.repository }}" `
-            --token "${{ secrets.GITHUB_TOKEN }}" `
-            --outputDir ./Releases
-
-      - name: Pack Velopack installer and delta packages
-        shell: pwsh
-        run: |
-          vpk pack `
-            --runtime win-x64 `
-            -u LabPet `
-            -v "${{ steps.version.outputs.version }}" `
-            -p ./publish/win-x64 `
-            -e LabPet.Client.exe `
-            -i ./src/LabPet.Client/Assets/app.ico `
-            -o ./Releases
-
-      - name: Upload and publish GitHub Release
-        shell: pwsh
-        run: |
-          vpk upload github `
-            --repoUrl "${{ github.server_url }}/${{ github.repository }}" `
-            --token "${{ secrets.GITHUB_TOKEN }}" `
-            --outputDir ./Releases `
-            --publish `
-            --tag "${{ steps.version.outputs.tag }}" `
-            --releaseName "LabPet ${{ steps.version.outputs.tag }}"
+          ./scripts/Release.ps1 -Publish -PackageDirectory (Join-Path $env:RUNNER_TEMP 'labpet-release-packages') -RunId $env:LABPET_VERIFY_RUN -RunAttempt $env:LABPET_VERIFY_ATTEMPT

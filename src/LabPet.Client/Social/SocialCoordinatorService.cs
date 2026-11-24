@@ -58,6 +58,8 @@ public sealed class SocialCoordinatorService : IAsyncDisposable
     private readonly IAppDataStore _store;
     private readonly SoloProgressionService _progression;
 
+    private readonly AsyncOperationLifetime _operations = new();
+    private readonly Lazy<Task> _shutdown;
     private readonly Stopwatch _clock = Stopwatch.StartNew();
     private readonly object _musicLock = new();
     private readonly object _friendStateLock = new();
@@ -112,6 +114,7 @@ public sealed class SocialCoordinatorService : IAsyncDisposable
         _transport = transport;
         _store = store;
         _progression = progression;
+        _shutdown = new Lazy<Task>(ShutdownAsync);
 
         _transport.PeersChanged += OnPeersChanged;
         _transport.FriendRequestReceived += OnFriendRequestReceived;
@@ -127,6 +130,12 @@ public sealed class SocialCoordinatorService : IAsyncDisposable
 
     public async Task StartAsync(PetProfile localProfile, CancellationToken cancellationToken = default)
     {
+        using var operation = _operations.TryBegin();
+        if (operation is null)
+        {
+            return;
+        }
+
         _localProfile = localProfile;
         FriendsStore friendsStore;
         try
@@ -167,6 +176,12 @@ public sealed class SocialCoordinatorService : IAsyncDisposable
         bool? isSleeping = null,
         CancellationToken cancellationToken = default)
     {
+        using var operation = _operations.TryBegin();
+        if (operation is null)
+        {
+            return;
+        }
+
         _localProfile = profile;
         if (isSleeping is { } sleepState)
         {
@@ -239,7 +254,7 @@ public sealed class SocialCoordinatorService : IAsyncDisposable
             var hostFriend = FindFriend(timedOutHost);
             if (hostFriend is not null)
             {
-                _ = _transport.SetMusicFollowAsync(hostFriend, enable: false);
+                _ = ObserveIncomingAsync(() => _transport.SetMusicFollowAsync(hostFriend, enable: false));
             }
 
             var hostName = FindFriendName(timedOutHost);
@@ -281,6 +296,12 @@ public sealed class SocialCoordinatorService : IAsyncDisposable
         PeerSnapshot peer,
         CancellationToken cancellationToken = default)
     {
+        using var operation = _operations.TryBegin();
+        if (operation is null)
+        {
+            return FriendOperationResult.Fail(FriendOperationStage.Sending, FriendOperationErrorCodes.Cancelled, isTransient: false);
+        }
+
         if (peer is null || string.IsNullOrWhiteSpace(peer.PetId))
         {
             return FriendOperationResult.Fail(FriendOperationStage.Validation, FriendOperationErrorCodes.InvalidRequest, false);
@@ -377,8 +398,12 @@ public sealed class SocialCoordinatorService : IAsyncDisposable
         return result;
     }
 
-    public Task<bool> SendGameEventAsync(FriendEntry friend, GameEventPayload payload)
-        => _transport.SendGameEventAsync(FindFriend(friend.PetId) ?? friend, payload);
+    public async Task<bool> SendGameEventAsync(FriendEntry friend, GameEventPayload payload)
+    {
+        using var operation = _operations.TryBegin();
+        return operation is not null && await _transport.SendGameEventAsync(
+            FindFriend(friend.PetId) ?? friend, payload).ConfigureAwait(false);
+    }
 
     public string GetFriendDisplayName(string petId) => FindFriendName(petId);
 
@@ -390,6 +415,12 @@ public sealed class SocialCoordinatorService : IAsyncDisposable
         bool accept,
         CancellationToken cancellationToken = default)
     {
+        using var operation = _operations.TryBegin();
+        if (operation is null)
+        {
+            return FriendOperationResult.Fail(FriendOperationStage.Sending, FriendOperationErrorCodes.Cancelled, isTransient: false);
+        }
+
         if (request is null || string.IsNullOrWhiteSpace(request.RequestId))
         {
             return FriendOperationResult.Fail(FriendOperationStage.Validation, FriendOperationErrorCodes.InvalidRequest, false);
@@ -633,6 +664,12 @@ public sealed class SocialCoordinatorService : IAsyncDisposable
 
     public async Task<bool> SendBubbleMessageAsync(FriendEntry friend, string text)
     {
+        using var operation = _operations.TryBegin();
+        if (operation is null)
+        {
+            return false;
+        }
+
         var ok = await _transport.SendBubbleMessageAsync(FindFriend(friend.PetId) ?? friend, text).ConfigureAwait(false);
         if (ok)
         {
@@ -644,6 +681,12 @@ public sealed class SocialCoordinatorService : IAsyncDisposable
 
     public async Task<bool> SendQuickReactionAsync(FriendEntry friend, string reactionId)
     {
+        using var operation = _operations.TryBegin();
+        if (operation is null)
+        {
+            return false;
+        }
+
         var ok = await _transport.SendQuickReactionAsync(FindFriend(friend.PetId) ?? friend, reactionId).ConfigureAwait(false);
         if (ok)
         {
@@ -663,6 +706,12 @@ public sealed class SocialCoordinatorService : IAsyncDisposable
 
     public async Task<PetInteractionSendResult> SendPetInteractionAsync(FriendEntry friend)
     {
+        using var operation = _operations.TryBegin();
+        if (operation is null)
+        {
+            return PetInteractionSendResult.Unavailable;
+        }
+
         if (!TryReservePetInteraction())
         {
             return PetInteractionSendResult.Cooldown;
@@ -682,6 +731,12 @@ public sealed class SocialCoordinatorService : IAsyncDisposable
 
     public async Task<bool> ToggleMusicFollowAsync(FriendEntry hostFriend)
     {
+        using var operation = _operations.TryBegin();
+        if (operation is null)
+        {
+            return false;
+        }
+
         hostFriend = FindFriend(hostFriend.PetId) ?? hostFriend;
         var previousHostId = FollowingHostPetId;
         var currentlyFollowingThis = string.Equals(previousHostId, hostFriend.PetId, StringComparison.OrdinalIgnoreCase);
@@ -827,7 +882,7 @@ public sealed class SocialCoordinatorService : IAsyncDisposable
             _outgoingRequestStates.Remove(e.AccepterPetId);
         }
 
-        _lastRemoteAcceptPersistTask = HandleRemoteFriendAcceptedAsync(e);
+        _lastRemoteAcceptPersistTask = ObserveIncomingAsync(() => HandleRemoteFriendAcceptedAsync(e));
     }
 
     private async Task HandleRemoteFriendAcceptedAsync(FriendAcceptedEventArgs e)
@@ -881,9 +936,8 @@ public sealed class SocialCoordinatorService : IAsyncDisposable
         SocialNotification?.Invoke(this, "친구 신청이 거절되었어요.");
     }
 
-    private async void OnBubbleMessageReceived(object? sender, BubbleMessageReceivedEventArgs e)
-    {
-        try
+    private void OnBubbleMessageReceived(object? sender, BubbleMessageReceivedEventArgs e)
+        => _ = ObserveIncomingAsync(async () =>
         {
             var name = await RewardSocialBonusAsync(e.SenderPetId, SocialRewardKind.FriendMessage).ConfigureAwait(false);
             var peer = DiscoveredPeers.FirstOrDefault(peer =>
@@ -892,25 +946,38 @@ public sealed class SocialCoordinatorService : IAsyncDisposable
 
             FriendMessageReceived?.Invoke(this, new ReceivedFriendMessage(e.SenderPetId, name, e.Text, appearance, e.MessageId));
             PetReactionTriggered?.Invoke(this, EventArgs.Empty);
+        });
+
+    private void OnQuickReactionReceived(object? sender, QuickReactionReceivedEventArgs e)
+        => _ = ObserveIncomingAsync(async () =>
+        {
+            var name = await RewardSocialBonusAsync(e.SenderPetId, SocialRewardKind.QuickReaction).ConfigureAwait(false);
+            FriendStatusNotification?.Invoke(this, new FriendStatusNotice(e.SenderPetId, $"{name}의 반응: {e.ReactionId}", 2600));
+        });
+
+    private void OnPetInteractionReceived(object? sender, PetInteractionReceivedEventArgs e)
+        => _ = ObserveIncomingAsync(async () =>
+        {
+            var name = await RewardSocialBonusAsync(e.SenderPetId, SocialRewardKind.FriendGreeting).ConfigureAwait(false);
+            FriendStatusNotification?.Invoke(this, new FriendStatusNotice(e.SenderPetId, $"{name}(이)가 인사했어요!", 2600));
+        });
+
+    private async Task ObserveIncomingAsync(Func<Task> run)
+    {
+        using var operation = _operations.TryBegin();
+        if (operation is null)
+        {
+            return;
+        }
+
+        try
+        {
+            await run().ConfigureAwait(false);
         }
         catch (Exception ex)
         {
-            Trace.TraceError("친구 메시지 수신 처리 실패: {0}", ex);
+            Trace.TraceError("백그라운드 소셜 작업 실패: {0}", ex);
         }
-    }
-
-    private async void OnQuickReactionReceived(object? sender, QuickReactionReceivedEventArgs e)
-    {
-        var name = await RewardSocialBonusAsync(e.SenderPetId, SocialRewardKind.QuickReaction).ConfigureAwait(false);
-
-        FriendStatusNotification?.Invoke(this, new FriendStatusNotice(e.SenderPetId, $"{name}의 반응: {e.ReactionId}", 2600));
-    }
-
-    private async void OnPetInteractionReceived(object? sender, PetInteractionReceivedEventArgs e)
-    {
-        var name = await RewardSocialBonusAsync(e.SenderPetId, SocialRewardKind.FriendGreeting).ConfigureAwait(false);
-
-        FriendStatusNotification?.Invoke(this, new FriendStatusNotice(e.SenderPetId, $"{name}(이)가 인사했어요!", 2600));
     }
 
     private void OnMusicFrameReceived(object? sender, MusicFrameReceivedEventArgs e)
@@ -1059,8 +1126,11 @@ public sealed class SocialCoordinatorService : IAsyncDisposable
         return f is null ? "친구" : FormatDisplayName(f.OwnerName, f.PetName);
     }
 
-    public async ValueTask DisposeAsync()
+    public ValueTask DisposeAsync() => new(_shutdown.Value);
+
+    private async Task ShutdownAsync()
     {
+        var drain = _operations.DrainAsync();
         _transport.PeersChanged -= OnPeersChanged;
         _transport.FriendRequestReceived -= OnFriendRequestReceived;
         _transport.FriendAccepted -= OnFriendAccepted;
@@ -1071,6 +1141,7 @@ public sealed class SocialCoordinatorService : IAsyncDisposable
         _transport.MusicFrameReceived -= OnMusicFrameReceived;
         _transport.GameEventReceived -= OnGameEventReceived;
         _transport.TransportError -= OnTransportError;
+        await drain.ConfigureAwait(false);
         await _transport.StopAsync().ConfigureAwait(false);
     }
 }

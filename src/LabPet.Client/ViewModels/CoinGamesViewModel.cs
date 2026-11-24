@@ -647,10 +647,19 @@ public sealed partial class CoinGamesViewModel : ObservableObject, IDisposable
     private void OnSocialStateChanged(object? sender, EventArgs e) => RunOnUi(RefreshOnlineFriends);
 
     private void OnSocialGameEvent(object? sender, GameEventReceivedEventArgs e)
-        => RunOnUi(() => _ = HandleGameEventAsync(e));
+        => RunOnUi(() =>
+        {
+            if (!_disposed)
+            {
+                _ = HandleGameEventAsync(e);
+            }
+        });
 
     private void OnEconomyStateChanged(object? sender, EconomyChangedEventArgs e)
         => RunOnUi(NotifyCoinsChanged);
+
+    private readonly AsyncOperationLifetime _profileSaves = new();
+    private readonly AsyncOperationLifetime _gameTimers = new();
 
     public void Dispose()
     {
@@ -660,6 +669,8 @@ public sealed partial class CoinGamesViewModel : ObservableObject, IDisposable
         }
 
         _disposed = true;
+        var profileSaves = _profileSaves.DrainAsync();
+        var gameTimers = _gameTimers.DrainAsync();
         _social.StateChanged -= OnSocialStateChanged;
         _social.GameEventReceived -= OnSocialGameEvent;
         _progression.Economy.EconomyStateChanged -= OnEconomyStateChanged;
@@ -669,6 +680,7 @@ public sealed partial class CoinGamesViewModel : ObservableObject, IDisposable
         CancelOutgoingWaitCountdown();
         _typingTimer.Stop();
         _typingTimer.Tick -= OnTypingTimerTick;
+        _ladderStartReadiness?.Completion.TrySetResult(false);
         _inviteLifetime.Cancel();
         _inviteLifetime.Dispose();
         foreach (var exchange in _inviteExchanges.Values)
@@ -677,6 +689,7 @@ public sealed partial class CoinGamesViewModel : ObservableObject, IDisposable
         CancelIncomingInviteCountdown();
         _rpsSessionId = null;
         _typingSessionId = null;
+        Task.WhenAll(profileSaves, gameTimers).GetAwaiter().GetResult();
     }
 
     public void BindProfile(PetProfile profile)
@@ -1452,7 +1465,16 @@ public sealed partial class CoinGamesViewModel : ObservableObject, IDisposable
     {
         try
         {
-            await _store.SaveProfileAsync(_profile);
+            if (!await SaveGameProfileAsync(_profile))
+            {
+                return false;
+            }
+
+            if (_disposed)
+            {
+                return true;
+            }
+
             NotifyCoinsChanged();
             ProfileChanged?.Invoke(this, _profile);
             return true;
@@ -1463,6 +1485,37 @@ public sealed partial class CoinGamesViewModel : ObservableObject, IDisposable
             GameNotification?.Invoke(this, "게임 변경을 저장하지 못했습니다.");
             return false;
         }
+    }
+
+    private async Task<bool> WaitForGameTimerAsync(TimeSpan duration)
+    {
+        using var operation = _gameTimers.TryBegin();
+        if (operation is null)
+        {
+            return false;
+        }
+        try
+        {
+            await Task.Delay(duration, _inviteToken).ConfigureAwait(false);
+            return !_inviteToken.IsCancellationRequested;
+        }
+        catch (OperationCanceledException) when (_inviteToken.IsCancellationRequested)
+        {
+            return false;
+        }
+    }
+
+    private async Task<bool> SaveGameProfileAsync(PetProfile profile)
+    {
+        using var operation = _profileSaves.TryBegin();
+        if (operation is null)
+        {
+            return false;
+        }
+
+        // 종료 스레드가 저장을 기다려도 UI Dispatcher 재개에 의존하지 않는다.
+        await Task.Run(() => _store.SaveProfileAsync(profile)).ConfigureAwait(false);
+        return true;
     }
 
     private static void RunOnUi(Action action)

@@ -11,11 +11,12 @@ namespace LabPet.Client.Storage;
 /// %AppData%\LabPet\ 디렉터리에 프로필/친구 JSON을 원자적(Atomic Write + .bak 백업)으로 저장·로드한다.
 /// 설치 디렉터리(AppContext.BaseDirectory)에는 어떠한 사용자 데이터도 기록하지 않는다.
 /// </summary>
-public sealed class JsonAppDataStore : IAppDataStore
+public sealed class JsonAppDataStore : IAppDataStore, IAsyncDisposable
 {
     private const string ProfileFileName = "profile.json";
     private const string FriendsFileName = "friends.json";
 
+    private readonly AsyncOperationLifetime _operations = new();
     private readonly IStateMigrator _migrator;
     private readonly SemaphoreSlim _ioLock = new(1, 1);
 
@@ -31,6 +32,7 @@ public sealed class JsonAppDataStore : IAppDataStore
 
     public async Task<PetProfile> LoadProfileAsync(CancellationToken cancellationToken = default)
     {
+        using var operation = _operations.TryBegin() ?? throw new ObjectDisposedException(nameof(JsonAppDataStore));
         await _ioLock.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
@@ -77,6 +79,7 @@ public sealed class JsonAppDataStore : IAppDataStore
 
     public async Task SaveProfileAsync(PetProfile profile, CancellationToken cancellationToken = default)
     {
+        using var operation = _operations.TryBegin() ?? throw new ObjectDisposedException(nameof(JsonAppDataStore));
         await _ioLock.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
@@ -94,6 +97,7 @@ public sealed class JsonAppDataStore : IAppDataStore
 
     public async Task<FriendsStore> LoadFriendsAsync(CancellationToken cancellationToken = default)
     {
+        using var operation = _operations.TryBegin() ?? throw new ObjectDisposedException(nameof(JsonAppDataStore));
         await _ioLock.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
@@ -147,6 +151,7 @@ public sealed class JsonAppDataStore : IAppDataStore
 
     public async Task SaveFriendsAsync(FriendsStore friendsStore, CancellationToken cancellationToken = default)
     {
+        using var operation = _operations.TryBegin() ?? throw new ObjectDisposedException(nameof(JsonAppDataStore));
         await _ioLock.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
@@ -336,6 +341,8 @@ public sealed class JsonAppDataStore : IAppDataStore
         // 3. 임시 파일을 본 파일로 원자적 교체
         File.Move(tempPath, targetPath, overwrite: true);
     }
+
+    public ValueTask DisposeAsync() => new(_operations.DrainAsync());
 
     private static bool NormalizeProfileInvariants(PetProfile profile)
     {

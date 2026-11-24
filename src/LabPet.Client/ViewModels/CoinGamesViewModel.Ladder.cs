@@ -800,8 +800,7 @@ public sealed partial class CoinGamesViewModel
     private async Task WaitForLadderStartDecisionAsync(string session, DateTimeOffset deadline)
     {
         var delay = deadline - DateTimeOffset.UtcNow + TimeSpan.FromSeconds(1);
-        if (delay > TimeSpan.Zero)
-            await Task.Delay(delay);
+        if (delay > TimeSpan.Zero && !await WaitForGameTimerAsync(delay)) return;
         RunOnUi(() =>
         {
             if (!_disposed && !IsLadderHost && _ladderRoom?.SessionId == session && _ladderPreparedStart is not null)

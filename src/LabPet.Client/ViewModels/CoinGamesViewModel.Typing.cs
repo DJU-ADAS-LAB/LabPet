@@ -233,7 +233,7 @@ public sealed partial class CoinGamesViewModel
     private async Task WaitForTypingDeadlineAsync(string sessionId)
     {
         var waitSeconds = Math.Max(0, TypingCountdownDurationSeconds) + TypingSprintDurationSeconds + 30;
-        await Task.Delay(TimeSpan.FromSeconds(waitSeconds));
+        if (!await WaitForGameTimerAsync(TimeSpan.FromSeconds(waitSeconds)) || _disposed) return;
         if (_typingSessionId == sessionId)
         {
             await RefundTypingRoundAsync("상대 결과를 기다리는 시간이 지나 배팅 코인을 반환했습니다.");

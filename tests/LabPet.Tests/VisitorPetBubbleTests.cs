@@ -489,8 +489,8 @@ public sealed class VisitorPetBubbleTests
             var peerProfile = new PetProfile { OwnerName = "보미", PetName = "구름이" };
             var sharedSecret = PacketSigner.GeneratePairSecretBase64();
 
-            var peerTransport = new LanP2pTransport(udpDiscoveryPort: 0, udpMusicPort: 0, tcpControlPort: 0);
-            var hostTransport = new LanP2pTransport(udpDiscoveryPort: 0, udpMusicPort: 0, tcpControlPort: 0);
+            await using var peerTransport = new LanP2pTransport(udpDiscoveryPort: 0, udpMusicPort: 0, tcpControlPort: 0);
+            await using var hostTransport = new LanP2pTransport(udpDiscoveryPort: 0, udpMusicPort: 0, tcpControlPort: 0);
             await peerTransport.StartAsync(peerProfile, []);
 
             var friend = new FriendEntry
@@ -506,7 +506,7 @@ public sealed class VisitorPetBubbleTests
 
             var store = new JsonAppDataStore(new StateMigrator(), tempDir);
             await store.SaveFriendsAsync(new FriendsStore { Friends = [friend] });
-            var social = new SocialCoordinatorService(hostTransport, store, new SoloProgressionService());
+            await using var social = new SocialCoordinatorService(hostTransport, store, new SoloProgressionService());
             await social.StartAsync(hostProfile);
 
             peerTransport.UpdateKnownFriends(
@@ -617,6 +617,7 @@ public sealed class VisitorPetBubbleTests
                     input.RaiseEvent(key);
                     Assert.True(key.Handled);
                     Assert.Equal("이어 보내는 메시지", await secondBubbleTcs.Task.WaitAsync(TimeSpan.FromSeconds(5)));
+                    await WaitUntilAsync(() => window.ChatComposerInputText.Length == 0);
                     Assert.True(window.IsChatComposerOpen);
 
                     window.HandleVisitorClick();
@@ -631,8 +632,6 @@ public sealed class VisitorPetBubbleTests
                 }
             }).WaitAsync(TimeSpan.FromSeconds(15));
 
-            await peerTransport.DisposeAsync();
-            await social.DisposeAsync();
         }
         finally
         {

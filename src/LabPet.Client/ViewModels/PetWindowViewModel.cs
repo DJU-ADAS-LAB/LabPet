@@ -64,7 +64,7 @@ public sealed class FriendMessageBubble(string text, string senderName, ImageSou
 /// <summary>
 /// 바탕화면 투명 펫 창 ViewModel.
 /// </summary>
-public sealed partial class PetWindowViewModel : ObservableObject
+public sealed partial class PetWindowViewModel : ObservableObject, IAsyncDisposable
 {
     private readonly IAppDataStore _store;
     private readonly SocialCoordinatorService _social;
@@ -172,13 +172,18 @@ public sealed partial class PetWindowViewModel : ObservableObject
         return $"현재 버전 v{ver}";
     }
 
+    private readonly object _appearanceSaveLock = new();
+    private readonly AsyncOperationLifetime _profileWork = new();
+    private readonly Lazy<Task> _shutdownProfileSaves;
     private CancellationTokenSource? _appearanceSaveCts;
+    private bool _appearanceSavePending;
     private bool _suppressStartupToggleEvent;
     private bool _suppressSliderSideEffects;
 
     public PetWindowViewModel(IAppDataStore store, SocialCoordinatorService social)
     {
         _store = store;
+        _shutdownProfileSaves = new Lazy<Task>(ShutdownProfileSavesAsync);
         _social = social;
         _bubbleStack.Changed += (_, _) => IsBubbleVisible = _bubbleStack.HasItems;
     }
@@ -229,23 +234,74 @@ public sealed partial class PetWindowViewModel : ObservableObject
         ScheduleDebouncedProfileSave();
     }
 
-    private async void ScheduleDebouncedProfileSave()
+    private void ScheduleDebouncedProfileSave()
     {
-        _appearanceSaveCts?.Cancel();
-        _appearanceSaveCts?.Dispose();
-        _appearanceSaveCts = new CancellationTokenSource();
-        var token = _appearanceSaveCts.Token;
-
-        try
+        lock (_appearanceSaveLock)
         {
-            await Task.Delay(350, token);
-            if (!token.IsCancellationRequested)
+            var operation = _profileWork.TryBegin();
+            if (operation is null)
             {
-                await _store.SaveProfileAsync(CurrentProfile, token);
+                return;
+            }
+
+            _appearanceSaveCts?.Cancel();
+            _appearanceSaveCts?.Dispose();
+            _appearanceSaveCts = new CancellationTokenSource();
+            _appearanceSavePending = true;
+            _ = SaveAppearanceAfterDebounceAsync(CurrentProfile, operation, _appearanceSaveCts.Token);
+        }
+    }
+
+    private async Task SaveAppearanceAfterDebounceAsync(PetProfile profile, IDisposable operation, CancellationToken token)
+    {
+        using (operation)
+        {
+            try
+            {
+                await Task.Delay(350, token).ConfigureAwait(false);
+                lock (_appearanceSaveLock)
+                {
+                    token.ThrowIfCancellationRequested();
+                    _appearanceSavePending = false;
+                }
+                await _store.SaveProfileAsync(profile).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (token.IsCancellationRequested) { }
+            catch (Exception ex) when (ex is System.IO.IOException or UnauthorizedAccessException)
+            {
+                System.Diagnostics.Trace.TraceError("방문 창 외형 저장 실패: {0}", ex);
             }
         }
-        catch (TaskCanceledException)
+    }
+
+    public ValueTask DisposeAsync() => new(_shutdownProfileSaves.Value);
+
+    private async Task ShutdownProfileSavesAsync()
+    {
+        Task drain;
+        PetProfile? unsavedProfile;
+        lock (_appearanceSaveLock)
         {
+            drain = _profileWork.DrainAsync();
+            unsavedProfile = _appearanceSavePending ? CurrentProfile : null;
+            _appearanceSaveCts?.Cancel();
+            _appearanceSaveCts?.Dispose();
+            _appearanceSaveCts = null;
+        }
+
+        await drain.ConfigureAwait(false);
+        if (unsavedProfile is not null)
+        {
+            await _store.SaveProfileAsync(unsavedProfile).ConfigureAwait(false);
+        }
+    }
+
+    private async Task SaveProfileTrackedAsync()
+    {
+        using var operation = _profileWork.TryBegin();
+        if (operation is not null)
+        {
+            await _store.SaveProfileAsync(CurrentProfile).ConfigureAwait(false);
         }
     }
 
@@ -322,7 +378,7 @@ public sealed partial class PetWindowViewModel : ObservableObject
     {
         CurrentProfile.LastWindowLeft = left;
         CurrentProfile.LastWindowTop = top;
-        await _store.SaveProfileAsync(CurrentProfile);
+        await SaveProfileTrackedAsync();
     }
 
     /// <summary>
@@ -416,7 +472,7 @@ public sealed partial class PetWindowViewModel : ObservableObject
 
         if (persist)
         {
-            await _store.SaveProfileAsync(CurrentProfile);
+            await SaveProfileTrackedAsync();
             ProfileUpdated?.Invoke(this, CurrentProfile);
         }
     }
@@ -684,7 +740,7 @@ public sealed partial class PetWindowViewModel : ObservableObject
 
     public async Task SaveCurrentProfileAsync()
     {
-        await _store.SaveProfileAsync(CurrentProfile);
+        await SaveProfileTrackedAsync();
         var label = SocialCoordinatorService.FormatDisplayName(CurrentProfile.OwnerName, CurrentProfile.PetName);
         TrayTooltip = $"{label} · Lv.{CurrentProfile.SoloProgress.Level}";
         ProfileProgressUpdated?.Invoke(this, CurrentProfile);

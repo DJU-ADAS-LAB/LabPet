@@ -20,7 +20,7 @@ public sealed partial class LanP2pTransport
         {
             if (!ct.IsCancellationRequested)
             {
-                ProbeFriendPresence(hello, ip, friend, ct);
+                ProbeFriendPresence(hello, ip, friend);
             }
             return;
         }
@@ -54,7 +54,7 @@ public sealed partial class LanP2pTransport
             {
                 if (_presenceSlots.Wait(0))
                 {
-                    _ = VerifyPresenceAsync(friend, peer.IpAddress, peer.TcpPort, ct);
+                    StartPresenceVerification(friend, peer.IpAddress, peer.TcpPort);
                 }
                 else
                 {
@@ -64,7 +64,7 @@ public sealed partial class LanP2pTransport
         }
     }
 
-    private void ProbeFriendPresence(DiscoveryHelloPacket candidate, string ip, FriendEntry friend, CancellationToken ct)
+    private void ProbeFriendPresence(DiscoveryHelloPacket candidate, string ip, FriendEntry friend)
     {
         if (candidate.ProtocolVersion != ProtocolConstants.CurrentProtocolVersion || !IsValidPort(candidate.TcpPort)
             || !_presenceInFlight.TryAdd(friend.PetId, 0))
@@ -77,11 +77,24 @@ public sealed partial class LanP2pTransport
             _presenceInFlight.TryRemove(friend.PetId, out _);
             return;
         }
-        _ = VerifyPresenceAsync(friend, ip, candidate.TcpPort, ct);
+        StartPresenceVerification(friend, ip, candidate.TcpPort);
     }
 
-    private async Task VerifyPresenceAsync(FriendEntry friend, string ip, int port, CancellationToken ct)
+    private void StartPresenceVerification(FriendEntry friend, string ip, int port)
     {
+        var operation = BeginBackgroundWork(out var token);
+        if (operation is null)
+        {
+            _presenceInFlight.TryRemove(friend.PetId, out _);
+            _presenceSlots.Release();
+            return;
+        }
+        _ = VerifyPresenceAsync(friend, ip, port, operation, token);
+    }
+
+    private async Task VerifyPresenceAsync(FriendEntry friend, string ip, int port, IDisposable operation, CancellationToken ct)
+    {
+        using var work = operation;
         try
         {
             var ack = await SendControlPacketAsync(ip, port, PacketType.PresenceSync, BuildPresence(),
