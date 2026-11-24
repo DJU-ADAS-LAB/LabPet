@@ -17,13 +17,27 @@ internal sealed class PetSkinInstance(CharacterSkin asset)
     private readonly Quaternion[] _ik = new Quaternion[asset.Bones.Length];
     private readonly float[] _ikWeights = new float[asset.Bones.Length];
 
+    internal MatrixTransform3D HeadSocket { get; } = new();
+    private string _clip = "";
+    private float _time;
+    private readonly Matrix4x4[] _world = new Matrix4x4[asset.Bones.Length];
+
     internal CharacterSkin Asset => asset;
 
     internal void Bind(ObjSubMesh part, GeometryModel3D model) =>
         _surfaces.Add(new(model, part.Geometry, asset.Surfaces[part]));
 
-    internal void Update(PetRigHandle rig, float dt, float stride, float typing, float leftStrike, float rightStrike, float waveTime, float step)
+    internal void Update(PetRigHandle rig, float dt, float stride, float typing, float leftStrike, float rightStrike, float waveTime, float step, string clip = "idle")
     {
+        if (asset.Clips is { } authored)
+        {
+            _time = _clip == clip ? _time + dt : 0;
+            _clip = clip;
+            authored.Apply(clip, _time, rig, typing, leftStrike, rightStrike, _world, _palette, HeadSocket);
+            Array.Fill(_changed, true);
+            foreach (var surface in _surfaces) surface.Apply(_palette, _changed);
+            return;
+        }
         var body = rig.BodyTransform?.Value ?? Matrix3D.Identity;
         var inverseBody = body;
         if (typing > 0.005f || step > 0.005f) inverseBody.Invert();
@@ -229,7 +243,7 @@ internal sealed class PetSkinInstance(CharacterSkin asset)
             {
                 _positions = rest.Positions.Clone();
                 _normals = rest.Normals.Clone();
-                _mesh = new MeshGeometry3D { TriangleIndices = rest.TriangleIndices };
+                _mesh = new MeshGeometry3D { TriangleIndices = rest.TriangleIndices, TextureCoordinates = rest.TextureCoordinates };
                 model.Geometry = _mesh;
             }
             _mesh.Positions = null;

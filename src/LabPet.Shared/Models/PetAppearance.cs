@@ -11,6 +11,7 @@ public static class PetSpeciesIds
     public const string FluffyPuppy = "fluffy_puppy";
     public const string Hachiware = "hachiware";
     public const string Chiikawa = "chiikawa";
+    public const string Joey = "joey";
     public const string Usagi = "usagi";
 
     public static IReadOnlyList<string> All { get; } =
@@ -21,7 +22,8 @@ public static class PetSpeciesIds
         FluffyPuppy,
         Hachiware,
         Chiikawa,
-        Usagi
+        Usagi,
+        Joey
     ];
 }
 

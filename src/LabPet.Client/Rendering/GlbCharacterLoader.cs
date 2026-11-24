@@ -13,7 +13,7 @@ internal sealed record SkinBone(string Name, int Parent, Matrix4x4 Bind, Matrix4
     ICurveSampler<Quaternion>? Wave);
 internal sealed record SkinSurface(Vector3[] Positions, Vector3[] Normals, Vector4[] Joints, Vector4[] Weights);
 internal sealed record CharacterSkin(PetModelMetadata Metadata, ObjMeshAsset Mesh, SkinBone[] Bones,
-    Dictionary<ObjSubMesh, SkinSurface> Surfaces);
+    Dictionary<ObjSubMesh, SkinSurface> Surfaces, AuthoredPetClips? Clips = null);
 
 internal sealed class GlbCharacterLoader
 {
@@ -44,19 +44,26 @@ internal sealed class GlbCharacterLoader
         var model = ModelRoot.Load(path);
         var skin = model.LogicalSkins.Single();
         var joints = Enumerable.Range(0, skin.JointsCount).Select(skin.GetJoint).ToArray();
-        var wave = model.LogicalAnimations.Single(a => a.Name == "Wave");
+        var authored = Path.GetFileName(Path.GetDirectoryName(path)) == LabPet.Shared.Models.PetSpeciesIds.Joey;
+        var clips = authored ? new AuthoredPetClips(model, skin) : null;
+        var wave = authored ? null : model.LogicalAnimations.Single(a => a.Name == "Wave");
         var bones = new SkinBone[joints.Length];
         for (int i = 0; i < joints.Length; i++)
         {
             var (node, inverse) = joints[i];
             int parent = Array.FindIndex(joints, joint => joint.Joint == node.VisualParent);
-            if (parent >= i || !node.Name.StartsWith("Joint_", StringComparison.Ordinal) ||
+            if (parent >= i || !authored && !node.Name.StartsWith("Joint_", StringComparison.Ordinal) ||
                 !Matrix4x4.Invert(inverse, out var bind) || !float.IsFinite(bind.GetDeterminant()))
                 throw new InvalidDataException("관절 순서 또는 바인드 행렬 오류");
+            if (authored)
+            {
+                bones[i] = new(node.Name, parent, bind, inverse, bind.Translation, 180, null);
+                continue;
+            }
             var end = node.Extras!["end"]!.Deserialize<float[]>()!;
             // 인사 클립의 마스크는 왼쪽 팔에만 적용한다.
             var sampler = node.Name is "Joint_LeftArm" or "Joint_LeftPaw"
-                ? wave.FindRotationChannel(node)?.GetRotationSampler()?.CreateCurveSampler(true) : null;
+                ? wave!.FindRotationChannel(node)?.GetRotationSampler()?.CreateCurveSampler(true) : null;
             bones[i] = new(node.Name[6..], parent, bind, inverse, new(end[0], end[1], end[2]),
                 node.Extras["limit"]!.GetValue<float>(), sampler);
         }
@@ -74,8 +81,8 @@ internal sealed class GlbCharacterLoader
                 throw new InvalidDataException("손끝 관절 누락");
         }
 
-        var metadataText = model.LogicalNodes.Single(n => n.Name == "Skeleton").Extras!["metadata"]!.GetValue<string>();
-        var metadata = JsonSerializer.Deserialize<PetModelMetadata>(metadataText,
+        var metadata = authored ? AuthoredPetClips.Metadata() : JsonSerializer.Deserialize<PetModelMetadata>(
+            model.LogicalNodes.Single(n => n.Name == "Skeleton").Extras!["metadata"]!.GetValue<string>(),
             new JsonSerializerOptions { PropertyNameCaseInsensitive = true }) ?? throw new InvalidDataException("소켓 누락");
         var parts = new List<ObjSubMesh>();
         var surfaces = new Dictionary<ObjSubMesh, SkinSurface>();
@@ -109,15 +116,22 @@ internal sealed class GlbCharacterLoader
                     Normals = new(normals.Select(v => new Vector3D(v.X, v.Y, v.Z))),
                     TriangleIndices = new Int32Collection(primitive.GetIndices().Select(n => checked((int)n)))
                 };
+                if (authored)
+                {
+                    mesh.Positions = new(positions.Select(v => Vector3.Transform(v, AuthoredPetClips.Fit))
+                        .Select(v => new Point3D(v.X, v.Y, v.Z)));
+                    if (primitive.GetVertexAccessor("TEXCOORD_0") is { } uv)
+                        mesh.TextureCoordinates = new(uv.AsVector2Array().Select(v => new System.Windows.Point(v.X, v.Y)));
+                }
                 mesh.Freeze();
                 var part = new ObjSubMesh { PartName = node.Name, MaterialSlot = primitive.Material.Name, Geometry = mesh };
                 parts.Add(part);
-                if (!rigidHead) surfaces.Add(part, new(positions, normals, ids, weights));
+                if (authored || !rigidHead) surfaces.Add(part, new(positions, normals, ids, weights));
             }
         }
-        if (!parts.Any(p => p.PartName == "Head") || surfaces.Count == 0)
+        if (!authored && !parts.Any(p => p.PartName == "Head") || surfaces.Count == 0)
             throw new InvalidDataException("머리 또는 변형 메시 누락");
         return new(metadata, new ObjMeshAsset { SourcePath = path, SubMeshes = parts,
-            TotalTriangleCount = parts.Sum(p => p.TriangleCount) }, bones, surfaces);
+            TotalTriangleCount = parts.Sum(p => p.TriangleCount) }, bones, surfaces, clips);
     }
 }

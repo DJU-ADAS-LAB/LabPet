@@ -224,7 +224,7 @@ internal sealed record SpeciesMotionProfile(
         PetSpeciesIds.ChibiCat => Cat,
         PetSpeciesIds.FluffyPuppy => Puppy,
         PetSpeciesIds.FluffyCloud => Cloud,
-        PetSpeciesIds.Hachiware => ChiikawaTrio,
+        PetSpeciesIds.Joey or PetSpeciesIds.Hachiware => ChiikawaTrio,
         PetSpeciesIds.Chiikawa => Shy,
         PetSpeciesIds.Usagi => Rabbit,
         _ => Mochi

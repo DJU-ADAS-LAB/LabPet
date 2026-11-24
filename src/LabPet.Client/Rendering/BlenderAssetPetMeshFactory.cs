@@ -98,7 +98,7 @@ public sealed class BlenderAssetPetMeshFactory : IPetMeshFactory
         if ((source == null && !TryLoadCharacterAssets(appearance.SpeciesId, out metadata, out characterAsset)) ||
             metadata is null ||
             characterAsset is null ||
-            !HasRequiredCoreParts(characterAsset))
+            (source?.Clips == null && !HasRequiredCoreParts(characterAsset)))
         {
             return _fallbackFactory.BuildPetRig(appearance, effects);
         }
@@ -127,6 +127,8 @@ public sealed class BlenderAssetPetMeshFactory : IPetMeshFactory
 
         Material ResolveSlotMaterial(string slot)
         {
+            if (source?.Clips is { } authored && authored.Materials.TryGetValue(slot, out var material))
+                return slot == "병아리 노랑" ? bodyMat : material;
             if (metadata.PartMaterialOverrides.TryGetValue(slot, out var mappedSlot))
             {
                 slot = mappedSlot;
@@ -383,6 +385,7 @@ public sealed class BlenderAssetPetMeshFactory : IPetMeshFactory
             accentColor,
             ResolveSlotMaterial);
 
+        if (source?.Clips != null) headGroup.Transform = skin!.HeadSocket;
         bodyGroup.Children.Add(headGroup);
 
         // 키보드 및 풀링 파티클 (단일 전면 미니 키보드 및 Blender 음표/별 메시 우선 적용)

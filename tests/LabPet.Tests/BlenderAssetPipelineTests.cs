@@ -14,6 +14,29 @@ namespace LabPet.Tests;
 [Collection("WpfUi")]
 public sealed class BlenderAssetPipelineTests
 {
+    [Fact]
+    public void Joey_AnimatesAllEmbeddedClipsWithTexturedGeometry()
+    {
+        RunOnSta(() =>
+        {
+            var factory = new BlenderAssetPetMeshFactory(new ProceduralPetMeshFactory());
+            var rig = factory.BuildPetRig(new PetAppearance { SpeciesId = PetSpeciesIds.Joey });
+            var skin = Assert.IsType<PetSkinInstance>(rig.Skin);
+            var models = GeometryModels(rig.RootModel).ToArray();
+            Assert.Contains(models, m => m.Material is DiffuseMaterial { Brush: ImageBrush });
+            foreach (var clip in new[] { "idle", "walk", "run", "dance", "jump", "sit", "sleep", "happy", "eat", "wave", "talk" })
+            {
+                skin.Update(rig, 0, 0, 0, 0, 0, -1, 0, clip);
+                var start = models.SelectMany(m => ((MeshGeometry3D)m.Geometry).Positions).ToArray();
+                skin.Update(rig, 0.27f, 0, 0, 0, 0, -1, 0, clip);
+                var movement = models.SelectMany(m => ((MeshGeometry3D)m.Geometry).Positions)
+                    .Zip(start, (a, b) => (a - b).Length).ToArray();
+                Assert.All(movement, d => Assert.InRange(d, 0, 2));
+                Assert.True(movement.Max() > 0.001, clip);
+            }
+        });
+    }
+
     [Theory]
     [InlineData(PetSpeciesIds.MochiSpirit)]
     [InlineData(PetSpeciesIds.ChibiCat)]

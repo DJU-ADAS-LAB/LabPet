@@ -22,11 +22,13 @@ public static class PetCustomizationCatalog
         new(PetSpeciesIds.FluffyPuppy, "솜뭉치 강아지", "축 처진 복슬 귀, 짧은 네 발, 깃털 꼬리", "#F2C27D"),
         new(PetSpeciesIds.Hachiware, "하치와레", "파란 가르마 무늬와 쫑긋한 고양이 귀, 파란 꼬리", "#FFF5F7"),
         new(PetSpeciesIds.Chiikawa, "치이카와", "동글동글 하얀 찹쌀 몸통과 작은 둥근 귀", "#FFF5F7"),
+        new(PetSpeciesIds.Joey, "리처드", "노란 오리와 곰 문양 티셔츠", "#FFD029"),
         new(PetSpeciesIds.Usagi, "우사기", "따뜻한 크림 옐로우 몸통과 쫑긋 솟은 긴 토끼 귀", "#FFF7CC")
     ];
 
     public static IReadOnlyList<CustomizationOption> BodyColors { get; } =
     [
+        new("#FFD029", "오리 노랑", "리처드의 노란 깃털", "#FFD029"),
         new("#FFF5F7", "밀크 모찌", "따뜻한 크림 화이트", "#FFF5F7"),
         new("#FFE6CC", "피치 크림", "부드러운 복숭아 파스텔", "#FFE6CC"),
         new("#F2C27D", "허니 골드", "포근한 골든 강아지 털색", "#F2C27D"),

@@ -622,6 +622,7 @@ public partial class PetWindow : Window, IMessageBubbleTarget
     {
         var reward = _progression.RecordPomodoroCompletedDetailed(_viewModel.CurrentProfile, focusMinutes);
         _animator.TriggerPetReaction();
+        _animator.StartBreakSnack();
         _viewModel.ShowBubble(
             reward.CoinsEarned > 0
                 ? $"뽀모도로 완료! +{reward.CoinsEarned} 코인 획득!"
@@ -773,7 +774,7 @@ public partial class PetWindow : Window, IMessageBubbleTarget
 
         _lastFrameSeconds = now;
         ComputeNormalizedLookDirection(out var lookX, out var lookY);
-        _animator.UpdateFrame(dt, lookX, lookY);
+        _animator.UpdateFrame(dt, lookX, lookY, _viewModel.IsBubbleVisible);
     }
 
     private void ApplyLocalSleepState(bool isSleeping)

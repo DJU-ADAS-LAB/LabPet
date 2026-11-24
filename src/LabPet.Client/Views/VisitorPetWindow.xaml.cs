@@ -1175,7 +1175,7 @@ public partial class VisitorPetWindow : Window, IMessageBubbleTarget
         }
 
         ComputeNormalizedLookDirection(out var lookX, out var lookY);
-        _animator.UpdateFrame(dt, lookX, lookY);
+        _animator.UpdateFrame(dt, lookX, lookY, VisitorBubblePopup.IsOpen);
     }
 
     private void ComputeNormalizedLookDirection(out double lookX, out double lookY)

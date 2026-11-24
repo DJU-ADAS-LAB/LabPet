@@ -1,4 +1,4 @@
-﻿using System.Windows.Media;
+using System.Windows.Media;
 using LabPet.Shared.Models;
 
 namespace LabPet.Client.Rendering;
@@ -112,6 +112,9 @@ public sealed class PetAnimationController
         || _typingStanceHoldTime > 0
         || _typingStanceWeight > 0.01 || Volatile.Read(ref _pendingPawTaps) > 0
         || _musicWeight > 0.02 || HasActiveParticles();
+
+    private double _snackSeconds;
+    internal void StartBreakSnack() => _snackSeconds = 2;
 
     public void AttachRig(PetRigHandle rig, string accentHex)
     {
@@ -273,7 +276,7 @@ public sealed class PetAnimationController
         }
     }
 
-    public void UpdateFrame(double deltaSeconds, double targetLookX, double targetLookY)
+    public void UpdateFrame(double deltaSeconds, double targetLookX, double targetLookY, bool speaking = false)
     {
         var rig = _rig;
         if (rig is null)
@@ -656,12 +659,17 @@ public sealed class PetAnimationController
         rig.HeadPitch.Angle = _currentLookY * 12.0 * awakeFactor + headPitchExtra;
         rig.HeadRoll.Angle = Math.Clamp(headRollExtra, -22.0, 22.0);
 
+        _snackSeconds = Math.Max(0, _snackSeconds - deltaSeconds);
         var stride = Math.Sin(_dancePhase * 2) * (14 * bass + 7 * mid) * awakeFactor * (1 - activeStance);
         var walk = _smoothedPose.StepWeight * awakeFactor * (1 - activeStance);
         stride += Math.Sin(_dancePhase * 2) * walk * 18;
         var waveTime = _petReactionTime > 0 && !_isSleeping && !IsWakingUp ? 0.90 - _petReactionTime : -1;
         rig.Skin?.Update(rig, (float)deltaSeconds, (float)stride, (float)activeStance,
-            (float)(leftStrike * awakeFactor), (float)(rightStrike * awakeFactor), (float)waveTime, (float)walk);
+            (float)(leftStrike * awakeFactor), (float)(rightStrike * awakeFactor), (float)waveTime, (float)walk,
+            _isSleeping ? "sleep" : IsWakingUp ? "jump" : _gameReactionTime > 0 ? (_gameWon ? "happy" : "sit")
+            : _isGrabbed ? "run" : _snackSeconds > 0 ? "eat" : _petReactionTime > 0 ? "wave"
+            : speaking ? "talk" : _musicWeight > 0.15
+                ? (_currentClip == PetMotionClipKind.Walk ? "walk" : "dance") : "idle");
 
         if (rig.AuraRotation is not null)
         {
