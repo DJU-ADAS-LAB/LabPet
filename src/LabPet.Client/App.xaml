@@ -7,6 +7,7 @@
             <ResourceDictionary.MergedDictionaries>
                 <ResourceDictionary Source="Themes/LabPetTheme.xaml" />
                 <ResourceDictionary Source="Themes/GameUiResources.xaml" />
+                <ResourceDictionary Source="Themes/HubDesignSystem.xaml" />
             </ResourceDictionary.MergedDictionaries>
         </ResourceDictionary>
     </Application.Resources>

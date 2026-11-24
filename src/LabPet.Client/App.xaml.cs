@@ -1,5 +1,6 @@
 using System.Windows;
 using LabPet.Client.Audio;
+using LabPet.Client.Navigation;
 using LabPet.Client.Network;
 using LabPet.Client.Rendering;
 using LabPet.Client.Social;
@@ -9,6 +10,7 @@ using LabPet.Client.SystemIntegration;
 using LabPet.Client.Updates;
 using LabPet.Client.ViewModels;
 using LabPet.Client.Views;
+using LabPet.Client.Views.Hub;
 using LabPet.Shared.Transport;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -473,6 +475,7 @@ public partial class App : Application
         _messageRouter = null;
 
         CloseInviteCardWindow();
+        _serviceProvider?.GetService<IHubNavigationService>()?.CloseIfOpen();
         _soloHubWindow?.Close();
 
         foreach (var visitor in _visitorWindows.Values.ToList())
@@ -500,6 +503,7 @@ public partial class App : Application
     {
         services.AddSingleton<IStateMigrator, StateMigrator>();
         services.AddSingleton<IAppDataStore, JsonAppDataStore>();
+        services.AddSingleton<HubWindowStateStore>();
         services.AddSingleton<ProceduralPetMeshFactory>();
         services.AddSingleton<IPetMeshFactory, BlenderAssetPetMeshFactory>();
         services.AddSingleton<PetPortraitRenderer>();
@@ -527,9 +531,23 @@ public partial class App : Application
 
         services.AddSingleton<PetWindowViewModel>();
         services.AddSingleton<CoinGamesViewModel>();
+        services.AddSingleton<IHubNavigationService>(sp => new HubNavigationService(() => sp.GetRequiredService<HubWindow>()));
+        services.AddTransient<HubViewModel>();
+        services.AddTransient<Func<HubPage, System.Windows.Controls.UserControl>>(_ => page => CreatePlaceholderHubPage(page));
+        services.AddTransient<HubWindow>();
         services.AddTransient<OnboardingViewModel>();
         services.AddTransient<SoloHubViewModel>();
         services.AddTransient<SocialViewModel>();
         services.AddSingleton<PetWindow>();
     }
+
+    private static System.Windows.Controls.UserControl CreatePlaceholderHubPage(HubPage page)
+        => new()
+        {
+            Content = new System.Windows.Controls.TextBlock
+            {
+                Text = $"{page} 페이지 준비 중",
+                FontSize = 15
+            }
+        };
 }
