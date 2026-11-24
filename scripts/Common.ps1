@@ -130,7 +130,9 @@ function Invoke-LabPetGitHub {
         $options.Body = $Body | ConvertTo-Json -Depth 8 -Compress
         $options.ContentType = 'application/json'
     }
-    return Invoke-RestMethod @options
+    # GitHub의 목록 응답은 REST 호출이 한 덩어리로 반환하므로 호출자에게 개별 항목으로 전달한다.
+    $response = Invoke-RestMethod @options
+    return $response
 }
 
 function Get-LabPetVerifiedRun {
