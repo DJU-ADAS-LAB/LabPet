@@ -11,6 +11,7 @@ using System.Windows.Media;
 using System.Windows.Threading;
 using LabPet.Client;
 using LabPet.Client.Audio;
+using LabPet.Client.Diagnostics;
 using LabPet.Client.Interop;
 using LabPet.Client.Network;
 using LabPet.Client.Rendering;
@@ -1238,6 +1239,507 @@ public sealed class VisitorPetBubbleTests
                 window.Close();
             }
         }).WaitAsync(TimeSpan.FromSeconds(15));
+    }
+
+    [Fact]
+    public async Task VisitorPetWindow_StatusExpiresBeforeFriendMessage_ReopensPopupWithoutExceptionAndAlignsTail()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), "LabPet_VisitorReopen_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempDir);
+
+        try
+        {
+            var crashDir = Path.Combine(tempDir, "logs");
+            var store = new JsonAppDataStore(new StateMigrator(), tempDir);
+            await using var transport = new LanP2pTransport(udpDiscoveryPort: 0, udpMusicPort: 0, tcpControlPort: 0);
+            await using var social = new SocialCoordinatorService(transport, store, new SoloProgressionService());
+            using var audio = new NullAudioAnalyzer();
+            var friend = new FriendEntry { PetId = "friend-reopen", OwnerName = "나현", PetName = "나송이" };
+
+            await WpfTestHost.RunAsync(async () =>
+            {
+                var window = new VisitorPetWindow(friend, friend.CachedAppearance, new ProceduralPetMeshFactory(), audio, social)
+                {
+                    CrashLogDirectory = crashDir,
+                    ShowActivated = false,
+                    Left = 320,
+                    Top = 360
+                };
+                window.ApplyDisplaySettings(0.7, 0.7);
+
+                try
+                {
+                    window.Show();
+                    await FlushUiAsync();
+
+                    // 실제 앱 진입 흐름과 동일하게 초기 "놀러 왔어!" 상태 말풍선이 열렸다가 만료되어 팝업이 닫힌다.
+                    window.ShowVisitorBubble("놀러 왔어!", 80);
+                    await WaitUntilAsync(() => window.HasStatusBubble && !window.CurrentBubblePhysicalBounds.IsEmpty);
+                    await WaitUntilAsync(() => !window.HasStatusBubble);
+                    await FlushUiAsync();
+
+                    var popup = Assert.IsType<Popup>(window.FindName("VisitorBubblePopup"));
+                    Assert.False(popup.IsOpen);
+                    Assert.True(window.CurrentBubblePhysicalBounds.IsEmpty);
+
+                    // 닫힌 PopupRoot 하위 트리에 IsLayoutSuspended가 남아 있어도 메시지 수신 시 정확히 측정되어 예외 없이 열려야 한다.
+                    Assert.True(window.ShowChatMessage("짧은 인사!"));
+                    await WaitUntilAsync(() => popup.IsOpen && !window.CurrentBubblePhysicalBounds.IsEmpty);
+                    await FlushUiAsync();
+
+                    var cards = Assert.IsType<StackPanel>(window.FindName("VisitorChatCards"));
+                    var firstCard = Assert.IsType<Border>(Assert.Single(cards.Children));
+                    Assert.True(firstCard.DesiredSize.Width > 0);
+                    Assert.True(firstCard.DesiredSize.Height > firstCard.Margin.Top + firstCard.Margin.Bottom);
+                    AssertBubbleHeadAlignment(window);
+
+                    // 긴 메시지 및 6건 연속 수신에서도 최대 5개와 꼬리 정렬을 유지해야 한다.
+                    for (var i = 1; i <= 5; i++)
+                    {
+                        Assert.True(window.ShowChatMessage($"연속 메시지 {i}"));
+                    }
+
+                    Assert.True(window.ShowChatMessage("이것은 팝업 재오픈 후에도 줄바꿈과 꼬리 정합성이 유지되어야 하는 아주 긴 방문 펫 테스트 메시지입니다."));
+                    await FlushUiAsync();
+
+                    Assert.Equal(5, cards.Children.Count);
+                    Assert.Equal(5, window.ChatBubbleStack.Items.Count);
+                    AssertBubbleHeadAlignment(window);
+                    Assert.False(Directory.Exists(crashDir));
+                }
+                finally
+                {
+                    if (window.IsLoaded || window.IsVisible)
+                    {
+                        window.Close();
+                    }
+                }
+            }).WaitAsync(TimeSpan.FromSeconds(15));
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir))
+            {
+                Directory.Delete(tempDir, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
+    public async Task VisitorPetWindow_MultipleOpenCloseTransitions_RemeasureStatusAndChatCardsAccurately()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), "LabPet_VisitorCycles_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempDir);
+
+        try
+        {
+            var store = new JsonAppDataStore(new StateMigrator(), tempDir);
+            await using var transport = new LanP2pTransport(udpDiscoveryPort: 0, udpMusicPort: 0, tcpControlPort: 0);
+            await using var social = new SocialCoordinatorService(transport, store, new SoloProgressionService());
+            using var audio = new NullAudioAnalyzer();
+            var friend = new FriendEntry { PetId = "friend-cycle", OwnerName = "보미", PetName = "구름이" };
+
+            await WpfTestHost.RunAsync(async () =>
+            {
+                var window = new VisitorPetWindow(friend, friend.CachedAppearance, new ProceduralPetMeshFactory(), audio, social)
+                {
+                    CrashLogDirectory = Path.Combine(tempDir, "logs"),
+                    ShowActivated = false,
+                    Left = 400,
+                    Top = 300
+                };
+
+                try
+                {
+                    window.Show();
+                    await FlushUiAsync();
+                    var popup = Assert.IsType<Popup>(window.FindName("VisitorBubblePopup"));
+                    var statusCard = Assert.IsType<Border>(window.FindName("VisitorStatusBubble"));
+
+                    // 1) 짧은 상태 -> 만료
+                    window.ShowVisitorBubble("안녕", 70);
+                    await WaitUntilAsync(() => popup.IsOpen && !window.CurrentBubblePhysicalBounds.IsEmpty);
+                    var shortStatusWidth = statusCard.DesiredSize.Width;
+                    await WaitUntilAsync(() => !window.HasStatusBubble);
+                    await WaitUntilAsync(() => !popup.IsOpen);
+
+                    // 2) 채팅 -> 만료
+                    Assert.True(window.ShowChatMessage("중간 채팅 메시지", 70));
+                    await WaitUntilAsync(() => popup.IsOpen && !window.CurrentBubblePhysicalBounds.IsEmpty);
+                    AssertBubbleHeadAlignment(window);
+                    await WaitUntilAsync(() => !window.ChatBubbleStack.HasItems);
+                    await WaitUntilAsync(() => !popup.IsOpen);
+
+                    // 3) 훨씬 긴 상태 -> 재측정 폭 증가 확인
+                    window.ShowVisitorBubble("이것은 훨씬 더 긴 상태 알림 문장입니다!", 500);
+                    await WaitUntilAsync(() => popup.IsOpen && !window.CurrentBubblePhysicalBounds.IsEmpty);
+                    Assert.True(statusCard.DesiredSize.Width > shortStatusWidth);
+                    AssertBubbleHeadAlignment(window);
+
+                    // 4) 상태 + 채팅 동시 -> 모두 정상 배치 후 상태 먼저 만료 시 채팅 유지
+                    Assert.True(window.ShowChatMessage("상태와 함께 보는 채팅", 1200));
+                    await FlushUiAsync();
+                    var cards = Assert.IsType<StackPanel>(window.FindName("VisitorChatCards"));
+                    Assert.Single(cards.Children);
+                    AssertBubbleHeadAlignment(window);
+
+                    await WaitUntilAsync(() => !window.HasStatusBubble);
+                    await FlushUiAsync();
+                    Assert.True(popup.IsOpen);
+                    Assert.Equal(Visibility.Collapsed, statusCard.Visibility);
+                    AssertBubbleHeadAlignment(window);
+                }
+                finally
+                {
+                    if (window.IsLoaded || window.IsVisible)
+                    {
+                        window.Close();
+                    }
+                }
+            }).WaitAsync(TimeSpan.FromSeconds(15));
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir))
+            {
+                Directory.Delete(tempDir, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
+    public void VisitorBubblePlacementCalculator_HandlesInvalidInputsAndTinyWorkAreasWithoutException()
+    {
+        var invalidPoints = new[]
+        {
+            new Point(double.NaN, 100),
+            new Point(double.PositiveInfinity, double.NegativeInfinity),
+            new Point(100, 100)
+        };
+        var invalidSizes = new[]
+        {
+            Size.Empty,
+            new Size(0, 0),
+            new Size(0, 30),
+            new Size(double.NaN, 40),
+            new Size(double.PositiveInfinity, 40)
+        };
+        var areas = new[]
+        {
+            Rect.Empty,
+            new Rect(0, 0, 0, 100),
+            new Rect(0, 0, 8, 8),
+            new Rect(-1920, 0, 1920, 1032)
+        };
+        var dpis = new[]
+        {
+            new DpiScale(0, 0),
+            new DpiScale(double.NaN, 1.5),
+            new DpiScale(1.0, 1.0),
+            new DpiScale(1.75, 1.75)
+        };
+
+        foreach (var point in invalidPoints)
+        {
+            foreach (var size in invalidSizes)
+            {
+                foreach (var area in areas)
+                {
+                    foreach (var dpi in dpis)
+                    {
+                        var placement = VisitorBubblePlacementCalculator.CalculateBubblePlacement(point, size, area, dpi);
+                        Assert.True(double.IsFinite(placement.Tip.X) && double.IsFinite(placement.Tip.Y));
+                        Assert.True(double.IsFinite(placement.Scale) && placement.Scale >= 0);
+                        if (!placement.Body.IsEmpty)
+                        {
+                            Assert.True(placement.Body.Width >= 0 && placement.Body.Height >= 0);
+                        }
+
+                        var tail = VisitorBubblePlacementCalculator.CalculateTailPlacement(placement, placement.Body, dpi);
+                        Assert.True(double.IsFinite(tail.BaseLeft.X) && double.IsFinite(tail.BaseLeft.Y));
+                        Assert.True(double.IsFinite(tail.BaseRight.X) && double.IsFinite(tail.BaseRight.Y));
+
+                        var composer = VisitorBubblePlacementCalculator.CalculateComposerPlacement(area, size, dpi);
+                        Assert.False(composer.IsEmpty);
+                        Assert.True(composer.Width >= 0 && composer.Height >= 0);
+                    }
+                }
+            }
+        }
+    }
+
+    [Fact]
+    public async Task VisitorPetWindow_IsolatesLayoutException_LogsRealStackAndKeepsAppAlive()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), "LabPet_VisitorIsolation_" + Guid.NewGuid().ToString("N"));
+        var crashDir = Path.Combine(tempDir, "logs");
+        Directory.CreateDirectory(tempDir);
+
+        try
+        {
+            var store = new JsonAppDataStore(new StateMigrator(), tempDir);
+            await using var transport = new LanP2pTransport(udpDiscoveryPort: 0, udpMusicPort: 0, tcpControlPort: 0);
+            await using var social = new SocialCoordinatorService(transport, store, new SoloProgressionService());
+            using var audio = new NullAudioAnalyzer();
+            var friend = new FriendEntry { PetId = "friend-isolate", OwnerName = "지수", PetName = "모찌" };
+
+            await WpfTestHost.RunAsync(async () =>
+            {
+                var window = new VisitorPetWindow(friend, friend.CachedAppearance, new ProceduralPetMeshFactory(), audio, social)
+                {
+                    CrashLogDirectory = crashDir,
+                    BeforeLayoutBubbleForTest = () => throw new InvalidOperationException("격리 검증용 레이아웃 예외"),
+                    ShowActivated = false,
+                    Left = 360,
+                    Top = 320
+                };
+
+                try
+                {
+                    window.Show();
+                    await FlushUiAsync();
+
+                    Assert.True(window.ShowChatMessage("예외 격리 테스트 메시지"));
+                    await FlushUiAsync();
+
+                    // Dispatcher에서 예외가 전파되지 않아야 하며 실패한 말풍선 팝업은 안전하게 닫혀야 한다.
+                    var logPath = Path.Combine(crashDir, CrashLogWriter.DefaultFileName);
+                    Assert.True(File.Exists(logPath));
+                    var logText = File.ReadAllText(logPath);
+                    Assert.Contains("VisitorPetWindow.LayoutBubblePopup", logText);
+                    Assert.Contains("격리 검증용 레이아웃 예외", logText);
+                    Assert.True(window.CurrentBubblePhysicalBounds.IsEmpty);
+
+                    // 이후 정상 배치에서는 다시 말풍선이 렌더링되어야 한다.
+                    window.BeforeLayoutBubbleForTest = null;
+                    Assert.True(window.ShowChatMessage("정상 복구 메시지"));
+                    await WaitUntilAsync(() => !window.CurrentBubblePhysicalBounds.IsEmpty);
+                    AssertBubbleHeadAlignment(window);
+                }
+                finally
+                {
+                    if (window.IsLoaded || window.IsVisible)
+                    {
+                        window.Close();
+                    }
+                }
+            }).WaitAsync(TimeSpan.FromSeconds(15));
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir))
+            {
+                Directory.Delete(tempDir, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
+    public void CrashLogWriter_WritesAndRotatesLogFileWithoutPropagatingErrors()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), "LabPet_CrashLogTest_" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            CrashLogWriter.Write("TestSource.First", new ArgumentException("첫 번째 예외"), "Context=A", tempDir, maxFileBytes: 200);
+            var primaryPath = Path.Combine(tempDir, CrashLogWriter.DefaultFileName);
+            var rotatedPath = Path.Combine(tempDir, CrashLogWriter.RotatedFileName);
+            Assert.True(File.Exists(primaryPath));
+            var firstContent = File.ReadAllText(primaryPath);
+            Assert.Contains("TestSource.First", firstContent);
+            Assert.Contains("ArgumentException", firstContent);
+            Assert.Contains("Context=A", firstContent);
+
+            CrashLogWriter.Write("TestSource.Second", new InvalidOperationException("두 번째 예외"), "Context=B", tempDir, maxFileBytes: 200);
+            Assert.True(File.Exists(rotatedPath));
+            Assert.Contains("TestSource.First", File.ReadAllText(rotatedPath));
+            Assert.Contains("TestSource.Second", File.ReadAllText(primaryPath));
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir))
+            {
+                Directory.Delete(tempDir, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
+    public async Task EndToEnd_LanAndGcpMessages_RenderOnLiveVisitorWindowAfterGreetingExpired()
+    {
+        var tempRoot = Path.Combine(Path.GetTempPath(), "LabPet_LiveVisitorE2E_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempRoot);
+        WebApplication? server = null;
+
+        try
+        {
+            var crashDir = Path.Combine(tempRoot, "logs");
+
+            // 1) LAN P2P 수신 메시지 -> 인사 만료 후 닫힌 VisitorPetWindow 재오픈 렌더링
+            var hostLan = new PetProfile { OwnerName = "호스트", PetName = "내펫" };
+            var friendLan = new PetProfile { OwnerName = "나현", PetName = "나송이" };
+            var lanSecret = PacketSigner.GeneratePairSecretBase64();
+
+            var storeLanHost = new JsonAppDataStore(new StateMigrator(), Path.Combine(tempRoot, "lan-host"));
+            await using var lanHostTransport = new LanP2pTransport(udpDiscoveryPort: 0, udpMusicPort: 0, tcpControlPort: 0);
+            await using var lanFriendTransport = new LanP2pTransport(udpDiscoveryPort: 0, udpMusicPort: 0, tcpControlPort: 0);
+            await lanFriendTransport.StartAsync(friendLan, []);
+
+            var lanFriendEntry = new FriendEntry
+            {
+                PetId = friendLan.PetId,
+                OwnerName = friendLan.OwnerName,
+                PetName = friendLan.PetName,
+                LastKnownIp = IPAddress.Loopback.ToString(),
+                LastKnownTcpPort = lanFriendTransport.BoundTcpPort,
+                PairSecretBase64 = lanSecret
+            };
+            await storeLanHost.SaveFriendsAsync(new FriendsStore { Friends = [lanFriendEntry] });
+            await using var lanHostSocial = new SocialCoordinatorService(lanHostTransport, storeLanHost, new SoloProgressionService());
+            await lanHostSocial.StartAsync(hostLan);
+
+            // 2) GCP SignalR 중계 수신 메시지 준비
+            var serverPort = GetFreeTcpPort();
+            var serverUrl = $"http://127.0.0.1:{serverPort}";
+            server = LabPetServerHost.BuildApplication(new ServerOptions
+            {
+                ListenUrl = serverUrl,
+                ServerSecret = "live-visitor-e2e-server-secret-value-2026!",
+                RequireConfiguredSecret = true,
+                DataDirectory = Path.Combine(tempRoot, "server")
+            });
+            await server.StartAsync();
+
+            var connOpts = new ServerConnectionOptions { Enabled = true, ServerUrl = serverUrl };
+            await using var gcpHostTransport = new GcpSignalRTransport(connOpts, new DeviceIdentityStore(Path.Combine(tempRoot, "gcp-host-id")));
+            await using var gcpFriendTransport = new GcpSignalRTransport(connOpts, new DeviceIdentityStore(Path.Combine(tempRoot, "gcp-friend-id")));
+
+            var hostGcp = new PetProfile { OwnerName = "호스트GCP", PetName = "내펫G" };
+            var friendGcp = new PetProfile { OwnerName = "구대", PetName = "덕구" };
+            var storeGcpHost = new JsonAppDataStore(new StateMigrator(), Path.Combine(tempRoot, "gcp-host"));
+            await using var gcpHostSocial = new SocialCoordinatorService(gcpHostTransport, storeGcpHost, new SoloProgressionService());
+            await gcpHostSocial.StartAsync(hostGcp);
+            await gcpFriendTransport.StartAsync(friendGcp, []);
+            await WaitUntilAsync(() => gcpFriendTransport.GetDiscoveredPeers().Any(p => p.PetId == hostGcp.PetId));
+
+            var incomingReqTcs = new TaskCompletionSource<PendingFriendRequest>(TaskCreationOptions.RunContinuationsAsynchronously);
+            gcpHostSocial.FriendRequestArrived += (_, req) => incomingReqTcs.TrySetResult(req);
+            var friendAcceptedTcs = new TaskCompletionSource<FriendAcceptedEventArgs>(TaskCreationOptions.RunContinuationsAsynchronously);
+            gcpFriendTransport.FriendAccepted += (_, e) => friendAcceptedTcs.TrySetResult(e);
+
+            var gcpPeer = Assert.Single(gcpFriendTransport.GetDiscoveredPeers(), p => p.PetId == hostGcp.PetId);
+            Assert.True(await gcpFriendTransport.SendFriendRequestAsync(gcpPeer));
+            var incomingReq = await incomingReqTcs.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.True((await gcpHostSocial.RespondFriendRequestDetailedAsync(incomingReq, accept: true)).Succeeded);
+            var gcpFriendEntry = await WaitUntilAsyncValue(() => gcpHostSocial.Friends.FirstOrDefault(f => f.PetId == friendGcp.PetId));
+            var friendAccepted = await friendAcceptedTcs.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            var gcpHostFromFriend = new FriendEntry
+            {
+                PetId = hostGcp.PetId,
+                OwnerName = hostGcp.OwnerName,
+                PetName = hostGcp.PetName,
+                PairSecretBase64 = friendAccepted.PairSecretBase64
+            };
+            gcpFriendTransport.UpdateKnownFriends([gcpHostFromFriend]);
+
+            using var audio = new NullAudioAnalyzer();
+            var meshFactory = new ProceduralPetMeshFactory();
+
+            await WpfTestHost.RunAsync(async () =>
+            {
+                var order = new VisitorPopupOrder();
+                var visitors = new Dictionary<string, VisitorPetWindow>(StringComparer.OrdinalIgnoreCase);
+                var hostTarget = new StubMessageTarget();
+                var router = new FriendMessageRouter(petId => visitors.GetValueOrDefault(petId), () => hostTarget);
+
+                var lanVisitor = new VisitorPetWindow(lanFriendEntry, lanFriendEntry.CachedAppearance, meshFactory, audio, lanHostSocial, order)
+                {
+                    CrashLogDirectory = crashDir,
+                    ShowActivated = false,
+                    Left = 240,
+                    Top = 360
+                };
+                var gcpVisitor = new VisitorPetWindow(gcpFriendEntry, gcpFriendEntry.CachedAppearance, meshFactory, audio, gcpHostSocial, order)
+                {
+                    CrashLogDirectory = crashDir,
+                    ShowActivated = false,
+                    Left = 420,
+                    Top = 360
+                };
+                visitors[lanFriendEntry.PetId] = lanVisitor;
+                visitors[gcpFriendEntry.PetId] = gcpVisitor;
+
+                lanHostSocial.FriendMessageReceived += (_, msg) => Application.Current.Dispatcher.BeginInvoke(() => router.Route(msg));
+                gcpHostSocial.FriendMessageReceived += (_, msg) => Application.Current.Dispatcher.BeginInvoke(() => router.Route(msg));
+
+                try
+                {
+                    lanVisitor.Show();
+                    gcpVisitor.Show();
+                    lanVisitor.ShowVisitorBubble("놀러 왔어!", 60);
+                    gcpVisitor.ShowVisitorBubble("놀러 왔어!", 60);
+                    await WaitUntilAsync(() => !lanVisitor.HasStatusBubble && !gcpVisitor.HasStatusBubble);
+                    await FlushUiAsync();
+
+                    Assert.True(await lanFriendTransport.SendBubbleMessageAsync(
+                        new FriendEntry
+                        {
+                            PetId = hostLan.PetId,
+                            LastKnownIp = IPAddress.Loopback.ToString(),
+                            LastKnownTcpPort = lanHostTransport.BoundTcpPort,
+                            PairSecretBase64 = lanSecret
+                        },
+                        "실제 LAN 메시지 수신!"));
+                    await WaitUntilAsync(() => !lanVisitor.CurrentBubblePhysicalBounds.IsEmpty);
+                    await FlushUiAsync();
+                    Assert.Equal("실제 LAN 메시지 수신!", Assert.Single(lanVisitor.ChatBubbleStack.Items).Text);
+                    AssertBubbleHeadAlignment(lanVisitor);
+
+                    Assert.True(await gcpFriendTransport.SendBubbleMessageAsync(gcpHostFromFriend, "실제 GCP 메시지 수신!"));
+                    await WaitUntilAsync(() => !gcpVisitor.CurrentBubblePhysicalBounds.IsEmpty);
+                    await FlushUiAsync();
+                    Assert.Equal("실제 GCP 메시지 수신!", Assert.Single(gcpVisitor.ChatBubbleStack.Items).Text);
+                    AssertBubbleHeadAlignment(gcpVisitor);
+
+                    Assert.Empty(hostTarget.ReceivedMessages);
+                    Assert.False(Directory.Exists(crashDir));
+                }
+                finally
+                {
+                    gcpVisitor.Close();
+                    lanVisitor.Close();
+                }
+            }).WaitAsync(TimeSpan.FromSeconds(20));
+        }
+        finally
+        {
+            if (server is not null)
+            {
+                await server.StopAsync();
+                await server.DisposeAsync();
+            }
+
+            if (Directory.Exists(tempRoot))
+            {
+                Directory.Delete(tempRoot, recursive: true);
+            }
+        }
+    }
+
+    private static async Task<T> WaitUntilAsyncValue<T>(Func<T?> getter, int timeoutMs = 4000) where T : class
+    {
+        var deadline = DateTime.UtcNow.AddMilliseconds(timeoutMs);
+        while (DateTime.UtcNow < deadline)
+        {
+            var value = getter();
+            if (value is not null)
+            {
+                return value;
+            }
+
+            await Task.Delay(15);
+        }
+
+        return getter() ?? throw new TimeoutException("조건이 제한 시간 내에 충족되지 않았습니다.");
     }
 
     private static void AssertComposerBelowNameplate(Rect composer, Rect nameplate, DpiScale dpi)

@@ -72,6 +72,14 @@ public sealed class BubbleMessageStack : IDisposable
         }
     }
 
+    public IReadOnlyList<BubbleLine> SnapshotItems()
+    {
+        lock (_syncLock)
+        {
+            return [.. Items];
+        }
+    }
+
     internal int ActiveTimerCount
     {
         get

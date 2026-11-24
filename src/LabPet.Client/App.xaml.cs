@@ -1,5 +1,7 @@
 using System.Windows;
+using System.Windows.Threading;
 using LabPet.Client.Audio;
+using LabPet.Client.Diagnostics;
 using LabPet.Client.Navigation;
 using LabPet.Client.Network;
 using LabPet.Client.Rendering;
@@ -29,9 +31,11 @@ public partial class App : Application
     private GameInviteCardWindow? _inviteCardWindow;
     private readonly Dictionary<string, VisitorPetWindow> _visitorWindows = new(StringComparer.OrdinalIgnoreCase);
     private readonly VisitorPopupOrder _visitorPopupOrder = new();
+    private bool _crashHooksAttached;
 
     protected override async void OnStartup(StartupEventArgs e)
     {
+        AttachCrashLoggingHooks();
         base.OnStartup(e);
 
         var singleInstanceMutex = new Mutex(initiallyOwned: true, SingleInstanceMutexName, out var createdNew);
@@ -349,7 +353,53 @@ public partial class App : Application
 
         _singleInstanceMutex?.ReleaseMutex();
         _singleInstanceMutex?.Dispose();
+        DetachCrashLoggingHooks();
         base.OnExit(e);
+    }
+
+    private void AttachCrashLoggingHooks()
+    {
+        if (_crashHooksAttached)
+        {
+            return;
+        }
+
+        _crashHooksAttached = true;
+        DispatcherUnhandledException += OnDispatcherUnhandledException;
+        AppDomain.CurrentDomain.UnhandledException += OnDomainUnhandledException;
+        TaskScheduler.UnobservedTaskException += OnUnobservedTaskException;
+    }
+
+    private void DetachCrashLoggingHooks()
+    {
+        if (!_crashHooksAttached)
+        {
+            return;
+        }
+
+        _crashHooksAttached = false;
+        DispatcherUnhandledException -= OnDispatcherUnhandledException;
+        AppDomain.CurrentDomain.UnhandledException -= OnDomainUnhandledException;
+        TaskScheduler.UnobservedTaskException -= OnUnobservedTaskException;
+    }
+
+    private static void OnDispatcherUnhandledException(object sender, DispatcherUnhandledExceptionEventArgs e)
+    {
+        CrashLogWriter.Write("App.DispatcherUnhandledException", e.Exception);
+    }
+
+    private static void OnDomainUnhandledException(object? sender, UnhandledExceptionEventArgs e)
+    {
+        if (e.ExceptionObject is Exception exception)
+        {
+            CrashLogWriter.Write("AppDomain.UnhandledException", exception, $"IsTerminating={e.IsTerminating}");
+        }
+    }
+
+    private static void OnUnobservedTaskException(object? sender, UnobservedTaskExceptionEventArgs e)
+    {
+        CrashLogWriter.Write("TaskScheduler.UnobservedTaskException", e.Exception);
+        e.SetObserved();
     }
 
     private static void ConfigureServices(IServiceCollection services)

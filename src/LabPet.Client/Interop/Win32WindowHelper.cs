@@ -50,18 +50,24 @@ public static partial class Win32WindowHelper
     }
 
     [LibraryImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool IsWindow(IntPtr hWnd);
+
+    [LibraryImport("user32.dll")]
     private static partial IntPtr MonitorFromWindow(IntPtr window, uint flags);
 
     [LibraryImport("user32.dll", EntryPoint = "GetMonitorInfoW")]
     [return: MarshalAs(UnmanagedType.Bool)]
     private static partial bool GetMonitorInfo(IntPtr monitor, ref NativeMonitorInfo info);
 
+    internal static bool IsValidWindowHandle(IntPtr handle) => handle != IntPtr.Zero && IsWindow(handle);
+
     public static bool TryGetNearestWorkArea(Window window, out Rect bounds)
     {
         const uint monitorDefaultToNearest = 2;
         bounds = Rect.Empty;
         var handle = new WindowInteropHelper(window).Handle;
-        if (handle == IntPtr.Zero)
+        if (!IsValidWindowHandle(handle))
         {
             return false;
         }
@@ -72,7 +78,14 @@ public static partial class Win32WindowHelper
             return false;
         }
         var work = info.Work;
-        bounds = new Rect(work.Left, work.Top, work.Right - work.Left, work.Bottom - work.Top);
+        var width = work.Right - work.Left;
+        var height = work.Bottom - work.Top;
+        if (width <= 0 || height <= 0)
+        {
+            return false;
+        }
+
+        bounds = new Rect(work.Left, work.Top, width, height);
         return true;
     }
 
@@ -104,7 +117,16 @@ public static partial class Win32WindowHelper
     internal static bool IsWindowAbove(IntPtr higher, IntPtr lower)
     {
         const uint previousWindow = 3;
-        for (var window = GetWindow(lower, previousWindow); window != IntPtr.Zero; window = GetWindow(window, previousWindow))
+        const int maxWalkSteps = 4096;
+        if (!IsValidWindowHandle(higher) || !IsValidWindowHandle(lower) || higher == lower)
+        {
+            return false;
+        }
+
+        var steps = 0;
+        for (var window = GetWindow(lower, previousWindow);
+             window != IntPtr.Zero && steps < maxWalkSteps;
+             window = GetWindow(window, previousWindow), steps++)
         {
             if (window == higher)
             {
@@ -117,6 +139,11 @@ public static partial class Win32WindowHelper
 
     internal static void PlacePopupBehind(IntPtr popup, IntPtr higher)
     {
+        if (!IsValidWindowHandle(popup) || !IsValidWindowHandle(higher) || popup == higher)
+        {
+            return;
+        }
+
         if (!SetWindowPos(popup, higher, 0, 0, 0, 0, SwpNoMove | SwpNoSize | SwpNoActivate | SwpNoOwnerZOrder))
         {
             System.Diagnostics.Debug.WriteLine($"방문 펫 팝업 표시 순서 적용 실패 ({Marshal.GetLastPInvokeError()})");
@@ -125,8 +152,10 @@ public static partial class Win32WindowHelper
 
     internal static void MovePopupPhysical(Visual visual, Point origin)
     {
-        if (PresentationSource.FromVisual(visual) is not HwndSource { Handle: var handle }
-            || handle == IntPtr.Zero || !GetWindowRect(handle, out var bounds))
+        if (!double.IsFinite(origin.X) || !double.IsFinite(origin.Y)
+            || PresentationSource.FromVisual(visual) is not HwndSource { IsDisposed: false, Handle: var handle }
+            || !IsValidWindowHandle(handle)
+            || !GetWindowRect(handle, out var bounds))
         {
             return;
         }
@@ -142,7 +171,8 @@ public static partial class Win32WindowHelper
 
     internal static void SetPopupClickThrough(Visual visual)
     {
-        if (PresentationSource.FromVisual(visual) is HwndSource { Handle: var handle } && handle != IntPtr.Zero)
+        if (PresentationSource.FromVisual(visual) is HwndSource { IsDisposed: false, Handle: var handle }
+            && IsValidWindowHandle(handle))
         {
             var style = GetWindowLong(handle, GwlExStyle);
             _ = SetWindowLong(handle, GwlExStyle, style | WsExTransparent | WsExNoActivate);
@@ -200,7 +230,7 @@ public static partial class Win32WindowHelper
     public static bool MoveWindowPhysical(Window window, int physicalX, int physicalY)
     {
         var hwnd = new WindowInteropHelper(window).Handle;
-        if (hwnd == IntPtr.Zero)
+        if (!IsValidWindowHandle(hwnd))
         {
             return false;
         }
@@ -215,12 +245,19 @@ public static partial class Win32WindowHelper
     {
         bounds = Rect.Empty;
         var hwnd = new WindowInteropHelper(window).Handle;
-        if (hwnd == IntPtr.Zero || !GetWindowRect(hwnd, out var rect))
+        if (!IsValidWindowHandle(hwnd) || !GetWindowRect(hwnd, out var rect))
         {
             return false;
         }
 
-        bounds = new Rect(rect.Left, rect.Top, rect.Right - rect.Left, rect.Bottom - rect.Top);
+        var width = rect.Right - rect.Left;
+        var height = rect.Bottom - rect.Top;
+        if (width < 0 || height < 0)
+        {
+            return false;
+        }
+
+        bounds = new Rect(rect.Left, rect.Top, width, height);
         return true;
     }
 
@@ -230,9 +267,10 @@ public static partial class Win32WindowHelper
     /// </summary>
     public static void ActivatePopupForKeyboardInput(UIElement element)
     {
-        if (PresentationSource.FromVisual(element) is HwndSource source && source.Handle != IntPtr.Zero)
+        if (PresentationSource.FromVisual(element) is HwndSource { IsDisposed: false, Handle: var handle }
+            && IsValidWindowHandle(handle))
         {
-            _ = SetForegroundWindow(source.Handle);
+            _ = SetForegroundWindow(handle);
         }
     }
 

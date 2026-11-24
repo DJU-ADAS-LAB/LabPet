@@ -9,6 +9,7 @@ using System.Windows.Media.Animation;
 using System.Windows.Media.Media3D;
 using System.Windows.Threading;
 using LabPet.Client.Audio;
+using LabPet.Client.Diagnostics;
 using LabPet.Client.Interop;
 using LabPet.Client.Rendering;
 using LabPet.Client.Social;
@@ -55,6 +56,7 @@ public partial class VisitorPetWindow : Window, IMessageBubbleTarget
     private bool _composerPositionQueued;
     private bool _chatItemsChanged;
     private bool _bubbleBelowHead;
+    private bool _isOpeningBubblePopup;
     private long _lastReceivedOrder;
     private bool _wasComposerOpenOnMouseDown;
     private bool _isSendingComposerMessage;
@@ -90,6 +92,8 @@ public partial class VisitorPetWindow : Window, IMessageBubbleTarget
     internal double AppliedNameplateOpacity => VisitorNameplate.Opacity;
     internal double AppliedBubbleOpacity => VisitorBubbleSurface.Opacity;
     internal bool ShowsSleepingPose => _animator.IsSleeping;
+    internal string? CrashLogDirectory { get; set; }
+    internal Action? BeforeLayoutBubbleForTest { get; set; }
 
     internal VisitorPetWindow(
         FriendEntry friend,
@@ -116,18 +120,35 @@ public partial class VisitorPetWindow : Window, IMessageBubbleTarget
 
         VisitorBubblePopup.Opened += (_, _) =>
         {
-            Win32WindowHelper.SetPopupClickThrough(VisitorBubbleSurface);
-            _popupOrder.UpdateBubble(VisitorBubblePopup, _lastReceivedOrder);
-            if (!VisualTreeHelper.GetDpi(VisitorBubbleSurface).Equals(VisualTreeHelper.GetDpi(VisitorViewport)))
+            try
             {
-                QueuePopupLayout();
+                Win32WindowHelper.SetPopupClickThrough(VisitorBubbleSurface);
+                _popupOrder.UpdateBubble(VisitorBubblePopup, _lastReceivedOrder);
+                if (!_isOpeningBubblePopup
+                    && PresentationSource.FromVisual(VisitorBubbleSurface) is not null
+                    && PresentationSource.FromVisual(VisitorViewport) is not null
+                    && !VisualTreeHelper.GetDpi(VisitorBubbleSurface).Equals(VisualTreeHelper.GetDpi(VisitorViewport)))
+                {
+                    QueuePopupLayout();
+                }
+            }
+            catch (Exception ex)
+            {
+                HandleBubbleLayoutFailure("VisitorBubblePopup.Opened", ex);
             }
         };
         VisitorChatComposerPopup.Opened += (_, _) =>
         {
-            ApplyComposerScreenPosition();
-            _popupOrder.OpenComposer(VisitorChatComposerPopup);
-            QueuePopupLayout(includeComposer: true);
+            try
+            {
+                ApplyComposerScreenPosition();
+                _popupOrder.OpenComposer(VisitorChatComposerPopup);
+                QueuePopupLayout(includeComposer: true);
+            }
+            catch (Exception ex)
+            {
+                CrashLogWriter.Write("VisitorChatComposerPopup.Opened", ex, BuildBubbleFailureContext(), CrashLogDirectory);
+            }
         };
 
         LightsVisual.Content = _meshFactory.CreateStudioLights();
@@ -388,7 +409,7 @@ public partial class VisitorPetWindow : Window, IMessageBubbleTarget
             return true;
         }
 
-        if (!_chatBubbleStack.Add(new BubbleLine(text), durationMs))
+        if (!_chatBubbleStack.Add(new BubbleLine(text ?? string.Empty), durationMs))
         {
             return false;
         }
@@ -422,7 +443,7 @@ public partial class VisitorPetWindow : Window, IMessageBubbleTarget
         _statusBubbleCts = cts;
         var token = cts.Token;
 
-        VisitorStatusBubbleText.Text = message;
+        VisitorStatusBubbleText.Text = message ?? string.Empty;
         _hasStatusBubble = true;
         QueuePopupLayout();
 
@@ -464,6 +485,17 @@ public partial class VisitorPetWindow : Window, IMessageBubbleTarget
 
     private void OnChatBubbleStackChanged(object? sender, EventArgs e)
     {
+        if (_isClosingOrClosed || Dispatcher.HasShutdownStarted)
+        {
+            return;
+        }
+
+        if (!Dispatcher.CheckAccess())
+        {
+            Dispatcher.BeginInvoke(() => OnChatBubbleStackChanged(sender, e));
+            return;
+        }
+
         _chatItemsChanged = true;
         QueuePopupLayout();
     }
@@ -487,7 +519,18 @@ public partial class VisitorPetWindow : Window, IMessageBubbleTarget
 
     private void QueuePopupLayout(bool includeComposer = false)
     {
-        if (_isClosingOrClosed || !IsLoaded || Dispatcher.HasShutdownStarted)
+        if (_isClosingOrClosed || Dispatcher.HasShutdownStarted)
+        {
+            return;
+        }
+
+        if (!Dispatcher.CheckAccess())
+        {
+            Dispatcher.BeginInvoke(() => QueuePopupLayout(includeComposer));
+            return;
+        }
+
+        if (!IsLoaded)
         {
             return;
         }
@@ -509,83 +552,240 @@ public partial class VisitorPetWindow : Window, IMessageBubbleTarget
 
             if (_composerNeedsPlacement && VisitorChatComposerPopup.IsOpen)
             {
-                UpdateComposerDpi();
-                RepositionPopup(VisitorChatComposerPopup);
+                try
+                {
+                    UpdateComposerDpi();
+                    RepositionPopup(VisitorChatComposerPopup);
+                }
+                catch (Exception ex)
+                {
+                    CrashLogWriter.Write(
+                        "VisitorPetWindow.RepositionComposerPopup",
+                        ex,
+                        BuildBubbleFailureContext(),
+                        CrashLogDirectory);
+                }
             }
 
             _composerNeedsPlacement = false;
-            LayoutBubblePopup();
+            try
+            {
+                BeforeLayoutBubbleForTest?.Invoke();
+                LayoutBubblePopup();
+            }
+            catch (Exception ex)
+            {
+                HandleBubbleLayoutFailure("VisitorPetWindow.LayoutBubblePopup", ex);
+            }
         });
     }
 
     private void CloseBubblePopup()
     {
-        VisitorBubblePopup.IsOpen = false;
+        if (VisitorBubblePopup.IsOpen)
+        {
+            VisitorBubblePopup.IsOpen = false;
+        }
+
         _popupOrder.RemoveBubble(VisitorBubblePopup);
         VisitorChatCards.Children.Clear();
+        VisitorChatCards.Visibility = Visibility.Collapsed;
+        VisitorStatusBubble.Visibility = Visibility.Collapsed;
+        VisitorBubbleTail.Data = null;
+        VisitorBubbleSurface.Width = 0;
+        VisitorBubbleSurface.Height = 0;
+        VisitorBubbleSurface.Opacity = _petOpacity;
         _currentBubblePhysicalBounds = Rect.Empty;
         _lastReceivedOrder = 0;
+        _chatItemsChanged = true;
     }
+
+    private void HandleBubbleLayoutFailure(string source, Exception exception)
+    {
+        CrashLogWriter.Write(source, exception, BuildBubbleFailureContext(), CrashLogDirectory);
+        try
+        {
+            CloseBubblePopup();
+        }
+        catch (Exception closeEx)
+        {
+            CrashLogWriter.Write($"{source}.CloseFallback", closeEx, null, CrashLogDirectory);
+        }
+    }
+
+    private string BuildBubbleFailureContext()
+        => $"IsLoaded={IsLoaded}, IsClosingOrClosed={_isClosingOrClosed}, PopupOpen={VisitorBubblePopup.IsOpen}, ComposerOpen={VisitorChatComposerPopup.IsOpen}, HasStatus={_hasStatusBubble}, StackCount={_chatBubbleStack.SnapshotItems().Count}, VisualCount={VisitorChatCards.Children.Count}, BelowHead={_bubbleBelowHead}, Bounds={_currentBubblePhysicalBounds}";
 
     private void LayoutBubblePopup()
     {
-        var hasChat = _chatBubbleStack.HasItems;
+        if (_isClosingOrClosed || !IsLoaded || Dispatcher.HasShutdownStarted)
+        {
+            return;
+        }
+
+        var chatItems = _chatBubbleStack.SnapshotItems();
+        var hasChat = chatItems.Count > 0;
         if (!hasChat && !_hasStatusBubble)
         {
             CloseBubblePopup();
             return;
         }
 
-        var ownerDpi = VisualTreeHelper.GetDpi(VisitorViewport);
-        var popupDpi = PresentationSource.FromVisual(VisitorBubbleSurface) is null
-            ? ownerDpi
-            : VisualTreeHelper.GetDpi(VisitorBubbleSurface);
+        if (PresentationSource.FromVisual(VisitorViewport) is null
+            || !TryGetPopupHeadPhysical(out var head))
+        {
+            CloseBubblePopup();
+            return;
+        }
+
+        var ownerDpi = NormalizeDpi(VisualTreeHelper.GetDpi(VisitorViewport));
         var workArea = GetPopupWorkArea(ownerDpi);
-        var head = GetPopupHeadPhysical();
+        if (!IsFinitePositive(workArea))
+        {
+            CloseBubblePopup();
+            return;
+        }
+
         VisitorChatCards.Visibility = hasChat ? Visibility.Visible : Visibility.Collapsed;
         VisitorStatusBubble.Visibility = _hasStatusBubble ? Visibility.Visible : Visibility.Collapsed;
-        ArrangeBubbleItems(_bubbleBelowHead);
-        VisitorBubbleContent.InvalidateMeasure();
-        VisitorBubbleContent.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
-        var natural = VisitorBubbleContent.DesiredSize;
+        ArrangeBubbleItems(_bubbleBelowHead, chatItems);
+        if (hasChat && VisitorChatCards.Children.Count == 0)
+        {
+            CloseBubblePopup();
+            return;
+        }
+
+        // 닫힌 PopupRoot가 하위 트리의 IsLayoutSuspended=true를 유지하므로 먼저 열어 Measure가 건너뛰어지지 않게 한다.
+        if (!VisitorBubblePopup.IsOpen)
+        {
+            VisitorBubbleSurface.Opacity = 0;
+            VisitorBubbleSurface.Width = 0;
+            VisitorBubbleSurface.Height = 0;
+            _isOpeningBubblePopup = true;
+            try
+            {
+                VisitorBubblePopup.IsOpen = true;
+            }
+            finally
+            {
+                _isOpeningBubblePopup = false;
+            }
+        }
+
+        var popupDpi = PresentationSource.FromVisual(VisitorBubbleSurface) is null
+            ? ownerDpi
+            : NormalizeDpi(VisualTreeHelper.GetDpi(VisitorBubbleSurface));
+
+        var natural = MeasureBubbleContent();
+        if (!IsFinitePositive(natural))
+        {
+            CloseBubblePopup();
+            return;
+        }
+
         var bodySize = new Size(natural.Width * ownerDpi.DpiScaleX, natural.Height * ownerDpi.DpiScaleY);
         var placement = VisitorBubblePlacementCalculator.CalculateBubblePlacement(head, bodySize, workArea, ownerDpi);
+        if (!IsFinitePositive(placement.Body) || !double.IsFinite(placement.Scale) || placement.Scale <= 0)
+        {
+            CloseBubblePopup();
+            return;
+        }
+
         if (placement.IsBelowHead != _bubbleBelowHead)
         {
-            ArrangeBubbleItems(placement.IsBelowHead);
-            VisitorBubbleContent.InvalidateMeasure();
-            VisitorBubbleContent.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
+            ArrangeBubbleItems(placement.IsBelowHead, chatItems);
+            if (hasChat && VisitorChatCards.Children.Count == 0)
+            {
+                CloseBubblePopup();
+                return;
+            }
+
+            natural = MeasureBubbleContent();
+            if (!IsFinitePositive(natural))
+            {
+                CloseBubblePopup();
+                return;
+            }
+
+            bodySize = new Size(natural.Width * ownerDpi.DpiScaleX, natural.Height * ownerDpi.DpiScaleY);
+            placement = VisitorBubblePlacementCalculator.CalculateBubblePlacement(head, bodySize, workArea, ownerDpi);
+            if (!IsFinitePositive(placement.Body) || !double.IsFinite(placement.Scale) || placement.Scale <= 0)
+            {
+                CloseBubblePopup();
+                return;
+            }
         }
 
         var card = hasChat
-            ? (Border)VisitorChatCards.Children[_bubbleBelowHead ? 0 : VisitorChatCards.Children.Count - 1]
+            ? VisitorChatCards.Children.OfType<Border>().ElementAtOrDefault(
+                placement.IsBelowHead ? 0 : VisitorChatCards.Children.Count - 1)
             : VisitorStatusBubble;
+        if (card is null)
+        {
+            CloseBubblePopup();
+            return;
+        }
+
         AlignBubbleCards(placement, natural);
-        var cardBounds = GetNearestCardBounds(placement, natural, card);
+        if (!TryGetNearestCardBounds(placement, natural, card, out var cardBounds))
+        {
+            CloseBubblePopup();
+            return;
+        }
+
         var tail = VisitorBubblePlacementCalculator.CalculateTailPlacement(placement, cardBounds, ownerDpi);
 
         // 말풍선 본체와 꼬리를 한 HWND에 담고 화면 안쪽의 그림자 여백만 포함한다.
         var rootBounds = placement.Body;
-        rootBounds.Union(tail.Tip);
+        if (double.IsFinite(tail.Tip.X) && double.IsFinite(tail.Tip.Y))
+        {
+            rootBounds.Union(tail.Tip);
+        }
+
         rootBounds.Inflate(BubbleShadowInsetDip * ownerDpi.DpiScaleX, BubbleShadowInsetDip * ownerDpi.DpiScaleY);
-        rootBounds = Rect.Intersect(workArea, new Rect(
+        var snappedBounds = new Rect(
             new Point(Math.Floor(rootBounds.Left), Math.Floor(rootBounds.Top)),
-            new Point(Math.Ceiling(rootBounds.Right), Math.Ceiling(rootBounds.Bottom))));
+            new Point(Math.Ceiling(rootBounds.Right), Math.Ceiling(rootBounds.Bottom)));
+        rootBounds = Rect.Intersect(workArea, snappedBounds);
+        if (rootBounds.IsEmpty || !IsFinitePositive(rootBounds))
+        {
+            CloseBubblePopup();
+            return;
+        }
+
         Point ToPopup(Point point) => new(
             (point.X - rootBounds.Left) / popupDpi.DpiScaleX,
             (point.Y - rootBounds.Top) / popupDpi.DpiScaleY);
 
         var bodyOrigin = ToPopup(placement.Body.TopLeft);
+        var scaleX = placement.Scale * ownerDpi.DpiScaleX / popupDpi.DpiScaleX;
+        var scaleY = placement.Scale * ownerDpi.DpiScaleY / popupDpi.DpiScaleY;
+        var surfaceWidth = rootBounds.Width / popupDpi.DpiScaleX;
+        var surfaceHeight = rootBounds.Height / popupDpi.DpiScaleY;
+        var tailBaseLeft = ToPopup(tail.BaseLeft);
+        var tailTip = ToPopup(tail.Tip);
+        var tailBaseRight = ToPopup(tail.BaseRight);
+        if (!IsFinitePoint(bodyOrigin)
+            || !double.IsFinite(scaleX) || scaleX <= 0
+            || !double.IsFinite(scaleY) || scaleY <= 0
+            || !double.IsFinite(surfaceWidth) || surfaceWidth <= 0
+            || !double.IsFinite(surfaceHeight) || surfaceHeight <= 0
+            || !IsFinitePoint(tailBaseLeft) || !IsFinitePoint(tailTip) || !IsFinitePoint(tailBaseRight))
+        {
+            CloseBubblePopup();
+            return;
+        }
+
         Canvas.SetLeft(VisitorBubbleContent, bodyOrigin.X);
         Canvas.SetTop(VisitorBubbleContent, bodyOrigin.Y);
-        VisitorBubbleScale.ScaleX = placement.Scale * ownerDpi.DpiScaleX / popupDpi.DpiScaleX;
-        VisitorBubbleScale.ScaleY = placement.Scale * ownerDpi.DpiScaleY / popupDpi.DpiScaleY;
-        VisitorBubbleSurface.Width = rootBounds.Width / popupDpi.DpiScaleX;
-        VisitorBubbleSurface.Height = rootBounds.Height / popupDpi.DpiScaleY;
+        VisitorBubbleScale.ScaleX = scaleX;
+        VisitorBubbleScale.ScaleY = scaleY;
+        VisitorBubbleSurface.Width = surfaceWidth;
+        VisitorBubbleSurface.Height = surfaceHeight;
 
-        var figure = new PathFigure { StartPoint = ToPopup(tail.BaseLeft) };
-        figure.Segments.Add(new LineSegment(ToPopup(tail.Tip), true));
-        figure.Segments.Add(new LineSegment(ToPopup(tail.BaseRight), true));
+        var figure = new PathFigure { StartPoint = tailBaseLeft };
+        figure.Segments.Add(new LineSegment(tailTip, true));
+        figure.Segments.Add(new LineSegment(tailBaseRight, true));
         var geometry = new PathGeometry();
         geometry.Figures.Add(figure);
         geometry.Freeze();
@@ -593,31 +793,53 @@ public partial class VisitorPetWindow : Window, IMessageBubbleTarget
         VisitorBubbleTail.Stroke = card.BorderBrush;
         VisitorBubbleTail.Data = geometry;
 
+        VisitorBubbleSurface.Opacity = _petOpacity;
         _currentBubblePhysicalBounds = rootBounds;
-        if (VisitorBubblePopup.IsOpen)
-        {
-            RepositionPopup(VisitorBubblePopup);
-        }
-        else
-        {
-            VisitorBubblePopup.IsOpen = true;
-        }
+        RepositionPopup(VisitorBubblePopup);
     }
 
-    private void ArrangeBubbleItems(bool belowHead)
+    private Size MeasureBubbleContent()
     {
-        if (_chatItemsChanged || _bubbleBelowHead != belowHead)
+        if (VisitorStatusBubble.Visibility == Visibility.Visible)
+        {
+            VisitorStatusBubbleText.InvalidateMeasure();
+            VisitorStatusBubble.InvalidateMeasure();
+        }
+
+        if (VisitorChatCards.Visibility == Visibility.Visible)
+        {
+            foreach (var card in VisitorChatCards.Children.OfType<Border>())
+            {
+                card.Child?.InvalidateMeasure();
+                card.InvalidateMeasure();
+            }
+
+            VisitorChatCards.InvalidateMeasure();
+        }
+
+        VisitorBubbleContent.InvalidateMeasure();
+        VisitorBubbleContent.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
+        return VisitorBubbleContent.DesiredSize;
+    }
+
+    private void ArrangeBubbleItems(bool belowHead, IReadOnlyList<BubbleLine> chatItems)
+    {
+        if (_chatItemsChanged || _bubbleBelowHead != belowHead || VisitorChatCards.Children.Count != chatItems.Count)
         {
             // 항목 컨테이너 생성 시점을 기다리지 않고 현재 카드들을 바로 실측할 수 있게 유지한다.
             var previousCards = VisitorChatCards.Children.OfType<Border>().ToArray();
             VisitorChatCards.Children.Clear();
-            var lines = belowHead ? _chatBubbleStack.Items.Reverse() : _chatBubbleStack.Items;
+            var lines = belowHead ? chatItems.Reverse() : chatItems;
             foreach (var line in lines)
             {
-                var card = previousCards.FirstOrDefault(card => ReferenceEquals(card.DataContext, line))
+                var card = previousCards.FirstOrDefault(existing => ReferenceEquals(existing.DataContext, line))
                     ?? (Border)_chatCardTemplate.LoadContent();
                 card.DataContext = line;
-                ((TextBlock)card.Child).Text = line.Text;
+                if (card.Child is TextBlock block)
+                {
+                    block.Text = line.Text;
+                }
+
                 VisitorChatCards.Children.Add(card);
             }
             _chatItemsChanged = false;
@@ -629,15 +851,27 @@ public partial class VisitorPetWindow : Window, IMessageBubbleTarget
 
     private void AlignBubbleCards(VisitorBubblePlacementCalculator.BubblePlacement placement, Size naturalBody)
     {
+        if (!IsFinitePositive(naturalBody) || !IsFinitePositive(placement.Body)
+            || !double.IsFinite(placement.Tip.X))
+        {
+            return;
+        }
+
         // 가장 긴 카드 때문에 가로 보정이 걸려도, 짧은 카드는 머리에 가까운 가로 위치를 유지한다.
         var anchorX = (placement.Tip.X - placement.Body.Left) * naturalBody.Width / placement.Body.Width;
+        if (!double.IsFinite(anchorX))
+        {
+            return;
+        }
+
         foreach (var card in VisitorChatCards.Children.OfType<Border>().Append(VisitorStatusBubble))
         {
             if (card.Visibility != Visibility.Collapsed)
             {
-                var centeredX = Math.Max(0, naturalBody.Width - card.DesiredSize.Width) / 2;
-                var x = Math.Clamp(anchorX - card.DesiredSize.Width / 2, 0, 2 * centeredX);
-                if (card.RenderTransform is not TranslateTransform offset)
+                var cardWidth = double.IsFinite(card.DesiredSize.Width) ? Math.Max(0, card.DesiredSize.Width) : 0;
+                var centeredX = Math.Max(0, naturalBody.Width - cardWidth) / 2;
+                var x = VisitorBubblePlacementCalculator.SafeClamp(anchorX - cardWidth / 2, 0, 2 * centeredX);
+                if (card.RenderTransform is not TranslateTransform offset || offset.IsFrozen)
                 {
                     offset = new TranslateTransform();
                     card.RenderTransform = offset;
@@ -648,75 +882,143 @@ public partial class VisitorPetWindow : Window, IMessageBubbleTarget
         }
     }
 
-    private static Rect GetNearestCardBounds(
-        VisitorBubblePlacementCalculator.BubblePlacement placement, Size naturalBody, Border card)
+    private static bool TryGetNearestCardBounds(
+        VisitorBubblePlacementCalculator.BubblePlacement placement, Size naturalBody, Border card, out Rect cardBounds)
     {
+        cardBounds = Rect.Empty;
         var body = placement.Body;
+        if (!IsFinitePositive(body) || !IsFinitePositive(naturalBody) || !IsFinitePositive(card.DesiredSize))
+        {
+            return false;
+        }
+
         var scaleX = body.Width / naturalBody.Width;
         var scaleY = body.Height / naturalBody.Height;
+        if (!double.IsFinite(scaleX) || !double.IsFinite(scaleY) || scaleX <= 0 || scaleY <= 0)
+        {
+            return false;
+        }
+
         var margin = card.Margin;
-        var width = (card.DesiredSize.Width - margin.Left - margin.Right) * scaleX;
-        var height = (card.DesiredSize.Height - margin.Top - margin.Bottom) * scaleY;
+        var rawWidth = card.DesiredSize.Width - margin.Left - margin.Right;
+        var rawHeight = card.DesiredSize.Height - margin.Top - margin.Bottom;
+        if (!double.IsFinite(rawWidth) || !double.IsFinite(rawHeight) || rawWidth <= 0 || rawHeight <= 0)
+        {
+            return false;
+        }
+
+        var width = rawWidth * scaleX;
+        var height = rawHeight * scaleY;
+        var offsetX = card.RenderTransform is TranslateTransform transform && double.IsFinite(transform.X)
+            ? transform.X
+            : 0.0;
         var y = placement.IsBelowHead
             ? body.Top + margin.Top * scaleY
             : body.Bottom - margin.Bottom * scaleY - height;
-        var x = body.Left + (body.Width - width) / 2 + ((TranslateTransform)card.RenderTransform).X * scaleX;
-        return new Rect(x, y, width, height);
+        var x = body.Left + (body.Width - width) / 2 + offsetX * scaleX;
+        if (!double.IsFinite(x) || !double.IsFinite(y) || !double.IsFinite(width) || !double.IsFinite(height)
+            || width <= 0 || height <= 0)
+        {
+            return false;
+        }
+
+        cardBounds = new Rect(x, y, width, height);
+        return true;
     }
+
+    private static Rect GetNearestCardBounds(
+        VisitorBubblePlacementCalculator.BubblePlacement placement, Size naturalBody, Border card)
+        => TryGetNearestCardBounds(placement, naturalBody, card, out var cardBounds) ? cardBounds : Rect.Empty;
 
     private static void RepositionPopup(Popup popup)
     {
-        // WPF는 PlacementTarget이 이동해도 열린 팝업을 자동으로 따라 옮기지 않는다.
-        var offset = popup.HorizontalOffset;
-        popup.HorizontalOffset = offset + 0.01;
-        popup.HorizontalOffset = offset;
-    }
-
-    private void UpdateComposerDpi()
-    {
-        if (PresentationSource.FromVisual(VisitorChatComposerCard) is null)
+        if (!popup.IsOpen)
         {
             return;
         }
 
-        var ownerDpi = VisualTreeHelper.GetDpi(VisitorViewport);
-        var popupDpi = VisualTreeHelper.GetDpi(VisitorChatComposerCard);
+        // WPF는 PlacementTarget이 이동해도 열린 팝업을 자동으로 따라 옮기지 않는다.
+        var offset = popup.HorizontalOffset;
+        popup.HorizontalOffset = double.IsFinite(offset) ? offset + 0.01 : 0.01;
+        popup.HorizontalOffset = double.IsFinite(offset) ? offset : 0.0;
+    }
+
+    private void UpdateComposerDpi()
+    {
+        if (PresentationSource.FromVisual(VisitorViewport) is null
+            || PresentationSource.FromVisual(VisitorChatComposerCard) is null)
+        {
+            return;
+        }
+
+        var ownerDpi = NormalizeDpi(VisualTreeHelper.GetDpi(VisitorViewport));
+        var popupDpi = NormalizeDpi(VisualTreeHelper.GetDpi(VisitorChatComposerCard));
         VisitorChatComposerScale.ScaleX = ownerDpi.DpiScaleX / popupDpi.DpiScaleX;
         VisitorChatComposerScale.ScaleY = ownerDpi.DpiScaleY / popupDpi.DpiScaleY;
     }
 
     private CustomPopupPlacement[] GetVisitorChatComposerPlacements(Size popupSize, Size targetSize, Point offset)
     {
-        if (PresentationSource.FromVisual(VisitorNameplate) is null)
+        try
         {
+            if (PresentationSource.FromVisual(VisitorNameplate) is null
+                || PresentationSource.FromVisual(VisitorViewport) is null)
+            {
+                return [];
+            }
+
+            var dpi = NormalizeDpi(VisualTreeHelper.GetDpi(VisitorViewport));
+            var nameplateWidth = double.IsFinite(VisitorNameplate.ActualWidth) && VisitorNameplate.ActualWidth >= 0
+                ? VisitorNameplate.ActualWidth
+                : 0;
+            var nameplateHeight = double.IsFinite(VisitorNameplate.ActualHeight) && VisitorNameplate.ActualHeight >= 0
+                ? VisitorNameplate.ActualHeight
+                : 0;
+            var topLeft = VisitorNameplate.PointToScreen(new Point());
+            var bottomRight = VisitorNameplate.PointToScreen(new Point(nameplateWidth, nameplateHeight));
+            if (!IsFinitePoint(topLeft) || !IsFinitePoint(bottomRight))
+            {
+                return [];
+            }
+
+            var width = Math.Max(0, bottomRight.X - topLeft.X);
+            var height = Math.Max(0, bottomRight.Y - topLeft.Y);
+            var nameplate = new Rect(topLeft, new Size(width, height));
+            _currentComposerPhysicalBounds = VisitorBubblePlacementCalculator.CalculateComposerPlacement(
+                nameplate, popupSize, dpi);
+
+            // WPF가 화면 경계에 맞춰 팝업을 밀어낸 뒤에도, 실제 창은 이름표 아래에 둔다.
+            if (!_composerPositionQueued)
+            {
+                _composerPositionQueued = true;
+                Dispatcher.BeginInvoke(DispatcherPriority.Render, () =>
+                {
+                    _composerPositionQueued = false;
+                    ApplyComposerScreenPosition();
+                });
+            }
+
+            return RelativePopupPlacement(_currentComposerPhysicalBounds.TopLeft);
+        }
+        catch (Exception ex)
+        {
+            CrashLogWriter.Write("VisitorPetWindow.GetVisitorChatComposerPlacements", ex, BuildBubbleFailureContext(), CrashLogDirectory);
             return [];
         }
-
-        var dpi = VisualTreeHelper.GetDpi(VisitorViewport);
-        var nameplate = new Rect(VisitorNameplate.PointToScreen(new Point()),
-            VisitorNameplate.PointToScreen(new Point(VisitorNameplate.ActualWidth, VisitorNameplate.ActualHeight)));
-        _currentComposerPhysicalBounds = VisitorBubblePlacementCalculator.CalculateComposerPlacement(
-            nameplate, popupSize, dpi);
-
-        // WPF가 화면 경계에 맞춰 팝업을 밀어낸 뒤에도, 실제 창은 이름표 아래에 둔다.
-        if (!_composerPositionQueued)
-        {
-            _composerPositionQueued = true;
-            Dispatcher.BeginInvoke(DispatcherPriority.Render, () =>
-            {
-                _composerPositionQueued = false;
-                ApplyComposerScreenPosition();
-            });
-        }
-
-        return RelativePopupPlacement(_currentComposerPhysicalBounds.TopLeft);
     }
 
     private void ApplyComposerScreenPosition()
     {
-        if (VisitorChatComposerPopup.IsOpen && !_currentComposerPhysicalBounds.IsEmpty)
+        try
         {
-            Win32WindowHelper.MovePopupPhysical(VisitorChatComposerCard, _currentComposerPhysicalBounds.TopLeft);
+            if (!_isClosingOrClosed && VisitorChatComposerPopup.IsOpen && !_currentComposerPhysicalBounds.IsEmpty)
+            {
+                Win32WindowHelper.MovePopupPhysical(VisitorChatComposerCard, _currentComposerPhysicalBounds.TopLeft);
+            }
+        }
+        catch (Exception ex)
+        {
+            CrashLogWriter.Write("VisitorPetWindow.ApplyComposerScreenPosition", ex, BuildBubbleFailureContext(), CrashLogDirectory);
         }
     }
 
@@ -725,32 +1027,59 @@ public partial class VisitorPetWindow : Window, IMessageBubbleTarget
 
     private CustomPopupPlacement[] RelativePopupPlacement(Point physicalOrigin)
     {
-        if (PresentationSource.FromVisual(VisitorViewport) is null)
+        if (!IsFinitePoint(physicalOrigin) || PresentationSource.FromVisual(VisitorViewport) is null)
         {
             return [];
         }
 
         var origin = VisitorViewport.PointToScreen(new Point());
+        if (!IsFinitePoint(origin))
+        {
+            return [];
+        }
+
         return [new CustomPopupPlacement(physicalOrigin - (Vector)origin, PopupPrimaryAxis.None)];
     }
 
     internal Point GetPopupHeadPhysical()
+        => TryGetPopupHeadPhysical(out var head) ? head : default;
+
+    private bool TryGetPopupHeadPhysical(out Point head)
     {
+        head = default;
+        if (PresentationSource.FromVisual(VisitorViewport) is null)
+        {
+            return false;
+        }
+
+        var viewportWidth = double.IsFinite(VisitorViewport.ActualWidth) && VisitorViewport.ActualWidth >= 0
+            ? VisitorViewport.ActualWidth
+            : (double.IsFinite(VisitorViewport.Width) && VisitorViewport.Width >= 0 ? VisitorViewport.Width : 0);
+        var viewportHeight = double.IsFinite(VisitorViewport.ActualHeight) && VisitorViewport.ActualHeight >= 0
+            ? VisitorViewport.ActualHeight
+            : (double.IsFinite(VisitorViewport.Height) && VisitorViewport.Height >= 0 ? VisitorViewport.Height : 0);
+        if (viewportWidth <= 0 || viewportHeight <= 0)
+        {
+            return false;
+        }
+
         var bounds = _currentRig?.BodyBounds ?? Rect3D.Empty;
-        var inViewport = new Point(VisitorViewport.ActualWidth / 2, 0);
-        if (!bounds.IsEmpty)
+        var inViewport = new Point(viewportWidth / 2, 0);
+        if (!bounds.IsEmpty && VisitorViewport.IsAncestorOf(VisitorPetVisual))
         {
             // 움직이는 뼈대 대신 기본 모델의 머리를 투영해 말풍선이 애니메이션에 흔들리지 않게 한다.
-            var head = new Point3D(0, bounds.Y + bounds.SizeY, bounds.Z + bounds.SizeZ * 0.65);
-            if (VisitorPetVisual.TransformToAncestor(VisitorViewport).TryTransform(head, out var projected))
+            var headAnchor = new Point3D(0, bounds.Y + bounds.SizeY, bounds.Z + bounds.SizeZ * 0.65);
+            if (VisitorPetVisual.TransformToAncestor(VisitorViewport).TryTransform(headAnchor, out var projected)
+                && IsFinitePoint(projected))
             {
                 inViewport = projected;
             }
         }
 
-        return VisitorViewport.PointToScreen(new Point(
-            Math.Clamp(inViewport.X, 0, VisitorViewport.ActualWidth),
-            Math.Clamp(inViewport.Y, 0, VisitorViewport.ActualHeight)));
+        head = VisitorViewport.PointToScreen(new Point(
+            VisitorBubblePlacementCalculator.SafeClamp(inViewport.X, 0, viewportWidth),
+            VisitorBubblePlacementCalculator.SafeClamp(inViewport.Y, 0, viewportHeight)));
+        return IsFinitePoint(head);
     }
 
     private Rect GetPopupWorkArea(DpiScale dpi)
@@ -758,13 +1087,37 @@ public partial class VisitorPetWindow : Window, IMessageBubbleTarget
 
     private static Rect GetScaledPrimaryWorkArea(DpiScale dpi)
     {
+        dpi = NormalizeDpi(dpi);
         var wa = SystemParameters.WorkArea;
+        if (wa.IsEmpty || !double.IsFinite(wa.Width) || !double.IsFinite(wa.Height) || wa.Width <= 0 || wa.Height <= 0)
+        {
+            return Rect.Empty;
+        }
+
         return new Rect(
             wa.Left * dpi.DpiScaleX,
             wa.Top * dpi.DpiScaleY,
             wa.Width * dpi.DpiScaleX,
             wa.Height * dpi.DpiScaleY);
     }
+
+    private static DpiScale NormalizeDpi(DpiScale dpi)
+        => new(
+            double.IsFinite(dpi.DpiScaleX) && dpi.DpiScaleX > 0 ? dpi.DpiScaleX : 1.0,
+            double.IsFinite(dpi.DpiScaleY) && dpi.DpiScaleY > 0 ? dpi.DpiScaleY : 1.0);
+
+    private static bool IsFinitePositive(Size size)
+        => !size.IsEmpty && double.IsFinite(size.Width) && double.IsFinite(size.Height)
+            && size.Width > 0 && size.Height > 0;
+
+    private static bool IsFinitePositive(Rect rect)
+        => !rect.IsEmpty
+            && double.IsFinite(rect.Left) && double.IsFinite(rect.Top)
+            && double.IsFinite(rect.Width) && double.IsFinite(rect.Height)
+            && rect.Width > 0 && rect.Height > 0;
+
+    private static bool IsFinitePoint(Point point)
+        => double.IsFinite(point.X) && double.IsFinite(point.Y);
 
     private void OnSocialStateChanged(object? sender, EventArgs e)
     {
