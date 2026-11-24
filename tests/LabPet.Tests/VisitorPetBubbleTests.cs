@@ -356,6 +356,164 @@ public sealed class VisitorPetBubbleTests
     }
 
     [Fact]
+    public void VisitorBubblePlacement_StackedComposerAndBubbleNeverOverlapAcrossScreenEdges()
+    {
+        var workArea = new Rect(0, 0, 1920, 1040);
+        var composerSize = new Size(242, 58);
+        var bubbleSize = new Size(220, 88);
+
+        // 1) 화면 중앙/하단: 말풍선은 채팅 입력창 바로 위에 쌓이며 겹치지 않는다.
+        var midPet = new Rect(600, 500, 214, 224);
+        var composerPosMid = VisitorBubblePlacementCalculator.CalculatePlacement(
+            midPet, composerSize, workArea, overlapYPhysical: 4.0, gapPhysical: 8.0);
+        var composerRectMid = new Rect(composerPosMid, composerSize);
+
+        var bubblePosMid = VisitorBubblePlacementCalculator.CalculateStackedBubblePlacement(
+            midPet, composerRectMid, bubbleSize, workArea, baseOverlapYPhysical: 8.0, gapPhysical: 8.0);
+        var bubbleRectMid = new Rect(bubblePosMid, bubbleSize);
+
+        Assert.True(workArea.Contains(composerRectMid));
+        Assert.True(workArea.Contains(bubbleRectMid));
+        Assert.False(composerRectMid.IntersectsWith(bubbleRectMid), $"중앙 배치 겹침: {composerRectMid} vs {bubbleRectMid}");
+        Assert.True(bubbleRectMid.Bottom <= composerRectMid.Top, $"말풍선이 채팅 입력창 위에 배치되어야 합니다: {bubbleRectMid} vs {composerRectMid}");
+
+        // 2) 화면 최상단 근처: 채팅창 위 공간이 부족하면 말풍선이 겹치지 않는 대체 위치로 회피한다.
+        var topPet = new Rect(600, 44, 214, 224);
+        var composerPosTop = VisitorBubblePlacementCalculator.CalculatePlacement(
+            topPet, composerSize, workArea, overlapYPhysical: 4.0, gapPhysical: 8.0);
+        var composerRectTop = new Rect(composerPosTop, composerSize);
+
+        var bubblePosTop = VisitorBubblePlacementCalculator.CalculateStackedBubblePlacement(
+            topPet, composerRectTop, bubbleSize, workArea, baseOverlapYPhysical: 8.0, gapPhysical: 8.0);
+        var bubbleRectTop = new Rect(bubblePosTop, bubbleSize);
+
+        Assert.True(workArea.Contains(composerRectTop));
+        Assert.True(workArea.Contains(bubbleRectTop));
+        Assert.False(composerRectTop.IntersectsWith(bubbleRectTop), $"최상단 배치 겹침: {composerRectTop} vs {bubbleRectTop}");
+    }
+
+    [Fact]
+    public async Task VisitorPetWindow_ClickOpensChatComposer_SendsChatMessageWithoutPetting_AndNeverOverlapsBubbles()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), "LabPet_VisitorComposerTest_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempDir);
+
+        try
+        {
+            var hostProfile = new PetProfile { OwnerName = "호스트", PetName = "내펫" };
+            var peerProfile = new PetProfile { OwnerName = "보미", PetName = "구름이" };
+            var sharedSecret = PacketSigner.GeneratePairSecretBase64();
+
+            var peerTransport = new LanP2pTransport(udpDiscoveryPort: 0, udpMusicPort: 0, tcpControlPort: 0);
+            var hostTransport = new LanP2pTransport(udpDiscoveryPort: 0, udpMusicPort: 0, tcpControlPort: 0);
+            await peerTransport.StartAsync(peerProfile, []);
+
+            var friend = new FriendEntry
+            {
+                PetId = peerProfile.PetId,
+                OwnerName = peerProfile.OwnerName,
+                PetName = peerProfile.PetName,
+                CachedAppearance = new PetAppearance(),
+                LastKnownIp = IPAddress.Loopback.ToString(),
+                LastKnownTcpPort = peerTransport.BoundTcpPort,
+                PairSecretBase64 = sharedSecret
+            };
+
+            var store = new JsonAppDataStore(new StateMigrator(), tempDir);
+            await store.SaveFriendsAsync(new FriendsStore { Friends = [friend] });
+            var social = new SocialCoordinatorService(hostTransport, store, new SoloProgressionService());
+            await social.StartAsync(hostProfile);
+
+            peerTransport.UpdateKnownFriends(
+            [
+                new FriendEntry
+                {
+                    PetId = hostProfile.PetId,
+                    OwnerName = hostProfile.OwnerName,
+                    PetName = hostProfile.PetName,
+                    LastKnownIp = IPAddress.Loopback.ToString(),
+                    LastKnownTcpPort = hostTransport.BoundTcpPort,
+                    PairSecretBase64 = sharedSecret
+                }
+            ]);
+
+            var receivedBubbleTcs = new TaskCompletionSource<BubbleMessageReceivedEventArgs>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var petInteractionCount = 0;
+            peerTransport.BubbleMessageReceived += (_, e) => receivedBubbleTcs.TrySetResult(e);
+            peerTransport.PetInteractionReceived += (_, _) => Interlocked.Increment(ref petInteractionCount);
+
+            var meshFactory = new ProceduralPetMeshFactory();
+            using var audio = new NullAudioAnalyzer();
+
+            await WpfTestHost.RunAsync(async () =>
+            {
+                VisitorPetWindow? window = null;
+                try
+                {
+                    window = new VisitorPetWindow(
+                        friend,
+                        friend.CachedAppearance,
+                        meshFactory,
+                        audio,
+                        social)
+                    {
+                        ShowActivated = false,
+                        Left = 420,
+                        Top = 380
+                    };
+
+                    window.Show();
+                    await FlushUiAsync();
+
+                    // 클릭 시 쓰다듬기 대신 채팅 입력창이 열려야 한다.
+                    window.HandleVisitorClick();
+                    await FlushUiAsync();
+                    Assert.True(window.IsChatComposerOpen);
+                    Assert.False(window.CurrentComposerPhysicalBounds.IsEmpty);
+                    Assert.Equal(0, Volatile.Read(ref petInteractionCount));
+
+                    // 채팅 입력창이 열린 상태에서 수신 메시지가 와도 입력창이 유지되고 영역이 겹치지 않는다.
+                    Assert.True(window.TryShowFriendMessage(CreateMessage(friend.PetId, "지금 답장하는 중이야?")));
+                    await FlushUiAsync();
+
+                    Assert.True(window.IsChatComposerOpen);
+                    Assert.False(window.CurrentBubblePhysicalBounds.IsEmpty);
+                    Assert.False(
+                        window.CurrentBubblePhysicalBounds.IntersectsWith(window.CurrentComposerPhysicalBounds),
+                        $"방문 펫 말풍선과 채팅 입력창이 겹침: {window.CurrentBubblePhysicalBounds} vs {window.CurrentComposerPhysicalBounds}");
+
+                    // 메시지 입력 및 전송 시 채팅 패킷만 전송되고 입력창은 닫힌다.
+                    window.ChatComposerInputText = "방문 펫에서 바로 보낸 메시지!";
+                    Assert.True(await window.SendVisitorChatMessageAsync());
+                    await FlushUiAsync();
+
+                    var delivered = await receivedBubbleTcs.Task.WaitAsync(TimeSpan.FromSeconds(5));
+                    Assert.Equal("방문 펫에서 바로 보낸 메시지!", delivered.Text);
+                    Assert.Equal(0, Volatile.Read(ref petInteractionCount));
+                    Assert.False(window.IsChatComposerOpen);
+                }
+                finally
+                {
+                    if (window is { IsLoaded: true })
+                    {
+                        window.Close();
+                    }
+                }
+            }).WaitAsync(TimeSpan.FromSeconds(15));
+
+            await peerTransport.DisposeAsync();
+            await social.DisposeAsync();
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir))
+            {
+                Directory.Delete(tempDir, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
     public void Route_WhenVisitorClosingOrClosed_FallsBackToHostWithoutException()
     {
         var host = new StubMessageTarget();

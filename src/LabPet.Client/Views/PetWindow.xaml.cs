@@ -100,8 +100,31 @@ public partial class PetWindow : Window, IMessageBubbleTarget
         PetViewport.ContextMenu = PetContextMenuFactory.Create(_viewModel, includeStartupAutoRun: false);
         LightsVisual.Content = _meshFactory.CreateStudioLights();
         FriendOverlayPopup.CustomPopupPlacementCallback = (popupSize, targetSize, _) =>
-            GetFriendOverlayPlacements(popupSize, targetSize, VisualTreeHelper.GetDpi(PetLayout),
-                FriendOverlayCard.Margin, messageRowHeight: 0);
+        {
+            var dpi = VisualTreeHelper.GetDpi(PetLayout);
+            Rect? targetBoundsPhysical = null;
+            if (PresentationSource.FromVisual(PetLayout) is not null)
+            {
+                var anchorOffset = FriendOverlayPopup.PlacementRectangle.IsEmpty
+                    ? new Point(0, 0)
+                    : FriendOverlayPopup.PlacementRectangle.TopLeft;
+                var topLeftPhysical = PetLayout.PointToScreen(anchorOffset);
+                targetBoundsPhysical = new Rect(topLeftPhysical, targetSize);
+            }
+
+            Rect? workAreaPhysical = Win32WindowHelper.TryGetNearestWorkArea(this, out var area)
+                ? area
+                : null;
+
+            return GetFriendOverlayPlacements(
+                popupSize,
+                targetSize,
+                dpi,
+                FriendOverlayCard.Margin,
+                messageRowHeight: 0,
+                targetBoundsPhysical,
+                workAreaPhysical);
+        };
         SpeechBubblePopup.CustomPopupPlacementCallback = (popupSize, targetSize, _) =>
             GetSpeechBubblePlacements(popupSize, targetSize, VisualTreeHelper.GetDpi(PetLayout));
 
@@ -113,11 +136,13 @@ public partial class PetWindow : Window, IMessageBubbleTarget
         LocationChanged += (_, _) =>
         {
             UpdateNameplatePosition();
+            RepositionFriendOverlayPopup();
             RepositionSpeechBubblePopup();
         };
         SizeChanged += (_, e) =>
         {
             FriendOverlayPopup.PlacementRectangle = new Rect(e.NewSize);
+            RepositionFriendOverlayPopup();
             RepositionSpeechBubblePopup();
         };
         PetViewport.SizeChanged += (_, _) =>
@@ -309,6 +334,23 @@ public partial class PetWindow : Window, IMessageBubbleTarget
 
     internal static CustomPopupPlacement[] GetFriendOverlayPlacements(
         Size popupSize, Size targetSize, DpiScale dpi, Thickness cardMargin, double messageRowHeight)
+        => GetFriendOverlayPlacements(
+            popupSize,
+            targetSize,
+            dpi,
+            cardMargin,
+            messageRowHeight,
+            targetBoundsPhysical: null,
+            workAreaPhysical: null);
+
+    internal static CustomPopupPlacement[] GetFriendOverlayPlacements(
+        Size popupSize,
+        Size targetSize,
+        DpiScale dpi,
+        Thickness cardMargin,
+        double messageRowHeight,
+        Rect? targetBoundsPhysical,
+        Rect? workAreaPhysical)
     {
         // WPF는 카드의 여백을 뺀 크기를 전달한다. 그림자 여백까지 포함해 창 바깥에 배치한다.
         var popupWidth = popupSize.Width + (cardMargin.Left + cardMargin.Right) * dpi.DpiScaleX;
@@ -316,16 +358,62 @@ public partial class PetWindow : Window, IMessageBubbleTarget
         var gapX = FriendOverlayGap * dpi.DpiScaleX;
         var gapY = FriendOverlayGap * dpi.DpiScaleY;
         var preferredTop = (messageRowHeight + FriendOverlayTopInset) * dpi.DpiScaleY;
-        var sideTop = Math.Min(preferredTop, Math.Max(0, targetSize.Height - popupHeight));
         var centerX = (targetSize.Width - popupWidth) / 2;
+        var leftRelX = -popupWidth - gapX;
+        var rightRelX = targetSize.Width + gapX;
+
+        if (targetBoundsPhysical is { IsEmpty: false } targetBounds
+            && workAreaPhysical is { IsEmpty: false } workArea)
+        {
+            // 채팅 입력창·슬라이더 등으로 높이가 변해도 펫 위로 이동하지 않고 현재 좌/우 방향을 유지한 채 위·아래 가용 공간으로 확장한다.
+            var desiredAbsTop = targetBounds.Top + preferredTop;
+            var maxAbsTop = Math.Max(workArea.Top, workArea.Bottom - popupHeight);
+            var clampedAbsTop = Math.Clamp(desiredAbsTop, workArea.Top, maxAbsTop);
+            var sideTop = clampedAbsTop - targetBounds.Top;
+
+            var leftAbsX = targetBounds.Left + leftRelX;
+            var rightAbsX = targetBounds.Left + rightRelX;
+            var leftSpaceMargin = leftAbsX - workArea.Left;
+            var rightSpaceMargin = workArea.Right - (rightAbsX + popupWidth);
+            var preferLeft = leftSpaceMargin >= 0 || leftSpaceMargin >= rightSpaceMargin;
+
+            var desiredAbsCenterX = targetBounds.Left + centerX;
+            var maxAbsCenterX = Math.Max(workArea.Left, workArea.Right - popupWidth);
+            var clampedCenterRelX = Math.Clamp(desiredAbsCenterX, workArea.Left, maxAbsCenterX) - targetBounds.Left;
+
+            return
+            [
+                new(new Point(preferLeft ? leftRelX : rightRelX, sideTop), PopupPrimaryAxis.Vertical),
+                new(new Point(preferLeft ? rightRelX : leftRelX, sideTop), PopupPrimaryAxis.Vertical),
+                new(new Point(clampedCenterRelX, -popupHeight - gapY), PopupPrimaryAxis.Horizontal),
+                new(new Point(clampedCenterRelX, targetSize.Height + gapY), PopupPrimaryAxis.Horizontal)
+            ];
+        }
+
+        var fallbackSideTop = Math.Min(preferredTop, Math.Max(0, targetSize.Height - popupHeight));
 
         return
         [
-            new(new Point(-popupWidth - gapX, sideTop), PopupPrimaryAxis.Vertical),
-            new(new Point(targetSize.Width + gapX, sideTop), PopupPrimaryAxis.Vertical),
+            new(new Point(leftRelX, fallbackSideTop), PopupPrimaryAxis.Vertical),
+            new(new Point(rightRelX, fallbackSideTop), PopupPrimaryAxis.Vertical),
             new(new Point(centerX, -popupHeight - gapY), PopupPrimaryAxis.Horizontal),
             new(new Point(centerX, targetSize.Height + gapY), PopupPrimaryAxis.Horizontal)
         ];
+    }
+
+    private void FriendOverlayCard_SizeChanged(object sender, SizeChangedEventArgs e)
+        => RepositionFriendOverlayPopup();
+
+    private void RepositionFriendOverlayPopup()
+    {
+        if (_isClosingOrClosed || !FriendOverlayPopup.IsOpen)
+        {
+            return;
+        }
+
+        var offset = FriendOverlayPopup.HorizontalOffset;
+        FriendOverlayPopup.HorizontalOffset = offset + 0.01;
+        FriendOverlayPopup.HorizontalOffset = offset;
     }
 
     private void OverlaySurface_MouseEnter(object sender, MouseEventArgs e) => CancelOverlayCloseUnlessEditorLeft();

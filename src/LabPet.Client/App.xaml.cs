@@ -311,6 +311,13 @@ public partial class App : Application
                 bounds ??= [];
                 bounds.Add(rect);
             }
+
+            var composerRect = visitor.CurrentComposerPhysicalBounds;
+            if (!composerRect.IsEmpty)
+            {
+                bounds ??= [];
+                bounds.Add(composerRect);
+            }
         }
 
         return bounds ?? (IReadOnlyList<Rect>)[];

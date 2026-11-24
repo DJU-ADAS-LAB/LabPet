@@ -30,6 +30,77 @@ public sealed class PetOverlayPlacementTests
         Assert.True(candidates[1].Point.X > windowBounds.Right);
     }
 
+    [Fact]
+    public void FriendOverlayCandidates_BottomEdgeExpandsUpwardInPlaceWithoutJumpingAbovePet()
+    {
+        var dpi = new DpiScale(1.0, 1.0);
+        var cardMargin = new Thickness(8);
+        var expandedCardSize = new Size(262, 270);
+        var targetBounds = new Rect(1710, 810, 180, 220);
+        var workArea = new Rect(0, 0, 1920, 1040);
+        var popupSize = new Size(
+            expandedCardSize.Width + cardMargin.Left + cardMargin.Right,
+            expandedCardSize.Height + cardMargin.Top + cardMargin.Bottom);
+
+        var candidates = PetWindow.GetFriendOverlayPlacements(
+            expandedCardSize,
+            targetBounds.Size,
+            dpi,
+            cardMargin,
+            messageRowHeight: 0,
+            targetBounds,
+            workArea);
+
+        Assert.Equal(4, candidates.Length);
+        // 펫 위/아래가 아니라 기존 좌측 배치를 유지한 채 위쪽 가용 공간으로 확장되어야 한다.
+        Assert.True(candidates[0].Point.X + popupSize.Width < 0);
+        Assert.True(candidates[0].Point.Y < 0);
+
+        var primaryRect = new Rect(
+            targetBounds.Left + candidates[0].Point.X,
+            targetBounds.Top + candidates[0].Point.Y,
+            popupSize.Width,
+            popupSize.Height);
+        Assert.True(workArea.Contains(primaryRect), $"작업 영역 이탈: {primaryRect} vs {workArea}");
+        Assert.False(targetBounds.IntersectsWith(primaryRect));
+    }
+
+    [Fact]
+    public void FriendOverlayCandidates_TopAndLeftEdgesExpandIntoAvailableSpaceInPlace()
+    {
+        var dpi = new DpiScale(1.0, 1.0);
+        var cardMargin = new Thickness(8);
+        var expandedCardSize = new Size(262, 260);
+        var workArea = new Rect(0, 0, 1920, 1040);
+        var popupSize = new Size(
+            expandedCardSize.Width + cardMargin.Left + cardMargin.Right,
+            expandedCardSize.Height + cardMargin.Top + cardMargin.Bottom);
+
+        // 1) 상단 가장자리: 아래쪽으로 가용 공간이 있으므로 상단이 잘리지 않고 아래로 확장된다.
+        var topPetBounds = new Rect(1700, 4, 180, 220);
+        var topCandidates = PetWindow.GetFriendOverlayPlacements(
+            expandedCardSize, topPetBounds.Size, dpi, cardMargin, messageRowHeight: 0, topPetBounds, workArea);
+        var topPrimaryRect = new Rect(
+            topPetBounds.Left + topCandidates[0].Point.X,
+            topPetBounds.Top + topCandidates[0].Point.Y,
+            popupSize.Width,
+            popupSize.Height);
+        Assert.True(topCandidates[0].Point.X < 0);
+        Assert.True(workArea.Contains(topPrimaryRect));
+
+        // 2) 좌하단 가장자리: 왼쪽 공간이 없으면 우측을 1순위로 유지하고 위로 확장된다.
+        var bottomLeftPetBounds = new Rect(10, 810, 180, 220);
+        var leftEdgeCandidates = PetWindow.GetFriendOverlayPlacements(
+            expandedCardSize, bottomLeftPetBounds.Size, dpi, cardMargin, messageRowHeight: 0, bottomLeftPetBounds, workArea);
+        var leftEdgePrimaryRect = new Rect(
+            bottomLeftPetBounds.Left + leftEdgeCandidates[0].Point.X,
+            bottomLeftPetBounds.Top + leftEdgeCandidates[0].Point.Y,
+            popupSize.Width,
+            popupSize.Height);
+        Assert.True(leftEdgeCandidates[0].Point.X > bottomLeftPetBounds.Width);
+        Assert.True(workArea.Contains(leftEdgePrimaryRect));
+    }
+
     [Theory]
     [InlineData(0.5)]
     [InlineData(0.75)]

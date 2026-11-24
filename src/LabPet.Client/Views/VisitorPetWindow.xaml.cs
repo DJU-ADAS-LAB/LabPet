@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Windows;
+using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Media;
@@ -25,7 +26,9 @@ public partial class VisitorPetWindow : Window, IMessageBubbleTarget
     internal const int DefaultChatMessageDurationMs = 8000;
     private const double DragThresholdPixels = 5.0;
     private const double SpeechBubbleBottomOverlap = 8.0;
+    private const double ChatComposerBottomOverlap = 4.0;
     private const double BubbleCollisionGap = 8.0;
+    private const long FocusLossSuppressClickMs = 250;
 
     private readonly IPetMeshFactory _meshFactory;
     private readonly IAudioAnalyzer _audioAnalyzer;
@@ -43,6 +46,11 @@ public partial class VisitorPetWindow : Window, IMessageBubbleTarget
     private bool _hasStatusBubble;
     private bool _isClosingOrClosed;
     private Rect _currentBubblePhysicalBounds = Rect.Empty;
+    private Rect _currentComposerPhysicalBounds = Rect.Empty;
+    private bool _isActivatingComposer;
+    private bool _wasComposerOpenOnMouseDown;
+    private long _lastComposerFocusClosedMs = -1000;
+    private int _composerDraftVersion;
 
     private FriendEntry _friend;
     private string _appliedAppearanceSignature = string.Empty;
@@ -58,6 +66,13 @@ public partial class VisitorPetWindow : Window, IMessageBubbleTarget
     public string FriendPetId => _friend.PetId;
     public bool IsAvailableForMessages => !_isClosingOrClosed && IsVisible;
     internal Rect CurrentBubblePhysicalBounds => VisitorBubblePopup.IsOpen ? _currentBubblePhysicalBounds : Rect.Empty;
+    internal Rect CurrentComposerPhysicalBounds => VisitorChatComposerPopup.IsOpen ? _currentComposerPhysicalBounds : Rect.Empty;
+    internal bool IsChatComposerOpen => VisitorChatComposerPopup.IsOpen;
+    internal string ChatComposerInputText
+    {
+        get => VisitorChatInput.Text;
+        set => VisitorChatInput.Text = value;
+    }
     internal BubbleMessageStack ChatBubbleStack => _chatBubbleStack;
     internal bool HasStatusBubble => _hasStatusBubble;
     internal string StatusBubbleText => VisitorStatusBubbleText.Text;
@@ -88,6 +103,7 @@ public partial class VisitorPetWindow : Window, IMessageBubbleTarget
         VisitorChatItemsControl.ItemsSource = _chatBubbleStack.Items;
         _chatBubbleStack.Changed += OnChatBubbleStackChanged;
         VisitorBubblePopup.CustomPopupPlacementCallback = GetVisitorBubblePlacements;
+        VisitorChatComposerPopup.CustomPopupPlacementCallback = GetVisitorChatComposerPlacements;
 
         LightsVisual.Content = _meshFactory.CreateStudioLights();
         ApplyFriendState(friend, initialAppearance);
@@ -98,22 +114,26 @@ public partial class VisitorPetWindow : Window, IMessageBubbleTarget
         Loaded += (_, _) =>
         {
             UpdateNameplatePosition();
+            RepositionChatComposerPopup();
             RepositionBubblePopup();
         };
         LocationChanged += (_, _) =>
         {
             UpdateNameplatePosition();
+            RepositionChatComposerPopup();
             RepositionBubblePopup();
             _onBubbleLayoutChanged?.Invoke();
         };
         SizeChanged += (_, _) =>
         {
+            RepositionChatComposerPopup();
             RepositionBubblePopup();
             _onBubbleLayoutChanged?.Invoke();
         };
         VisitorViewport.SizeChanged += (_, _) =>
         {
             UpdateNameplatePosition();
+            RepositionChatComposerPopup();
             RepositionBubblePopup();
             _onBubbleLayoutChanged?.Invoke();
         };
@@ -136,6 +156,8 @@ public partial class VisitorPetWindow : Window, IMessageBubbleTarget
         {
             _isClosingOrClosed = true;
             _currentBubblePhysicalBounds = Rect.Empty;
+            _currentComposerPhysicalBounds = Rect.Empty;
+            VisitorChatComposerPopup.IsOpen = false;
             VisitorBubblePopup.IsOpen = false;
         };
 
@@ -149,6 +171,8 @@ public partial class VisitorPetWindow : Window, IMessageBubbleTarget
             _chatBubbleStack.Dispose();
             CancelAndDisposeStatusBubbleCts();
             _currentBubblePhysicalBounds = Rect.Empty;
+            _currentComposerPhysicalBounds = Rect.Empty;
+            VisitorChatComposerPopup.IsOpen = false;
             VisitorBubblePopup.IsOpen = false;
             _animator.DetachRig();
             VisitorPetVisual.Content = null;
@@ -175,6 +199,7 @@ public partial class VisitorPetWindow : Window, IMessageBubbleTarget
         VisitorSleepBadge.Opacity = _petOpacity;
         VisitorNameplate.Opacity = _petOpacity;
         VisitorBubbleContent.Opacity = _petOpacity;
+        VisitorChatComposerCard.Opacity = _petOpacity;
         if (DismissButton.IsHitTestVisible)
         {
             DismissButton.BeginAnimation(OpacityProperty,
@@ -185,6 +210,7 @@ public partial class VisitorPetWindow : Window, IMessageBubbleTarget
 
         if (IsLoaded)
         {
+            RepositionChatComposerPopup();
             RepositionBubblePopup();
             _onBubbleLayoutChanged?.Invoke();
         }
@@ -433,6 +459,25 @@ public partial class VisitorPetWindow : Window, IMessageBubbleTarget
         _onBubbleLayoutChanged?.Invoke();
     }
 
+    private void VisitorChatComposerCard_SizeChanged(object sender, SizeChangedEventArgs e)
+    {
+        RepositionChatComposerPopup();
+        RepositionBubblePopup();
+        _onBubbleLayoutChanged?.Invoke();
+    }
+
+    public void RepositionChatComposerPopup()
+    {
+        if (_isClosingOrClosed || !VisitorChatComposerPopup.IsOpen)
+        {
+            return;
+        }
+
+        var offset = VisitorChatComposerPopup.HorizontalOffset;
+        VisitorChatComposerPopup.HorizontalOffset = offset + 0.01;
+        VisitorChatComposerPopup.HorizontalOffset = offset;
+    }
+
     public void RepositionBubblePopup()
     {
         if (_isClosingOrClosed || !VisitorBubblePopup.IsOpen)
@@ -443,6 +488,40 @@ public partial class VisitorPetWindow : Window, IMessageBubbleTarget
         var offset = VisitorBubblePopup.HorizontalOffset;
         VisitorBubblePopup.HorizontalOffset = offset + 0.01;
         VisitorBubblePopup.HorizontalOffset = offset;
+    }
+
+    private CustomPopupPlacement[] GetVisitorChatComposerPlacements(Size popupSize, Size targetSize, Point offset)
+    {
+        if (PresentationSource.FromVisual(VisitorViewport) is null)
+        {
+            return
+            [
+                new CustomPopupPlacement(
+                    new Point((targetSize.Width - popupSize.Width) * 0.5, -popupSize.Height + ChatComposerBottomOverlap),
+                    PopupPrimaryAxis.Horizontal)
+            ];
+        }
+
+        var dpi = VisualTreeHelper.GetDpi(VisitorViewport);
+        var targetTopLeftPhysical = VisitorViewport.PointToScreen(new Point(0, 0));
+        var targetBoundsPhysical = new Rect(targetTopLeftPhysical, targetSize);
+        var workAreaPhysical = Win32WindowHelper.TryGetNearestWorkArea(this, out var area)
+            ? area
+            : GetScaledPrimaryWorkArea(dpi);
+
+        var occupied = _occupiedBubbleBoundsProvider?.Invoke(FriendPetId) ?? [];
+        var chosen = VisitorBubblePlacementCalculator.CalculatePlacement(
+            targetBoundsPhysical,
+            popupSize,
+            workAreaPhysical,
+            occupied,
+            ChatComposerBottomOverlap * dpi.DpiScaleY,
+            BubbleCollisionGap * dpi.DpiScaleX);
+
+        _currentComposerPhysicalBounds = new Rect(chosen, popupSize);
+
+        var relativeOffset = VisitorBubblePlacementCalculator.ToRelativePopupOffset(chosen, targetBoundsPhysical);
+        return [new CustomPopupPlacement(relativeOffset, PopupPrimaryAxis.Horizontal)];
     }
 
     private CustomPopupPlacement[] GetVisitorBubblePlacements(Size popupSize, Size targetSize, Point offset)
@@ -465,8 +544,10 @@ public partial class VisitorPetWindow : Window, IMessageBubbleTarget
             : GetScaledPrimaryWorkArea(dpi);
 
         var occupied = _occupiedBubbleBoundsProvider?.Invoke(FriendPetId) ?? [];
-        var chosen = VisitorBubblePlacementCalculator.CalculatePlacement(
+        var composerBounds = CurrentComposerPhysicalBounds;
+        var chosen = VisitorBubblePlacementCalculator.CalculateStackedBubblePlacement(
             targetBoundsPhysical,
+            composerBounds,
             popupSize,
             workAreaPhysical,
             occupied,
@@ -475,6 +556,7 @@ public partial class VisitorPetWindow : Window, IMessageBubbleTarget
 
         _currentBubblePhysicalBounds = new Rect(chosen, popupSize);
         VisitorBubbleTail.Visibility = chosen.Y < targetBoundsPhysical.Top
+            && (composerBounds.IsEmpty || chosen.Y + popupSize.Height <= composerBounds.Top + 2.0)
             ? Visibility.Visible
             : Visibility.Collapsed;
 
@@ -573,6 +655,8 @@ public partial class VisitorPetWindow : Window, IMessageBubbleTarget
             return;
         }
 
+        _wasComposerOpenOnMouseDown = VisitorChatComposerPopup.IsOpen
+            || (_clock.ElapsedMilliseconds - _lastComposerFocusClosedMs) < FocusLossSuppressClickMs;
         _isPointerPressed = true;
         _isDraggingWindow = false;
         _pressScreenPoint = PointToScreen(e.GetPosition(this));
@@ -609,7 +693,7 @@ public partial class VisitorPetWindow : Window, IMessageBubbleTarget
         _lastScreenPoint = currentScreen;
     }
 
-    private async void VisitorViewport_MouseLeftButtonUp(object sender, MouseButtonEventArgs e)
+    private void VisitorViewport_MouseLeftButtonUp(object sender, MouseButtonEventArgs e)
     {
         if (!_isPointerPressed)
         {
@@ -625,12 +709,141 @@ public partial class VisitorPetWindow : Window, IMessageBubbleTarget
         }
         else
         {
-            _animator.TriggerPetReaction();
-            var ok = await _social.SendPetInteractionAsync(_friend);
-            ShowVisitorBubble(ok ? "쓰다듬기 전송!" : "오프라인 상태예요", 1800);
+            HandleVisitorClick(_wasComposerOpenOnMouseDown);
         }
 
+        _wasComposerOpenOnMouseDown = false;
         e.Handled = true;
+    }
+
+    internal void HandleVisitorClick(bool wasComposerOpen = false)
+    {
+        if (wasComposerOpen || VisitorChatComposerPopup.IsOpen)
+        {
+            CloseChatComposer();
+        }
+        else
+        {
+            OpenChatComposer();
+        }
+    }
+
+    internal void OpenChatComposer()
+    {
+        if (_isClosingOrClosed || Dispatcher.HasShutdownStarted)
+        {
+            return;
+        }
+
+        VisitorChatInput.ToolTip = $"{SocialCoordinatorService.FormatDisplayName(_friend.OwnerName, _friend.PetName)}에게 메시지";
+        _isActivatingComposer = true;
+        VisitorChatComposerPopup.IsOpen = true;
+        RepositionChatComposerPopup();
+        RepositionBubblePopup();
+        _onBubbleLayoutChanged?.Invoke();
+
+        Dispatcher.BeginInvoke(DispatcherPriority.Input, () =>
+        {
+            _isActivatingComposer = false;
+            if (_isClosingOrClosed || !VisitorChatComposerPopup.IsOpen)
+            {
+                return;
+            }
+
+            FocusVisitorChatInput();
+            RepositionChatComposerPopup();
+            RepositionBubblePopup();
+            _onBubbleLayoutChanged?.Invoke();
+        });
+    }
+
+    internal void CloseChatComposer(bool closedByFocusLoss = false)
+    {
+        _isActivatingComposer = false;
+        if (!VisitorChatComposerPopup.IsOpen && _currentComposerPhysicalBounds.IsEmpty)
+        {
+            return;
+        }
+
+        if (closedByFocusLoss)
+        {
+            _lastComposerFocusClosedMs = _clock.ElapsedMilliseconds;
+        }
+
+        VisitorChatComposerPopup.IsOpen = false;
+        _currentComposerPhysicalBounds = Rect.Empty;
+        RepositionBubblePopup();
+        _onBubbleLayoutChanged?.Invoke();
+    }
+
+    private void FocusVisitorChatInput()
+    {
+        Win32WindowHelper.ActivatePopupForKeyboardInput(VisitorChatInput);
+        VisitorChatInput.Focus();
+        Keyboard.Focus(VisitorChatInput);
+        VisitorChatInput.CaretIndex = VisitorChatInput.Text.Length;
+    }
+
+    private void VisitorChatInput_TextChanged(object sender, TextChangedEventArgs e)
+        => _composerDraftVersion++;
+
+    private void VisitorChatInput_PreviewMouseDown(object sender, MouseButtonEventArgs e)
+        => FocusVisitorChatInput();
+
+    private void VisitorChatInput_LostKeyboardFocus(object sender, KeyboardFocusChangedEventArgs e)
+    {
+        if (!_isActivatingComposer
+            && VisitorChatComposerPopup.IsOpen
+            && !VisitorChatComposerCard.IsKeyboardFocusWithin)
+        {
+            CloseChatComposer(closedByFocusLoss: true);
+        }
+    }
+
+    private void VisitorChatInput_KeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key == Key.Enter)
+        {
+            _ = SendVisitorChatMessageAsync();
+            e.Handled = true;
+        }
+        else if (e.Key == Key.Escape)
+        {
+            CloseChatComposer();
+            e.Handled = true;
+        }
+    }
+
+    private void SendVisitorChatButton_Click(object sender, RoutedEventArgs e)
+        => _ = SendVisitorChatMessageAsync();
+
+    private void CloseVisitorChatButton_Click(object sender, RoutedEventArgs e)
+        => CloseChatComposer();
+
+    internal async Task<bool> SendVisitorChatMessageAsync()
+    {
+        var text = VisitorChatInput.Text.Trim();
+        if (string.IsNullOrEmpty(text) || _isClosingOrClosed)
+        {
+            return false;
+        }
+
+        var revision = _composerDraftVersion;
+        var sent = await _social.SendBubbleMessageAsync(_friend, text);
+        if (sent)
+        {
+            if (revision == _composerDraftVersion)
+            {
+                VisitorChatInput.Clear();
+            }
+
+            _animator.TriggerPetReaction();
+            CloseChatComposer();
+            return true;
+        }
+
+        ShowVisitorBubble("메시지 전송 실패", 2200);
+        return false;
     }
 
     private bool HitTestVisitorMesh(Point viewportPoint)

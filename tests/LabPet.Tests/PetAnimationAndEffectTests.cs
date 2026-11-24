@@ -281,6 +281,29 @@ public sealed class PetAnimationAndEffectTests
         });
     }
 
+    [Fact]
+    public void MiniSleepZzzIndicator_StartsAndStopsDiagonalAnimationWithFixedSlotSize()
+    {
+        RunOnSta(() =>
+        {
+            var indicator = new LabPet.Client.Views.MiniSleepZzzIndicator
+            {
+                Visibility = System.Windows.Visibility.Collapsed
+            };
+
+            Assert.Equal(14.0, indicator.Width);
+            Assert.Equal(14.0, indicator.Height);
+            Assert.Equal(3, indicator.LetterCount);
+            Assert.False(indicator.IsAnimating);
+
+            indicator.Visibility = System.Windows.Visibility.Visible;
+            Assert.True(indicator.IsAnimating);
+
+            indicator.Visibility = System.Windows.Visibility.Collapsed;
+            Assert.False(indicator.IsAnimating);
+        });
+    }
+
     private static void RunOnSta(Action action)
     {
         Exception? threadException = null;

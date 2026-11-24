@@ -85,6 +85,101 @@ internal static class VisitorBubblePlacementCalculator
         return bestPoint;
     }
 
+    internal static Point CalculateStackedBubblePlacement(
+        Rect petPhysicalBounds,
+        Rect composerPhysicalBounds,
+        Size bubblePopupPhysicalSize,
+        Rect workAreaPhysical,
+        IReadOnlyList<Rect>? otherOccupiedBounds = null,
+        double baseOverlapYPhysical = 8.0,
+        double gapPhysical = 8.0)
+    {
+        if (composerPhysicalBounds.IsEmpty)
+        {
+            return CalculatePlacement(
+                petPhysicalBounds,
+                bubblePopupPhysicalSize,
+                workAreaPhysical,
+                otherOccupiedBounds,
+                baseOverlapYPhysical,
+                gapPhysical);
+        }
+
+        var centerX = petPhysicalBounds.Left + (petPhysicalBounds.Width - bubblePopupPhysicalSize.Width) * 0.5;
+        var composerIsAbovePet = composerPhysicalBounds.Top < petPhysicalBounds.Top;
+        var preferredTopY = composerIsAbovePet
+            ? composerPhysicalBounds.Top - bubblePopupPhysicalSize.Height - gapPhysical
+            : petPhysicalBounds.Top - bubblePopupPhysicalSize.Height + baseOverlapYPhysical;
+        var preferredRaw = new Point(centerX, preferredTopY);
+
+        if (bubblePopupPhysicalSize.Width <= 0 || bubblePopupPhysicalSize.Height <= 0 || workAreaPhysical.IsEmpty)
+        {
+            return preferredRaw;
+        }
+
+        List<Rect> occupiedWithComposer = otherOccupiedBounds is { Count: > 0 }
+            ? [.. otherOccupiedBounds, composerPhysicalBounds]
+            : [composerPhysicalBounds];
+
+        var preferredClamped = ClampToWorkArea(preferredRaw, bubblePopupPhysicalSize, workAreaPhysical);
+        var belowY = Math.Max(petPhysicalBounds.Bottom, composerPhysicalBounds.Bottom) + gapPhysical;
+        var sideY = petPhysicalBounds.Top + Math.Max(0.0, (petPhysicalBounds.Height - bubblePopupPhysicalSize.Height) * 0.25);
+        var combinedLeft = Math.Min(petPhysicalBounds.Left, composerPhysicalBounds.Left);
+        var combinedRight = Math.Max(petPhysicalBounds.Right, composerPhysicalBounds.Right);
+
+        var candidates = new List<Point>
+        {
+            preferredRaw,
+            new(combinedLeft - bubblePopupPhysicalSize.Width - gapPhysical, composerPhysicalBounds.Top),
+            new(combinedRight + gapPhysical, composerPhysicalBounds.Top),
+            new(combinedLeft - bubblePopupPhysicalSize.Width - gapPhysical, sideY),
+            new(combinedRight + gapPhysical, sideY),
+            new(centerX, belowY),
+            new(centerX, composerPhysicalBounds.Bottom + gapPhysical)
+        };
+
+        foreach (var other in occupiedWithComposer)
+        {
+            if (other.IsEmpty)
+            {
+                continue;
+            }
+
+            candidates.Add(new Point(other.Left - bubblePopupPhysicalSize.Width - gapPhysical, preferredTopY));
+            candidates.Add(new Point(other.Right + gapPhysical, preferredTopY));
+            candidates.Add(new Point(other.Left - bubblePopupPhysicalSize.Width - gapPhysical, other.Top));
+            candidates.Add(new Point(other.Right + gapPhysical, other.Top));
+            candidates.Add(new Point(centerX, other.Top - bubblePopupPhysicalSize.Height - gapPhysical));
+        }
+
+        var bestPoint = preferredClamped;
+        var bestScore = double.MaxValue;
+
+        foreach (var rawCandidate in candidates)
+        {
+            var clamped = ClampToWorkArea(rawCandidate, bubblePopupPhysicalSize, workAreaPhysical);
+            var candidateRect = new Rect(clamped, bubblePopupPhysicalSize);
+
+            var overlapWithOccupied = ComputeTotalIntersectionArea(candidateRect, occupiedWithComposer);
+            var selfOverlap = ComputeIntersectionArea(candidateRect, petPhysicalBounds);
+            var dx = clamped.X - preferredClamped.X;
+            var dy = clamped.Y - preferredClamped.Y;
+            var distanceFromPreferred = Math.Sqrt(dx * dx + dy * dy);
+
+            var score = (overlapWithOccupied * 1_000_000.0)
+                + (selfOverlap * 100.0)
+                + (distanceFromPreferred * 0.01);
+
+            if (score < bestScore)
+            {
+                bestScore = score;
+                bestPoint = clamped;
+            }
+        }
+
+        return bestPoint;
+    }
+
     internal static Point ToRelativePopupOffset(Point chosenScreenTopLeft, Rect targetPhysicalBounds)
         => new(chosenScreenTopLeft.X - targetPhysicalBounds.Left, chosenScreenTopLeft.Y - targetPhysicalBounds.Top);
 

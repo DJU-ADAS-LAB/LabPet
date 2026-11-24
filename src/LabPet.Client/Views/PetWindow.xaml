@@ -386,6 +386,7 @@
                     BorderBrush="#FFE6EAF2"
                     BorderThickness="1"
                     Effect="{StaticResource MenuShadow}"
+                    SizeChanged="FriendOverlayCard_SizeChanged"
                     MouseEnter="OverlaySurface_MouseEnter"
                     MouseLeave="OverlaySurface_MouseLeave">
                 <StackPanel>
@@ -416,33 +417,58 @@
                                         Padding="8,5"
                                         Margin="0,0,0,4">
                                     <StackPanel>
-                                        <DockPanel LastChildFill="False">
-                                            <StackPanel DockPanel.Dock="Left" Orientation="Horizontal" VerticalAlignment="Center" MaxWidth="128">
-                                                <Ellipse Width="6" Height="6" Fill="{Binding StatusDotBrush}" Margin="0,0,5,0" VerticalAlignment="Center" />
-                                                <TextBlock Text="{Binding DisplayTitle}"
+                                        <Grid>
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*" />
+                                                <ColumnDefinition Width="Auto" />
+                                            </Grid.ColumnDefinitions>
+
+                                            <Grid Grid.Column="0" Margin="0,0,6,0" VerticalAlignment="Center">
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="Auto" />
+                                                    <ColumnDefinition Width="*" />
+                                                </Grid.ColumnDefinitions>
+
+                                                <!-- 왼쪽 고정 상태 슬롯: 깨어 있으면 점, 수면 중이면 미니 대각선 zzz 애니메이션 -->
+                                                <Grid Grid.Column="0"
+                                                      Width="14"
+                                                      Height="14"
+                                                      Margin="0,0,5,0"
+                                                      VerticalAlignment="Center">
+                                                    <Ellipse Width="6"
+                                                             Height="6"
+                                                             Fill="{Binding StatusDotBrush}"
+                                                             HorizontalAlignment="Center"
+                                                             VerticalAlignment="Center">
+                                                        <Ellipse.Style>
+                                                            <Style TargetType="Ellipse">
+                                                                <Setter Property="Visibility" Value="Visible" />
+                                                                <Style.Triggers>
+                                                                    <DataTrigger Binding="{Binding HasSleepBadge}" Value="True">
+                                                                        <Setter Property="Visibility" Value="Collapsed" />
+                                                                    </DataTrigger>
+                                                                </Style.Triggers>
+                                                            </Style>
+                                                        </Ellipse.Style>
+                                                    </Ellipse>
+                                                    <views:MiniSleepZzzIndicator Visibility="{Binding HasSleepBadge, Converter={StaticResource BoolToVis}}"
+                                                                                 HorizontalAlignment="Center"
+                                                                                 VerticalAlignment="Center" />
+                                                </Grid>
+
+                                                <TextBlock Grid.Column="1"
+                                                           Text="{Binding DisplayTitle}"
                                                            FontSize="11.5"
                                                            FontWeight="SemiBold"
                                                            Foreground="#FF1F2430"
-                                                           MaxWidth="88"
+                                                           VerticalAlignment="Center"
                                                            TextTrimming="CharacterEllipsis" />
-                                                <Border Background="#FFEEF2FF"
-                                                        BorderBrush="#FFC7D2FE"
-                                                        BorderThickness="1"
-                                                        CornerRadius="5"
-                                                        Padding="4,0"
-                                                        Margin="4,0,0,0"
-                                                        VerticalAlignment="Center"
-                                                        Visibility="{Binding HasSleepBadge, Converter={StaticResource BoolToVis}}">
-                                                    <TextBlock Text="zzz"
-                                                               FontSize="9.5"
-                                                               FontWeight="Bold"
-                                                               Foreground="#FF4F46E5" />
-                                                </Border>
-                                            </StackPanel>
+                                            </Grid>
 
                                             <!-- 친구인 경우: 메시지 / 쓰다듬기 / 노래 따라하기 / 데려오기 -->
-                                            <StackPanel DockPanel.Dock="Right"
+                                            <StackPanel Grid.Column="1"
                                                         Orientation="Horizontal"
+                                                        VerticalAlignment="Center"
                                                         Visibility="{Binding IsFriend, Converter={StaticResource BoolToVis}}">
                                                 <Button Content="💬"
                                                         ToolTip="빠른 메시지"
@@ -471,7 +497,8 @@
                                             </StackPanel>
 
                                             <!-- 주변 미등록 피어인 경우: + 신청 -->
-                                            <Button DockPanel.Dock="Right"
+                                            <Button Grid.Column="1"
+                                                    VerticalAlignment="Center"
                                                     Content="{Binding FriendRequestButtonText}"
                                                     IsEnabled="{Binding CanSendFriendRequest}"
                                                     Padding="7,2"
@@ -480,7 +507,7 @@
                                                     Command="{Binding DataContext.QuickSendFriendRequestCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
                                                     CommandParameter="{Binding}"
                                                     Visibility="{Binding CanShowFriendRequestButton, Converter={StaticResource BoolToVis}}" />
-                                        </DockPanel>
+                                        </Grid>
                                         <DockPanel Margin="0,6,0,1"
                                                    Background="Transparent"
                                                    MouseEnter="QuickMessageEditor_MouseEnter"
