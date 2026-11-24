@@ -97,6 +97,15 @@ public sealed partial class PetWindowViewModel : ObservableObject
     public event EventHandler<double>? PetScaleChanged;
     public event EventHandler<double>? PetOpacityChanged;
     public event EventHandler<(FriendEntry Friend, PetAppearance Appearance)>? ToggleVisitFriendRequested;
+    internal event EventHandler? VisitorStateChanged;
+
+    private Func<string, bool>? _isVisitorActiveChecker;
+
+    internal void AttachVisitorChecker(Func<string, bool> checker) => _isVisitorActiveChecker = checker;
+    internal bool IsVisitorActive(string petId) => _isVisitorActiveChecker?.Invoke(petId) ?? false;
+    internal void RequestToggleVisitFriend(FriendEntry friend, PetAppearance appearance)
+        => ToggleVisitFriendRequested?.Invoke(this, (friend, appearance));
+    internal void NotifyVisitorStateChanged() => VisitorStateChanged?.Invoke(this, EventArgs.Empty);
 
     public PetProfile CurrentProfile { get; private set; } = new();
 

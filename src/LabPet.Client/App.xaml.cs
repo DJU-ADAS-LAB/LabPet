@@ -100,6 +100,7 @@ public partial class App : Application
 
         var petVm = _serviceProvider.GetRequiredService<PetWindowViewModel>();
         petVm.InitializeStartupState(startupService.IsEnabled());
+        petVm.AttachVisitorChecker(petId => _visitorWindows.ContainsKey(petId));
         petVm.OpenCustomizationRequested += OnOpenCustomizationRequested;
         petVm.OpenSoloHubRequested += OnOpenSoloHubRequested;
         petVm.OpenSocialRequested += OnOpenSocialRequested;
@@ -376,6 +377,7 @@ public partial class App : Application
         _visitorWindows[friend.PetId] = visitor;
         visitor.Show();
         visitor.ShowVisitorBubble("놀러 왔어!", 2200);
+        petVm.NotifyVisitorStateChanged();
     }
 
     private void RemoveVisitorWindow(string petId)
@@ -385,6 +387,7 @@ public partial class App : Application
             return;
         }
 
+        _serviceProvider?.GetRequiredService<PetWindowViewModel>().NotifyVisitorStateChanged();
         if (_socialWindow?.DataContext is SocialViewModel vm)
         {
             vm.RefreshLists();
@@ -539,9 +542,13 @@ public partial class App : Application
         services.AddTransient<GrowthPageView>();
         services.AddTransient<PomodoroPageView>();
         services.AddTransient<GamesPageView>();
+        services.AddTransient<FriendsPageView>();
+        services.AddTransient<AppearancePageView>();
         services.AddTransient<Func<HubPage, System.Windows.Controls.UserControl>>(sp => page => page switch
         {
             HubPage.Home => sp.GetRequiredService<HomePageView>(),
+            HubPage.Appearance => sp.GetRequiredService<AppearancePageView>(),
+            HubPage.Friends => sp.GetRequiredService<FriendsPageView>(),
             HubPage.Growth => sp.GetRequiredService<GrowthPageView>(),
             HubPage.Pomodoro => sp.GetRequiredService<PomodoroPageView>(),
             HubPage.Games => sp.GetRequiredService<GamesPageView>(),
