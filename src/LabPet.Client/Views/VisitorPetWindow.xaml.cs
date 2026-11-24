@@ -52,6 +52,7 @@ public partial class VisitorPetWindow : Window, IMessageBubbleTarget
     private bool _isActivatingComposer;
     private bool _popupLayoutQueued;
     private bool _composerNeedsPlacement;
+    private bool _composerPositionQueued;
     private bool _chatItemsChanged;
     private bool _bubbleBelowHead;
     private long _lastReceivedOrder;
@@ -124,6 +125,7 @@ public partial class VisitorPetWindow : Window, IMessageBubbleTarget
         };
         VisitorChatComposerPopup.Opened += (_, _) =>
         {
+            ApplyComposerScreenPosition();
             _popupOrder.OpenComposer(VisitorChatComposerPopup);
             QueuePopupLayout(includeComposer: true);
         };
@@ -694,8 +696,28 @@ public partial class VisitorPetWindow : Window, IMessageBubbleTarget
         var nameplate = new Rect(VisitorNameplate.PointToScreen(new Point()),
             VisitorNameplate.PointToScreen(new Point(VisitorNameplate.ActualWidth, VisitorNameplate.ActualHeight)));
         _currentComposerPhysicalBounds = VisitorBubblePlacementCalculator.CalculateComposerPlacement(
-            nameplate, popupSize, GetPopupWorkArea(dpi), dpi);
+            nameplate, popupSize, dpi);
+
+        // WPF가 화면 경계에 맞춰 팝업을 밀어낸 뒤에도, 실제 창은 이름표 아래에 둔다.
+        if (!_composerPositionQueued)
+        {
+            _composerPositionQueued = true;
+            Dispatcher.BeginInvoke(DispatcherPriority.Render, () =>
+            {
+                _composerPositionQueued = false;
+                ApplyComposerScreenPosition();
+            });
+        }
+
         return RelativePopupPlacement(_currentComposerPhysicalBounds.TopLeft);
+    }
+
+    private void ApplyComposerScreenPosition()
+    {
+        if (VisitorChatComposerPopup.IsOpen && !_currentComposerPhysicalBounds.IsEmpty)
+        {
+            Win32WindowHelper.MovePopupPhysical(VisitorChatComposerCard, _currentComposerPhysicalBounds.TopLeft);
+        }
     }
 
     private CustomPopupPlacement[] GetVisitorBubblePlacements(Size popupSize, Size targetSize, Point offset)

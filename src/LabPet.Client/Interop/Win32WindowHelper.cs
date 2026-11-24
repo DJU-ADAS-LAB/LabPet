@@ -16,6 +16,7 @@ public static partial class Win32WindowHelper
     private const int WsExNoActivate = 0x08000000;
     private const uint SwpNoSize = 0x0001;
     private const uint SwpNoMove = 0x0002;
+    private const uint SwpNoZOrder = 0x0004;
     private const uint SwpNoActivate = 0x0010;
     private const uint SwpNoOwnerZOrder = 0x0200;
     private static readonly IntPtr HwndTopMost = new(-1);
@@ -119,6 +120,23 @@ public static partial class Win32WindowHelper
         if (!SetWindowPos(popup, higher, 0, 0, 0, 0, SwpNoMove | SwpNoSize | SwpNoActivate | SwpNoOwnerZOrder))
         {
             System.Diagnostics.Debug.WriteLine($"방문 펫 팝업 표시 순서 적용 실패 ({Marshal.GetLastPInvokeError()})");
+        }
+    }
+
+    internal static void MovePopupPhysical(Visual visual, Point origin)
+    {
+        if (PresentationSource.FromVisual(visual) is not HwndSource { Handle: var handle }
+            || handle == IntPtr.Zero || !GetWindowRect(handle, out var bounds))
+        {
+            return;
+        }
+
+        var x = (int)Math.Round(origin.X);
+        var y = (int)Math.Round(origin.Y);
+        if ((bounds.Left != x || bounds.Top != y)
+            && !SetWindowPos(handle, IntPtr.Zero, x, y, 0, 0, SwpNoSize | SwpNoZOrder | SwpNoActivate | SwpNoOwnerZOrder))
+        {
+            System.Diagnostics.Debug.WriteLine($"팝업 화면 좌표 적용 실패 ({Marshal.GetLastPInvokeError()})");
         }
     }
 

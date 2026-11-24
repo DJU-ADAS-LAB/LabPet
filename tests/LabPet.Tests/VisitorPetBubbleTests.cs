@@ -368,23 +368,21 @@ public sealed class VisitorPetBubbleTests
     [InlineData(1.0)]
     [InlineData(1.5)]
     [InlineData(2.0)]
-    public void VisitorComposerPlacement_UsesFiveDipBelowAndFallsBackToTheSides(double scale)
+    public void VisitorComposerPlacement_StaysCenteredFiveDipBelowAtMonitorEdges(double scale)
     {
         var dpi = new DpiScale(scale, scale);
         var area = new Rect(-1920, -400, 1920, 1080);
         var size = new Size(234 * scale, 46 * scale);
-        var nameplate = new Rect(area.Left + 400, area.Top + 350, 90 * scale, 20 * scale);
-        var below = VisitorBubblePlacementCalculator.CalculateComposerPlacement(nameplate, size, area, dpi);
-        Assert.Equal(5 * scale, below.Top - nameplate.Bottom);
-        Assert.Equal(nameplate.Left + nameplate.Width / 2, below.Left + below.Width / 2);
+        var nameplate = new Rect(area.Left + 1, area.Bottom - 20 * scale - 1, 90 * scale, 20 * scale);
 
         foreach (var x in new[] { area.Left + 1, area.Right - nameplate.Width - 1 })
         {
-            nameplate.Location = new Point(x, area.Bottom - nameplate.Height - 1);
-            var side = VisitorBubblePlacementCalculator.CalculateComposerPlacement(nameplate, size, area, dpi);
-            Assert.True(area.Contains(side));
-            Assert.False(side.IntersectsWith(nameplate));
-            Assert.True(side.Left >= nameplate.Right || side.Right <= nameplate.Left);
+            nameplate.X = x;
+            var below = VisitorBubblePlacementCalculator.CalculateComposerPlacement(nameplate, size, dpi);
+            Assert.Equal(5 * scale, below.Top - nameplate.Bottom);
+            Assert.Equal(nameplate.Left + nameplate.Width / 2, below.Left + below.Width / 2);
+            Assert.True(below.Bottom > area.Bottom);
+            Assert.True(below.Left < area.Left || below.Right > area.Right);
         }
     }
 
@@ -1210,26 +1208,43 @@ public sealed class VisitorPetBubbleTests
                     }
                 }
 
-                // 이름표를 하단에 두었을 때 실제 전송 카드가 이름표 옆의 작업 영역에 남는다.
+                // 화면을 벗어나더라도 전송창의 실제 화면 좌표는 이름표 아래에서 유지한다.
                 var nameplate = (Border)window.FindName("VisitorNameplate");
                 Assert.True(Win32WindowHelper.TryGetWindowPhysicalBounds(window, out var current));
                 var initialNameplate = GetScreenBounds(nameplate);
-                Assert.True(Win32WindowHelper.MoveWindowPhysical(window,
-                    (int)Math.Round(current.Left + area.Right - initialNameplate.Right - 6),
-                    (int)Math.Round(current.Top + area.Bottom - initialNameplate.Bottom - 4)));
+                var cornerX = (int)Math.Round(current.Left + area.Right - initialNameplate.Right - 6);
+                var cornerY = (int)Math.Round(current.Top + area.Bottom - initialNameplate.Bottom - 8 * dpi.DpiScaleY);
+                Assert.True(Win32WindowHelper.MoveWindowPhysical(window, cornerX, cornerY));
                 await FlushUiAsync();
+                var nameplateBeforeOpening = GetScreenBounds(nameplate);
                 window.OpenChatComposer();
                 await FlushUiAsync();
-                var nameplateBounds = GetScreenBounds(nameplate);
-                var composerBounds = GetScreenBounds((Border)window.FindName("VisitorChatComposerCard"));
-                Assert.True(area.Contains(composerBounds));
-                Assert.True(composerBounds.Right < nameplateBounds.Left);
+
+                var composer = (Border)window.FindName("VisitorChatComposerCard");
+                var composerHandle = GetPopupHandle(window, "VisitorChatComposerPopup");
+                var composerBounds = GetScreenBounds(composer);
+                Assert.Equal(nameplateBeforeOpening, GetScreenBounds(nameplate));
+                AssertComposerBelowNameplate(composerBounds, nameplateBeforeOpening, dpi);
+                Assert.True(composerBounds.Bottom > area.Bottom);
+                Assert.True(composerBounds.Right > area.Right);
+
+                // Windows 경계 보정 결과가 같아도 열린 HWND는 펫의 실제 이동량을 따라간다.
+                Assert.True(Win32WindowHelper.MoveWindowPhysical(window, cornerX - 10, cornerY - 5));
+                await FlushUiAsync();
+                Assert.Equal(composerHandle, GetPopupHandle(window, "VisitorChatComposerPopup"));
+                AssertComposerBelowNameplate(GetScreenBounds(composer), GetScreenBounds(nameplate), dpi);
             }
             finally
             {
                 window.Close();
             }
         }).WaitAsync(TimeSpan.FromSeconds(15));
+    }
+
+    private static void AssertComposerBelowNameplate(Rect composer, Rect nameplate, DpiScale dpi)
+    {
+        Assert.InRange((composer.Top - nameplate.Bottom) / dpi.DpiScaleY, 4, 6);
+        Assert.InRange(Math.Abs(composer.Left + composer.Width / 2 - nameplate.Left - nameplate.Width / 2), 0, 1.5);
     }
 
     private static Point AssertBubbleHeadAlignment(VisitorPetWindow window)

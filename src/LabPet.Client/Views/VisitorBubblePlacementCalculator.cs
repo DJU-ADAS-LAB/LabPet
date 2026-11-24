@@ -16,36 +16,9 @@ internal static class VisitorBubblePlacementCalculator
     internal readonly record struct BubblePlacement(Rect Body, Point Tip, bool IsBelowHead, double Scale);
     internal readonly record struct TailPlacement(Point BaseLeft, Point Tip, Point BaseRight);
 
-    internal static Rect CalculateComposerPlacement(Rect nameplate, Size popup, Rect workArea, DpiScale dpi)
-    {
-        var gapX = ComposerGapDip * dpi.DpiScaleX;
-        var gapY = ComposerGapDip * dpi.DpiScaleY;
-        var x = ClampStart(nameplate.Left + (nameplate.Width - popup.Width) / 2,
-            workArea.Left, workArea.Right, popup.Width);
-        var below = new Rect(new Point(x, nameplate.Bottom + gapY), popup);
-        if (workArea.Contains(below))
-        {
-            return below;
-        }
-
-        var sideY = ClampStart(nameplate.Bottom - popup.Height, workArea.Top, workArea.Bottom, popup.Height);
-        var left = new Rect(new Point(nameplate.Left - gapX - popup.Width, sideY), popup);
-        var right = new Rect(new Point(nameplate.Right + gapX, sideY), popup);
-        var preferRight = workArea.Right - nameplate.Right >= nameplate.Left - workArea.Left;
-        var nearSide = preferRight ? right : left;
-        var farSide = preferRight ? left : right;
-        if (workArea.Contains(nearSide))
-        {
-            return nearSide;
-        }
-        if (workArea.Contains(farSide))
-        {
-            return farSide;
-        }
-
-        var aboveY = ClampStart(nameplate.Top - gapY - popup.Height, workArea.Top, workArea.Bottom, popup.Height);
-        return new Rect(new Point(x, aboveY), popup);
-    }
+    internal static Rect CalculateComposerPlacement(Rect nameplate, Size popup, DpiScale dpi)
+        => new(new Point(nameplate.Left + (nameplate.Width - popup.Width) / 2,
+            nameplate.Bottom + ComposerGapDip * dpi.DpiScaleY), popup);
 
     internal static BubblePlacement CalculateBubblePlacement(Point head, Size body, Rect workArea, DpiScale dpi)
     {
