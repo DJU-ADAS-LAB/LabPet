@@ -254,7 +254,7 @@ public sealed class EconomyAndMigrationTests : IDisposable
         await using var guestTransport = new LanP2pTransport(0, 0, 0);
 
         var economy = new PetEconomyService();
-        var hostSocial = new SocialCoordinatorService(hostTransport, store, new SoloProgressionService(economy));
+        await using var hostSocial = new SocialCoordinatorService(hostTransport, store, new SoloProgressionService(economy));
         var guestStore = new JsonAppDataStore(new StateMigrator(), Path.Combine(_tempDir, "guest"));
         await using var guestSocial = new SocialCoordinatorService(guestTransport, guestStore, new SoloProgressionService());
 
@@ -298,10 +298,25 @@ public sealed class EconomyAndMigrationTests : IDisposable
         hostProfile.SoloProgress.DailySocialRewardDateLocal = DateTimeOffset.Now.ToString("yyyy-MM-dd");
         hostProfile.SoloProgress.DailySocialRewardCoinsEarned = PetEconomyService.DailySocialCoinCap;
 
-        Assert.True(await hostSocial.SendBubbleMessageAsync(guestFriend, "친밀도 맥스 도달"));
-        Assert.Equal(9999, Assert.Single(hostSocial.Friends).Intimacy);
-        Assert.True(await hostSocial.SendBubbleMessageAsync(guestFriend, "맥스 이후에도 대화 가능"));
-        Assert.Equal(9999, Assert.Single(hostSocial.Friends).Intimacy);
+        foreach (var text in new[] { "친밀도 맥스 도달", "맥스 이후에도 대화 가능" })
+        {
+            // 전송 ACK 뒤에도 수신자의 저장이 진행될 수 있으므로 상호작용이 완료될 때까지 기다린다.
+            var received = new TaskCompletionSource<ReceivedFriendMessage>(TaskCreationOptions.RunContinuationsAsynchronously);
+            void OnMessageReceived(object? sender, ReceivedFriendMessage message) => received.TrySetResult(message);
+            guestSocial.FriendMessageReceived += OnMessageReceived;
+            try
+            {
+                Assert.True(await hostSocial.SendBubbleMessageAsync(guestFriend, text));
+                var message = await received.Task.WaitAsync(TimeSpan.FromSeconds(10));
+                Assert.Equal(text, message.Text);
+                Assert.Equal(9999, Assert.Single(hostSocial.Friends).Intimacy);
+            }
+            finally
+            {
+                guestSocial.FriendMessageReceived -= OnMessageReceived;
+            }
+        }
+
         Assert.Equal(0, hostProfile.SoloProgress.Coins);
 
         var maxVm = new FriendListItemViewModel(Assert.Single(hostSocial.Friends), null, false, false);
