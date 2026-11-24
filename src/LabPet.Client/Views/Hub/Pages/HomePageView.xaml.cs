@@ -9,6 +9,8 @@ public partial class HomePageView : UserControl, IHubPageLifecycle, IDisposable
     private readonly HomePageViewModel _viewModel;
     private bool _disposed;
 
+    internal bool IsRefreshTimerRunning => _viewModel.IsRefreshTimerRunning;
+
     public HomePageView(HomePageViewModel viewModel)
     {
         InitializeComponent();

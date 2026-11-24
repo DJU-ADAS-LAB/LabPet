@@ -211,6 +211,7 @@ public partial class HubWindow : Window
 
         _createdPages.Clear();
         _viewModel.Dispose();
+        DataContext = null;
     }
 
     private void ApplySavedWindowState(HubWindowState state)

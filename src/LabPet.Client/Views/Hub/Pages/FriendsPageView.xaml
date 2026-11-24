@@ -221,12 +221,12 @@
             </Border>
 
             <!-- 우측 친구 상세 · 3D 프리뷰 · 상호작용 -->
-            <Border Grid.Column="2" Style="{StaticResource HubCardStyle}" Padding="18">
+            <Border Grid.Column="2" Style="{StaticResource HubCardStyle}" Padding="16">
                 <ScrollViewer VerticalScrollBarVisibility="Auto" CanContentScroll="False">
                     <StackPanel>
                         <Border CornerRadius="14"
-                                Height="186"
-                                Margin="0,0,0,14"
+                                Height="164"
+                                Margin="0,0,0,12"
                                 BorderBrush="#FF363E59"
                                 BorderThickness="1"
                                 ClipToBounds="True"
@@ -246,10 +246,10 @@
                                 <Viewport3D x:Name="FriendPreviewViewport"
                                             Visibility="{Binding HasSelectedFriend, Converter={StaticResource HubBoolToVis}}">
                                     <Viewport3D.Camera>
-                                        <PerspectiveCamera Position="0,0.38,5.55"
-                                                           LookDirection="0,-0.07,-1"
+                                        <PerspectiveCamera Position="0,0.34,6.45"
+                                                           LookDirection="0,-0.055,-1"
                                                            UpDirection="0,1,0"
-                                                           FieldOfView="36" />
+                                                           FieldOfView="38" />
                                     </Viewport3D.Camera>
                                     <ModelVisual3D x:Name="FriendPreviewLights" />
                                     <ModelVisual3D x:Name="FriendPreviewPet" />
@@ -290,7 +290,7 @@
                         </Border>
 
                         <TextBlock Text="말풍선 메시지 (최대 100자)" FontWeight="Bold" FontSize="13" Foreground="{StaticResource HubTextPrimaryBrush}" />
-                        <DockPanel Margin="0,8,0,16">
+                        <DockPanel Margin="0,6,0,12">
                             <Button DockPanel.Dock="Right"
                                     Content="전송"
                                     Style="{StaticResource GamePrimaryButtonStyle}"
@@ -299,28 +299,28 @@
                                     Margin="8,0,0,0" />
                             <TextBox Text="{Binding MessageText, UpdateSourceTrigger=PropertyChanged}"
                                      MaxLength="100"
-                                     Height="38" />
+                                     Height="36" />
                         </DockPanel>
 
-                        <TextBlock Text="퀵 이모지 · 쓰다듬기" FontWeight="Bold" FontSize="13" Foreground="{StaticResource HubTextPrimaryBrush}" Margin="0,0,0,8" />
-                        <WrapPanel Margin="0,0,0,16">
-                            <Button Content="♥" Command="{Binding SendQuickReactionCommand}" CommandParameter="♥" Width="48" Height="36" Margin="0,0,6,6" />
-                            <Button Content="👏" Command="{Binding SendQuickReactionCommand}" CommandParameter="👏" Width="48" Height="36" Margin="0,0,6,6" />
-                            <Button Content="🎵" Command="{Binding SendQuickReactionCommand}" CommandParameter="🎵" Width="48" Height="36" Margin="0,0,6,6" />
-                            <Button Content="🔥" Command="{Binding SendQuickReactionCommand}" CommandParameter="🔥" Width="48" Height="36" Margin="0,0,10,6" />
-                            <Button Content="쓰다듬기 보내기" Command="{Binding SendPetInteractionCommand}" Height="36" />
+                        <TextBlock Text="퀵 이모지 · 쓰다듬기" FontWeight="Bold" FontSize="13" Foreground="{StaticResource HubTextPrimaryBrush}" Margin="0,0,0,6" />
+                        <WrapPanel Margin="0,0,0,10">
+                            <Button Content="♥" Command="{Binding SendQuickReactionCommand}" CommandParameter="♥" Width="46" Height="34" Margin="0,0,6,4" />
+                            <Button Content="👏" Command="{Binding SendQuickReactionCommand}" CommandParameter="👏" Width="46" Height="34" Margin="0,0,6,4" />
+                            <Button Content="🎵" Command="{Binding SendQuickReactionCommand}" CommandParameter="🎵" Width="46" Height="34" Margin="0,0,6,4" />
+                            <Button Content="🔥" Command="{Binding SendQuickReactionCommand}" CommandParameter="🔥" Width="46" Height="34" Margin="0,0,10,4" />
+                            <Button Content="쓰다듬기 보내기" Command="{Binding SendPetInteractionCommand}" Height="34" />
                         </WrapPanel>
 
-                        <Separator Margin="0,2,0,14" />
+                        <Separator Margin="0,2,0,10" />
 
-                        <TextBlock Text="노래 따라하기" FontWeight="Bold" FontSize="13" Foreground="{StaticResource HubTextPrimaryBrush}" Margin="0,0,0,8" />
+                        <TextBlock Text="노래 따라하기" FontWeight="Bold" FontSize="13" Foreground="{StaticResource HubTextPrimaryBrush}" Margin="0,0,0,6" />
                         <Button Content="{Binding SelectedFriend.MusicFollowButtonText, FallbackValue='🎵  음악 재생 중이 아님'}"
                                 Style="{StaticResource MusicFollowActionButtonStyle}"
                                 Command="{Binding ToggleMusicFollowCommand}"
                                 CommandParameter="{Binding SelectedFriend}"
                                 IsEnabled="{Binding SelectedFriend.CanFollowMusic, FallbackValue=False}"
-                                Height="40"
-                                Margin="0,0,0,12" />
+                                Height="38"
+                                Margin="0,0,0,10" />
                         <CheckBox Style="{StaticResource HubToggleSwitchStyle}"
                                   Content="내 PC에서 음악이 재생 중이면 로컬 음악 우선 반응"
                                   IsChecked="{Binding PreferLocalMusicWhenActive}" />

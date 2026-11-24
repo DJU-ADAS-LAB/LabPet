@@ -26,10 +26,7 @@ public partial class App : Application
     private SocialCoordinatorService? _social;
     private FriendMessageRouter? _messageRouter;
     private PetWindow? _petWindow;
-    private SoloHubWindow? _soloHubWindow;
     private GameInviteCardWindow? _inviteCardWindow;
-    private SocialWindow? _socialWindow;
-    private EnvironmentGuideWindow? _guideWindow;
     private readonly Dictionary<string, VisitorPetWindow> _visitorWindows = new(StringComparer.OrdinalIgnoreCase);
     private bool _isRepositioningVisitorBubbles;
 
@@ -101,10 +98,7 @@ public partial class App : Application
         var petVm = _serviceProvider.GetRequiredService<PetWindowViewModel>();
         petVm.InitializeStartupState(startupService.IsEnabled());
         petVm.AttachVisitorChecker(petId => _visitorWindows.ContainsKey(petId));
-        petVm.OpenCustomizationRequested += OnOpenCustomizationRequested;
-        petVm.OpenSoloHubRequested += OnOpenSoloHubRequested;
-        petVm.OpenSocialRequested += OnOpenSocialRequested;
-        petVm.OpenEnvironmentGuideRequested += OnOpenEnvironmentGuideRequested;
+        petVm.HubNavigationRequested += (_, request) => _ = NavigateHubAsync(request);
         petVm.LaunchChristmasTreeRequested += (_, _) =>
         {
             var (ok, message) = christmasTreeService.Launch(petVm.CurrentProfile.PetName);
@@ -121,15 +115,14 @@ public partial class App : Application
                 petVm.CurrentProfile.AutoStartEnabled = enabled;
                 await store.SaveProfileAsync(petVm.CurrentProfile);
             }
+            else
+            {
+                petVm.InitializeStartupState(startupService.IsEnabled());
+            }
 
             petVm.ShowBubble(ok
                 ? (enabled ? "Windows 시작 시 자동 실행 등록됨" : "Windows 자동 실행 해제됨")
                 : "시작 프로그램 설정을 변경하지 못했습니다.", 2400);
-        };
-        petVm.CheckUpdatesRequested += async (_, _) =>
-        {
-            petVm.ShowBubble("새 버전을 확인 중입니다...", 2000);
-            await updateService.CheckAndDownloadUpdatesAsync(isManualCheck: true);
         };
         petVm.ApplyUpdateRestartRequested += (_, _) => updateService.ApplyUpdatesAndRestart();
 
@@ -145,6 +138,8 @@ public partial class App : Application
         // 코인 게임 허브(초대 카드 · 말풍선 알림 · 수락 시 해당 게임 화면 직행)
         var gamesVm = _serviceProvider.GetRequiredService<CoinGamesViewModel>();
         gamesVm.BindProfile(profile);
+        var hubNavigation = _serviceProvider.GetRequiredService<IHubNavigationService>();
+        hubNavigation.HubVisibilityChanged += (_, _) => Dispatcher.BeginInvoke(() => SyncInviteCardWindow(gamesVm));
         var animator = _serviceProvider.GetRequiredService<PetAnimationController>();
         gamesVm.IncomingInviteChanged += (_, _) => Dispatcher.BeginInvoke(() => SyncInviteCardWindow(gamesVm));
         gamesVm.GameNotification += (_, msg) => Dispatcher.BeginInvoke(() => petVm.ShowBubble(msg, 3400));
@@ -153,7 +148,11 @@ public partial class App : Application
             if (isHappy) animator.TriggerPetReaction();
             else animator.TriggerDizzyReaction();
         });
-        gamesVm.OpenGameScreenRequested += (_, screen) => Dispatcher.BeginInvoke(() => OpenSoloHub(selectGamesTab: true, targetGameScreen: screen));
+        gamesVm.OpenGameScreenRequested += (_, screen) => Dispatcher.BeginInvoke(() =>
+            _ = NavigateHubAsync(new NavigationRequest(
+                HubPage.Games,
+                TargetGameScreen: screen,
+                BypassUnsavedPrompt: true)));
         gamesVm.ProfileChanged += (_, updated) => Dispatcher.BeginInvoke(() => petVm.ApplyProfile(updated));
 
         _petWindow = _serviceProvider.GetRequiredService<PetWindow>();
@@ -178,89 +177,20 @@ public partial class App : Application
         Dispatcher.BeginInvoke(() => _messageRouter?.Route(message));
     }
 
-    private void OnOpenCustomizationRequested(object? sender, EventArgs e)
+    private Task<bool> NavigateHubAsync(NavigationRequest request)
     {
         if (_serviceProvider is null || _petWindow is null)
         {
-            return;
+            return Task.FromResult(false);
         }
 
-        var petVm = _serviceProvider.GetRequiredService<PetWindowViewModel>();
-        var onboardingVm = _serviceProvider.GetRequiredService<OnboardingViewModel>();
-        onboardingVm.LoadFromProfile(petVm.CurrentProfile, isEditMode: true);
-
-        var editWindow = new OnboardingWindow(
-            onboardingVm,
-            _serviceProvider.GetRequiredService<IPetMeshFactory>())
+        if (!Dispatcher.CheckAccess())
         {
-            Owner = _petWindow
-        };
-
-        if (editWindow.ShowDialog() == true && editWindow.SavedProfile is not null)
-        {
-            petVm.ApplyProfile(editWindow.SavedProfile);
-            petVm.ShowBubble("새 외형이 적용됐어요!", 2200);
-        }
-    }
-
-    private void OnOpenSoloHubRequested(object? sender, EventArgs e)
-        => OpenSoloHub(selectGamesTab: false);
-
-    private void OpenSoloHub(bool selectGamesTab, GameScreen? targetGameScreen = null)
-    {
-        if (_serviceProvider is null || _petWindow is null)
-        {
-            return;
+            return Dispatcher.InvokeAsync(() => NavigateHubAsync(request)).Task.Unwrap();
         }
 
-        if (_soloHubWindow is not null)
-        {
-            if (_soloHubWindow.WindowState == WindowState.Minimized)
-            {
-                _soloHubWindow.WindowState = WindowState.Normal;
-            }
-
-            if (selectGamesTab && _soloHubWindow.DataContext is SoloHubViewModel existingVm)
-            {
-                existingVm.SelectGamesTab();
-                if (targetGameScreen is { } target)
-                {
-                    existingVm.Games.ActiveGameScreen = target;
-                }
-            }
-
-            CloseInviteCardWindow();
-            _soloHubWindow.Activate();
-            return;
-        }
-
-        var petVm = _serviceProvider.GetRequiredService<PetWindowViewModel>();
-        var hubVm = _serviceProvider.GetRequiredService<SoloHubViewModel>();
-        hubVm.BindProfile(petVm.CurrentProfile);
-        if (selectGamesTab)
-        {
-            hubVm.SelectGamesTab();
-            if (targetGameScreen is { } target)
-            {
-                hubVm.Games.ActiveGameScreen = target;
-            }
-        }
-
-        hubVm.ProfileChanged += (_, updated) => petVm.ApplyProfile(updated);
-
-        _soloHubWindow = new SoloHubWindow(hubVm)
-        {
-            Owner = _petWindow
-        };
-        _soloHubWindow.StateChanged += (_, _) => SyncInviteCardWindow(hubVm.Games);
-        _soloHubWindow.Closed += (_, _) =>
-        {
-            _soloHubWindow = null;
-            SyncInviteCardWindow(hubVm.Games);
-        };
-
-        CloseInviteCardWindow();
-        _soloHubWindow.Show();
+        var navigation = _serviceProvider.GetRequiredService<IHubNavigationService>();
+        return navigation.NavigateAsync(request);
     }
 
     private void SyncInviteCardWindow(CoinGamesViewModel gamesVm)
@@ -270,8 +200,8 @@ public partial class App : Application
             return;
         }
 
-        var soloHubVisible = _soloHubWindow is { IsVisible: true, WindowState: not WindowState.Minimized };
-        if (!gamesVm.HasIncomingInvite || soloHubVisible)
+        var hubVisible = _serviceProvider?.GetService<IHubNavigationService>()?.IsHubVisibleAndNotMinimized == true;
+        if (!gamesVm.HasIncomingInvite || hubVisible)
         {
             CloseInviteCardWindow();
             return;
@@ -315,33 +245,6 @@ public partial class App : Application
             _inviteCardWindow = null;
             card.Close();
         }
-    }
-
-    private void OnOpenSocialRequested(object? sender, EventArgs e)
-    {
-        if (_serviceProvider is null || _petWindow is null)
-        {
-            return;
-        }
-
-        if (_socialWindow is not null)
-        {
-            _socialWindow.Activate();
-            return;
-        }
-
-        var socialVm = _serviceProvider.GetRequiredService<SocialViewModel>();
-        socialVm.AttachVisitorStateChecker(petId => _visitorWindows.ContainsKey(petId));
-        socialVm.ToggleVisitDesktopRequested += (_, args) => ToggleVisitorPetWindow(args.Friend, args.Appearance);
-
-        _socialWindow = new SocialWindow(
-            socialVm,
-            _serviceProvider.GetRequiredService<IPetMeshFactory>())
-        {
-            Owner = _petWindow
-        };
-        _socialWindow.Closed += (_, _) => _socialWindow = null;
-        _socialWindow.Show();
     }
 
     private void ToggleVisitorPetWindow(LabPet.Shared.Models.FriendEntry friend, LabPet.Shared.Models.PetAppearance appearance)
@@ -388,11 +291,6 @@ public partial class App : Application
         }
 
         _serviceProvider?.GetRequiredService<PetWindowViewModel>().NotifyVisitorStateChanged();
-        if (_socialWindow?.DataContext is SocialViewModel vm)
-        {
-            vm.RefreshLists();
-        }
-
         RepositionOtherVisitorBubbles();
     }
 
@@ -447,27 +345,6 @@ public partial class App : Application
         }
     }
 
-    private void OnOpenEnvironmentGuideRequested(object? sender, EventArgs e)
-    {
-        if (_serviceProvider is null || _petWindow is null)
-        {
-            return;
-        }
-
-        if (_guideWindow is not null)
-        {
-            _guideWindow.Activate();
-            return;
-        }
-
-        _guideWindow = new EnvironmentGuideWindow(_serviceProvider.GetRequiredService<IAppDataStore>())
-        {
-            Owner = _petWindow
-        };
-        _guideWindow.Closed += (_, _) => _guideWindow = null;
-        _guideWindow.Show();
-    }
-
     protected override void OnExit(ExitEventArgs e)
     {
         if (_social is not null)
@@ -480,7 +357,6 @@ public partial class App : Application
 
         CloseInviteCardWindow();
         _serviceProvider?.GetService<IHubNavigationService>()?.CloseIfOpen();
-        _soloHubWindow?.Close();
 
         foreach (var visitor in _visitorWindows.Values.ToList())
         {

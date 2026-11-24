@@ -261,7 +261,7 @@
                             </ListBox.ItemTemplate>
                         </ListBox>
 
-                        <DockPanel Margin="0,12,0,4">
+                        <DockPanel LastChildFill="False" Margin="0,12,0,4">
                             <TextBlock Text="6. 바탕화면 펫 크기" Style="{StaticResource EditorSectionTitleStyle}" Margin="0" />
                             <TextBlock Text="{Binding PetScalePercentText}"
                                        DockPanel.Dock="Right"
@@ -278,7 +278,7 @@
                                 Margin="0,2,0,10" />
 
                         <StackPanel Visibility="{Binding IsEditMode, Converter={StaticResource HubBoolToVis}}">
-                            <DockPanel Margin="0,4,0,4">
+                            <DockPanel LastChildFill="False" Margin="0,4,0,4">
                                 <TextBlock Text="7. 바탕화면 펫 투명도" Style="{StaticResource EditorSectionTitleStyle}" Margin="0" />
                                 <TextBlock Text="{Binding PetOpacityPercentText}"
                                            DockPanel.Dock="Right"

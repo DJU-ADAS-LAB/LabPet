@@ -7,7 +7,7 @@
             <!-- 레벨 · 경험치 · 활동량 카드 -->
             <Border Style="{StaticResource HubCardStyle}" Margin="0,0,0,16">
                 <StackPanel>
-                    <DockPanel Margin="0,0,0,8">
+                    <DockPanel LastChildFill="False" Margin="0,0,0,8">
                         <TextBlock Text="레벨 · 경험치 (XP)" Style="{StaticResource HubSectionTitleStyle}" />
                         <TextBlock DockPanel.Dock="Right" FontSize="12.5" FontWeight="SemiBold" Foreground="{StaticResource HubTextSecondaryBrush}">
                             <Run Text="Lv." /><Run Text="{Binding Level, Mode=OneWay}" FontWeight="Bold" Foreground="{StaticResource HubAccentTextBrush}" />
@@ -106,7 +106,7 @@
             <!-- 실시간 시스템 오디오 반응 -->
             <Border Style="{StaticResource HubCardStyle}">
                 <StackPanel>
-                    <DockPanel Margin="0,0,0,6">
+                    <DockPanel LastChildFill="False" Margin="0,0,0,6">
                         <TextBlock Text="시스템 오디오 반응 (WASAPI 루프백)" Style="{StaticResource HubSectionTitleStyle}" />
                         <TextBlock Text="{Binding AudioStatusText}" DockPanel.Dock="Right" FontSize="12.5" FontWeight="Bold" Foreground="{StaticResource HubAccentTextBrush}" />
                     </DockPanel>

@@ -96,6 +96,8 @@ public partial class PetWindow : Window, IMessageBubbleTarget
         DataContext = _viewModel;
 
         TrayIcon.Icon = CreateTrayIcon();
+        TrayIcon.ContextMenu = PetContextMenuFactory.Create(_viewModel, includeStartupAutoRun: true);
+        PetViewport.ContextMenu = PetContextMenuFactory.Create(_viewModel, includeStartupAutoRun: false);
         LightsVisual.Content = _meshFactory.CreateStudioLights();
         FriendOverlayPopup.CustomPopupPlacementCallback = (popupSize, targetSize, _) =>
             GetFriendOverlayPlacements(popupSize, targetSize, VisualTreeHelper.GetDpi(PetLayout),

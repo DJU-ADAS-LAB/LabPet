@@ -185,9 +185,16 @@ public sealed partial class AboutPageViewModel : ObservableObject, IDisposable
     private void SyncUpdateState()
     {
         var rawVersion = (_petVm.CurrentVersionText ?? string.Empty).Trim();
-        CurrentVersionDisplay = rawVersion.StartsWith("v", StringComparison.OrdinalIgnoreCase)
-            ? rawVersion
-            : $"v{rawVersion}";
+        if (rawVersion.StartsWith("현재 버전 ", StringComparison.Ordinal))
+        {
+            rawVersion = rawVersion["현재 버전 ".Length..].Trim();
+        }
+
+        CurrentVersionDisplay = string.IsNullOrEmpty(rawVersion)
+            ? "v0.0.0"
+            : rawVersion.StartsWith("v", StringComparison.OrdinalIgnoreCase)
+                ? rawVersion
+                : $"v{rawVersion}";
 
         IsUpdateReady = _updateService.IsUpdateReady;
         if (!string.IsNullOrWhiteSpace(_updateService.PendingVersion))

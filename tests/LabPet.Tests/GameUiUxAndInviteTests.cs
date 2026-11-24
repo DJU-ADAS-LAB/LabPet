@@ -9,6 +9,7 @@ using System.Windows.Threading;
 using LabPet.Client.Audio;
 using LabPet.Client.Games;
 using LabPet.Client.Interop;
+using LabPet.Client.Navigation;
 using LabPet.Client.Network;
 using LabPet.Client.Rendering;
 using LabPet.Client.Social;
@@ -17,6 +18,8 @@ using LabPet.Client.Storage;
 using LabPet.Client.ViewModels;
 using LabPet.Client.Views;
 using LabPet.Client.Views.Games;
+using LabPet.Client.Views.Hub;
+using LabPet.Client.Views.Hub.Pages;
 using LabPet.Shared.Models;
 using LabPet.Shared.Protocol;
 using LabPet.Shared.Transport;
@@ -70,19 +73,21 @@ internal static class WpfTestHost
 
     private static void EnsureThemeResources(Application app)
     {
-        if (app.Resources.MergedDictionaries.Count >= 2)
-        {
-            return;
-        }
+        string[] requiredUris =
+        [
+            "pack://application:,,,/LabPet.Client;component/Themes/LabPetTheme.xaml",
+            "pack://application:,,,/LabPet.Client;component/Themes/GameUiResources.xaml",
+            "pack://application:,,,/LabPet.Client;component/Themes/HubDesignSystem.xaml"
+        ];
 
-        app.Resources.MergedDictionaries.Add(new ResourceDictionary
+        foreach (var uriString in requiredUris)
         {
-            Source = new Uri("pack://application:,,,/LabPet.Client;component/Themes/LabPetTheme.xaml", UriKind.Absolute)
-        });
-        app.Resources.MergedDictionaries.Add(new ResourceDictionary
-        {
-            Source = new Uri("pack://application:,,,/LabPet.Client;component/Themes/GameUiResources.xaml", UriKind.Absolute)
-        });
+            var uri = new Uri(uriString, UriKind.Absolute);
+            if (!app.Resources.MergedDictionaries.Any(d => d.Source == uri))
+            {
+                app.Resources.MergedDictionaries.Add(new ResourceDictionary { Source = uri });
+            }
+        }
     }
 
     public static void Run(Action action)
@@ -640,12 +645,15 @@ public sealed class GameUiUxAndInviteTests : IAsyncLifetime
             Assert.Contains("몽실-재접속", Assert.Single(hostGames.OnlineFriends).DisplayName);
             Assert.Contains("몽실-재접속", Assert.Single(hostGames.LadderInviteCandidates).DisplayName);
 
-            // SoloHubWindow 생성 -> 탭/4종 게임 화면 반복 전환 & 리사이즈 -> 닫기 및 약참조 회수 검증
-            WeakReference windowRef = OpenExerciseAndCloseSoloHub(
+            // HubWindow 생성 -> 탭/4종 게임 화면 반복 전환 & 리사이즈 -> 닫기 및 약참조 회수 검증
+            WeakReference windowRef = OpenExerciseAndCloseHub(
+                _hostStore,
+                _hostSocial,
                 _hostProfile,
                 new PomodoroTimerService(),
                 new TestAudioAnalyzer(),
-                hostGames);
+                hostGames,
+                portraitRenderer);
 
             await WpfTestHost.FlushAsync();
             for (var i = 0; i < 6 && windowRef.IsAlive; i++)
@@ -660,25 +668,49 @@ public sealed class GameUiUxAndInviteTests : IAsyncLifetime
         });
 
         [MethodImpl(MethodImplOptions.NoInlining)]
-        static WeakReference OpenExerciseAndCloseSoloHub(
+        static WeakReference OpenExerciseAndCloseHub(
+            IAppDataStore store,
+            SocialCoordinatorService social,
             PetProfile profile,
             PomodoroTimerService pomodoroSvc,
             IAudioAnalyzer analyzer,
-            CoinGamesViewModel gamesVm)
+            CoinGamesViewModel gamesVm,
+            PetPortraitRenderer portraitRenderer)
         {
-            var hubVm = new SoloHubViewModel(pomodoroSvc, analyzer, gamesVm);
-            hubVm.BindProfile(profile);
-            var win = new SoloHubWindow(hubVm)
+            var petVm = new PetWindowViewModel(store, social);
+            petVm.ApplyProfile(profile);
+            var soloVm = new SoloHubViewModel(pomodoroSvc, analyzer, gamesVm);
+            soloVm.BindProfile(profile);
+
+            HubWindow? createdWindow = null;
+            HubNavigationService? navigation = null;
+            navigation = new HubNavigationService(() =>
             {
-                Left = -20000,
-                Top = -20000
-            };
-            win.Show();
-            win.Width = 780;
+                var shellVm = new HubViewModel(navigation!, petVm, gamesVm, portraitRenderer);
+                createdWindow = new HubWindow(
+                    shellVm,
+                    page => page switch
+                    {
+                        HubPage.Growth => new GrowthPageView(soloVm, petVm),
+                        HubPage.Pomodoro => new PomodoroPageView(soloVm, pomodoroSvc, petVm),
+                        HubPage.Games => new GamesPageView(gamesVm, petVm),
+                        _ => throw new ArgumentOutOfRangeException(nameof(page))
+                    },
+                    new HubWindowStateStore(store.DataDirectory))
+                {
+                    Left = -20000,
+                    Top = -20000
+                };
+                return createdWindow;
+            });
+
+            _ = navigation.NavigateAsync(new NavigationRequest(HubPage.Growth)).GetAwaiter().GetResult();
+            var win = createdWindow!;
+            win.Width = 840;
             win.Height = 580;
             win.UpdateLayout();
 
-            hubVm.SelectSectionCommand.Execute(SoloHubSection.Games);
+            _ = navigation.NavigateAsync(new NavigationRequest(HubPage.Games)).GetAwaiter().GetResult();
             for (var round = 0; round < 3; round++)
             {
                 foreach (var screen in new[] { GameScreen.HiLow, GameScreen.Rps, GameScreen.Typing, GameScreen.Ladder, GameScreen.Dashboard })
@@ -688,60 +720,82 @@ public sealed class GameUiUxAndInviteTests : IAsyncLifetime
                 }
             }
 
-            win.Width = 1040;
+            win.Width = 1080;
             win.Height = 720;
             win.UpdateLayout();
+            var shellRef = new WeakReference(win.ShellViewModel);
             win.Close();
-            return new WeakReference(hubVm);
+            return shellRef;
         }
     }
 
     [Fact]
-    public async Task SoloHubWindow_SectionSwitching_HidesGamesHubWhenGrowthOrPomodoroSelected()
+    public async Task HubWindow_PageSwitching_HidesGamesHubWhenGrowthOrPomodoroSelected()
     {
         await WpfTestHost.RunAsync(async () =>
         {
+            var petVm = new PetWindowViewModel(_hostStore, _hostSocial);
+            petVm.ApplyProfile(_hostProfile);
             using var gamesVm = new CoinGamesViewModel(_hostStore, new SoloProgressionService(), _hostSocial);
-            using var hubVm = new SoloHubViewModel(new PomodoroTimerService(), new TestAudioAnalyzer(), gamesVm);
-            hubVm.BindProfile(_hostProfile);
+            using var soloVm = new SoloHubViewModel(new PomodoroTimerService(), new TestAudioAnalyzer(), gamesVm);
+            soloVm.BindProfile(_hostProfile);
+            var portraitRenderer = new PetPortraitRenderer(new ProceduralPetMeshFactory());
 
-            var win = new SoloHubWindow(hubVm)
+            GamesPageView? gamesPage = null;
+            HubWindow? win = null;
+            HubNavigationService? navigation = null;
+            navigation = new HubNavigationService(() =>
             {
-                Left = -20000,
-                Top = -20000
-            };
+                var shellVm = new HubViewModel(navigation!, petVm, gamesVm, portraitRenderer);
+                win = new HubWindow(
+                    shellVm,
+                    page => page switch
+                    {
+                        HubPage.Growth => new GrowthPageView(soloVm, petVm),
+                        HubPage.Pomodoro => new PomodoroPageView(soloVm, new PomodoroTimerService(), petVm),
+                        HubPage.Games => gamesPage ??= new GamesPageView(gamesVm, petVm),
+                        _ => throw new ArgumentOutOfRangeException(nameof(page))
+                    },
+                    new HubWindowStateStore(_hostStore.DataDirectory))
+                {
+                    Left = -20000,
+                    Top = -20000
+                };
+                return win;
+            });
+
             try
             {
-                win.Show();
+                await navigation.NavigateAsync(new NavigationRequest(HubPage.Growth));
+                win!.Left = -20000;
+                win.Top = -20000;
                 win.UpdateLayout();
                 await WpfTestHost.FlushAsync();
 
-                Assert.Equal(SoloHubSection.GrowthAudio, hubVm.ActiveSection);
-                Assert.Equal(Visibility.Collapsed, win.GamesSectionContainer.Visibility);
-                Assert.False(win.GamesHubControl.IsVisible);
+                Assert.Equal(HubPage.Growth, navigation.CurrentPage);
+                Assert.Null(gamesPage);
 
-                hubVm.SelectSectionCommand.Execute(SoloHubSection.Pomodoro);
+                await navigation.NavigateAsync(new NavigationRequest(HubPage.Pomodoro));
                 win.UpdateLayout();
                 await WpfTestHost.FlushAsync();
-                Assert.Equal(Visibility.Collapsed, win.GamesSectionContainer.Visibility);
-                Assert.False(win.GamesHubControl.IsVisible);
+                Assert.Equal(HubPage.Pomodoro, navigation.CurrentPage);
+                Assert.Null(gamesPage);
 
-                hubVm.SelectSectionCommand.Execute(SoloHubSection.Games);
-                gamesVm.ActiveGameScreen = GameScreen.HiLow;
+                await navigation.NavigateAsync(new NavigationRequest(HubPage.Games, TargetGameScreen: GameScreen.HiLow));
                 win.UpdateLayout();
                 await WpfTestHost.FlushAsync();
-                Assert.Equal(Visibility.Visible, win.GamesSectionContainer.Visibility);
-                Assert.True(win.GamesHubControl.IsVisible);
+                Assert.NotNull(gamesPage);
+                Assert.True(gamesPage!.GamesHub.IsVisible);
 
-                hubVm.SelectSectionCommand.Execute(SoloHubSection.GrowthAudio);
+                await navigation.NavigateAsync(new NavigationRequest(HubPage.Growth));
                 win.UpdateLayout();
                 await WpfTestHost.FlushAsync();
-                Assert.Equal(Visibility.Collapsed, win.GamesSectionContainer.Visibility);
-                Assert.False(win.GamesHubControl.IsVisible);
+                Assert.False(gamesPage.GamesHub.IsVisible);
             }
             finally
             {
-                win.Close();
+                win?.Close();
+                portraitRenderer.ClearCache();
             }
         });
     }

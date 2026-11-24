@@ -54,7 +54,7 @@
                 <StackPanel>
                     <TextBlock Text="표시 · 상호작용" Style="{StaticResource HubSectionTitleStyle}" Margin="0,0,0,14" />
 
-                    <DockPanel Margin="0,0,0,6">
+                    <DockPanel LastChildFill="False" Margin="0,0,0,6">
                         <TextBlock Text="바탕화면 펫 크기" FontSize="13.5" FontWeight="SemiBold" Foreground="{StaticResource HubTextPrimaryBrush}" />
                         <TextBlock DockPanel.Dock="Right"
                                    Text="{Binding PetScalePercentText}"
@@ -101,7 +101,7 @@
 
                     <Border Height="1" Background="{StaticResource HubHairlineBrush}" Margin="0,2,0,14" />
 
-                    <DockPanel Margin="0,0,0,6">
+                    <DockPanel LastChildFill="False" Margin="0,0,0,6">
                         <TextBlock Text="바탕화면 펫 투명도" FontSize="13.5" FontWeight="SemiBold" Foreground="{StaticResource HubTextPrimaryBrush}" />
                         <TextBlock DockPanel.Dock="Right"
                                    Text="{Binding PetOpacityPercentText}"

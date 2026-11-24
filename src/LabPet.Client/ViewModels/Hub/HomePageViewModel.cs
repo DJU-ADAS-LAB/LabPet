@@ -58,6 +58,7 @@ public sealed partial class HomePageViewModel : ObservableObject, IDisposable
     public string LevelText => $"Lv.{Level}";
     public string XpProgressText => $"{Xp} / {RequiredXp} XP";
     public string CoinsText => $"{Coins} 코인";
+    internal bool IsRefreshTimerRunning => _refreshTimer.IsEnabled;
 
     public HomePageViewModel(
         IHubNavigationService navigation,

@@ -163,51 +163,7 @@
         <tb:TaskbarIcon x:Name="TrayIcon"
                         ToolTipText="{Binding TrayTooltip}"
                         NoLeftClickDelay="True"
-                        TrayLeftMouseDown="TrayIcon_TrayLeftMouseDown">
-            <tb:TaskbarIcon.ContextMenu>
-                <ContextMenu>
-                    <MenuItem Header="{Binding UpdateReadyMenuHeader}"
-                              Command="{Binding ApplyUpdateAndRestartCommand}"
-                              FontWeight="Bold"
-                              Foreground="#FFFF5D8F"
-                              Visibility="{Binding IsUpdateReady, Converter={StaticResource BoolToVis}}" />
-                    <MenuItem Header="💬  친구" Command="{Binding OpenSocialCommand}" />
-                    <MenuItem Header="✨  성장 · 뽀모도로 · 코인 게임" Command="{Binding OpenSoloHubCommand}" />
-                    <MenuItem Header="🎨  외형 · 이름 변경" Command="{Binding OpenCustomizationCommand}" />
-                    <MenuItem Header="🔍  크기 조절">
-                        <MenuItem Header="아주 작게 (50%)" Command="{Binding SetPetScaleCommand}" CommandParameter="0.5" />
-                        <MenuItem Header="작게 (75%)" Command="{Binding SetPetScaleCommand}" CommandParameter="0.75" />
-                        <MenuItem Header="보통 (100%)" Command="{Binding SetPetScaleCommand}" CommandParameter="1.0" />
-                        <MenuItem Header="크게 (125%)" Command="{Binding SetPetScaleCommand}" CommandParameter="1.25" />
-                        <MenuItem Header="아주 크게 (150%)" Command="{Binding SetPetScaleCommand}" CommandParameter="1.5" />
-                    </MenuItem>
-                    <MenuItem Header="🎄  크리스마스 트리" Command="{Binding LaunchChristmasTreeCommand}" />
-                    <Separator />
-                    <MenuItem Header="🎯  클릭 투과 집중 모드"
-                              IsCheckable="True"
-                              IsChecked="{Binding IsClickThroughEnabled, Mode=TwoWay}" />
-                    <MenuItem Header="Windows 시작 시 자동 실행"
-                              IsCheckable="True"
-                              IsChecked="{Binding IsStartupAutoRunEnabled, Mode=TwoWay}" />
-                    <MenuItem Header="📍  기본 위치로 복귀" Command="{Binding ResetPositionCommand}" />
-                    <Separator />
-                    <MenuItem Command="{Binding CheckUpdatesCommand}">
-                        <MenuItem.Header>
-                            <StackPanel>
-                                <TextBlock Text="🔄  업데이트 확인" />
-                                <TextBlock Text="{Binding CurrentVersionText}"
-                                           FontSize="10"
-                                           Foreground="#FF9CA3AF"
-                                           Margin="20,1,0,0" />
-                            </StackPanel>
-                        </MenuItem.Header>
-                    </MenuItem>
-                    <MenuItem Header="🛡️  방화벽 · 네트워크 안내" Command="{Binding OpenEnvironmentGuideCommand}" />
-                    <Separator />
-                    <MenuItem Header="⏻  LabPet 종료" Command="{Binding ExitApplicationCommand}" />
-                </ContextMenu>
-            </tb:TaskbarIcon.ContextMenu>
-        </tb:TaskbarIcon>
+                        TrayLeftMouseDown="TrayIcon_TrayLeftMouseDown" />
 
         <!-- 펫 상단 꼬리 말풍선 전용 Popup (창 크기를 바꾸지 않아 메시지 생성/소멸 시 캐릭터가 튕기지 않음) -->
         <Popup x:Name="SpeechBubblePopup"
@@ -392,46 +348,6 @@
             <Viewport3D.CacheMode>
                 <BitmapCache RenderAtScale="1.5" />
             </Viewport3D.CacheMode>
-            <Viewport3D.ContextMenu>
-                <ContextMenu>
-                    <MenuItem Header="{Binding UpdateReadyMenuHeader}"
-                              Command="{Binding ApplyUpdateAndRestartCommand}"
-                              FontWeight="Bold"
-                              Foreground="#FFFF5D8F"
-                              Visibility="{Binding IsUpdateReady, Converter={StaticResource BoolToVis}}" />
-                    <MenuItem Header="💬  친구" Command="{Binding OpenSocialCommand}" />
-                    <MenuItem Header="✨  성장 · 뽀모도로 · 코인 게임" Command="{Binding OpenSoloHubCommand}" />
-                    <MenuItem Header="🎨  외형 · 이름 변경" Command="{Binding OpenCustomizationCommand}" />
-                    <MenuItem Header="🔍  크기 조절">
-                        <MenuItem Header="아주 작게 (50%)" Command="{Binding SetPetScaleCommand}" CommandParameter="0.5" />
-                        <MenuItem Header="작게 (75%)" Command="{Binding SetPetScaleCommand}" CommandParameter="0.75" />
-                        <MenuItem Header="보통 (100%)" Command="{Binding SetPetScaleCommand}" CommandParameter="1.0" />
-                        <MenuItem Header="크게 (125%)" Command="{Binding SetPetScaleCommand}" CommandParameter="1.25" />
-                        <MenuItem Header="아주 크게 (150%)" Command="{Binding SetPetScaleCommand}" CommandParameter="1.5" />
-                    </MenuItem>
-                    <MenuItem Header="🎄  크리스마스 트리" Command="{Binding LaunchChristmasTreeCommand}" />
-                    <Separator />
-                    <MenuItem Header="🎯  클릭 투과 집중 모드"
-                              IsCheckable="True"
-                              IsChecked="{Binding IsClickThroughEnabled, Mode=TwoWay}" />
-                    <MenuItem Header="📍  기본 위치로 복귀" Command="{Binding ResetPositionCommand}" />
-                    <Separator />
-                    <MenuItem Command="{Binding CheckUpdatesCommand}">
-                        <MenuItem.Header>
-                            <StackPanel>
-                                <TextBlock Text="🔄  업데이트 확인" />
-                                <TextBlock Text="{Binding CurrentVersionText}"
-                                           FontSize="10"
-                                           Foreground="#FF9CA3AF"
-                                           Margin="20,1,0,0" />
-                            </StackPanel>
-                        </MenuItem.Header>
-                    </MenuItem>
-                    <MenuItem Header="🛡️  방화벽 · 네트워크 안내" Command="{Binding OpenEnvironmentGuideCommand}" />
-                    <Separator />
-                    <MenuItem Header="⏻  LabPet 종료" Command="{Binding ExitApplicationCommand}" />
-                </ContextMenu>
-            </Viewport3D.ContextMenu>
 
             <Viewport3D.Camera>
                 <PerspectiveCamera Position="0,0.30,6.65"

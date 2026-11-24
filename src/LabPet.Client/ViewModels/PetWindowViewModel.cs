@@ -2,6 +2,7 @@ using System.Collections.ObjectModel;
 using System.Windows.Media;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using LabPet.Client.Navigation;
 using LabPet.Client.Social;
 using LabPet.Client.Storage;
 using LabPet.Client.Views;
@@ -81,12 +82,8 @@ public sealed partial class PetWindowViewModel : ObservableObject
     private readonly SocialCoordinatorService _social;
     private readonly BubbleMessageStack _bubbleStack = new(MaxBubbleLines);
 
-    public event EventHandler? OpenCustomizationRequested;
-    public event EventHandler? OpenSoloHubRequested;
-    public event EventHandler? OpenSocialRequested;
-    public event EventHandler? OpenEnvironmentGuideRequested;
+    public event EventHandler<NavigationRequest>? HubNavigationRequested;
     public event EventHandler? LaunchChristmasTreeRequested;
-    public event EventHandler? CheckUpdatesRequested;
     public event EventHandler? ApplyUpdateRestartRequested;
     public event EventHandler<bool>? StartupAutoRunToggled;
     public event EventHandler? ResetPositionRequested;
@@ -665,19 +662,42 @@ public sealed partial class PetWindowViewModel : ObservableObject
     }
 
     [RelayCommand]
-    private void CheckUpdates() => CheckUpdatesRequested?.Invoke(this, EventArgs.Empty);
+    private void CheckUpdates()
+        => HubNavigationRequested?.Invoke(this, new NavigationRequest(HubPage.About, Action: HubNavigationAction.CheckUpdates));
 
     [RelayCommand]
     private void ApplyUpdateAndRestart() => ApplyUpdateRestartRequested?.Invoke(this, EventArgs.Empty);
 
     [RelayCommand]
-    private void OpenEnvironmentGuide() => OpenEnvironmentGuideRequested?.Invoke(this, EventArgs.Empty);
+    private void OpenHub()
+        => HubNavigationRequested?.Invoke(this, new NavigationRequest(HubPage.Home));
+
+    [RelayCommand]
+    private void OpenEnvironmentGuide()
+        => HubNavigationRequested?.Invoke(this, new NavigationRequest(HubPage.Settings, SubSection: "Network"));
+
+    [RelayCommand]
+    private void OpenSettings()
+        => HubNavigationRequested?.Invoke(this, new NavigationRequest(HubPage.Settings));
+
+    [RelayCommand]
+    private void OpenGrowth()
+        => HubNavigationRequested?.Invoke(this, new NavigationRequest(HubPage.Growth));
+
+    [RelayCommand]
+    private void OpenPomodoro()
+        => HubNavigationRequested?.Invoke(this, new NavigationRequest(HubPage.Pomodoro));
+
+    [RelayCommand]
+    private void OpenGames()
+        => HubNavigationRequested?.Invoke(this, new NavigationRequest(HubPage.Games));
 
     [RelayCommand]
     private void LaunchChristmasTree() => LaunchChristmasTreeRequested?.Invoke(this, EventArgs.Empty);
 
     [RelayCommand]
-    private void OpenSocial() => OpenSocialRequested?.Invoke(this, EventArgs.Empty);
+    private void OpenSocial()
+        => HubNavigationRequested?.Invoke(this, new NavigationRequest(HubPage.Friends));
 
     [RelayCommand]
     private async Task AcceptFriendRequestAsync()
@@ -756,9 +776,6 @@ public sealed partial class PetWindowViewModel : ObservableObject
         }
     }
 
-    [RelayCommand]
-    private void OpenSoloHub() => OpenSoloHubRequested?.Invoke(this, EventArgs.Empty);
-
     public async Task SaveCurrentProfileAsync()
     {
         await _store.SaveProfileAsync(CurrentProfile);
@@ -771,7 +788,8 @@ public sealed partial class PetWindowViewModel : ObservableObject
     private void ToggleClickThrough() => IsClickThroughEnabled = !IsClickThroughEnabled;
 
     [RelayCommand]
-    private void OpenCustomization() => OpenCustomizationRequested?.Invoke(this, EventArgs.Empty);
+    private void OpenCustomization()
+        => HubNavigationRequested?.Invoke(this, new NavigationRequest(HubPage.Appearance));
 
     [RelayCommand]
     private void ResetPosition() => ResetPositionRequested?.Invoke(this, EventArgs.Empty);
