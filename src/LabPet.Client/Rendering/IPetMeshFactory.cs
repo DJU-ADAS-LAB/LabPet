@@ -39,7 +39,10 @@ public sealed class PetRigHandle
     internal Transform3D? BodyTransform { get; init; }
     internal PetSkinInstance? Skin { get; init; }
     internal Func<string, int>? SelectExpression { get; init; }
+    internal Func<PetTearEffect>? CreateTearEffect { get; init; }
+    internal string? ReactionExpression { get; private set; }
     internal Point3D NameplateAnchor { get; init; }
+    internal Rect3D BodyBounds { get; init; }
 
     /// <summary>색상을 제외한 구조 시그니처 (SpeciesId|ExpressionId|HeadAccessoryId|AuraEffectId).</summary>
     public string AppearanceStructureSignature { get => _signature; init => _signature = value; }
@@ -112,11 +115,24 @@ public sealed class PetRigHandle
             var old = AppearanceStructureSignature.Split('|');
             if (SelectExpression == null || old.Length != 4 || old[0] != appearance.SpeciesId ||
                 old[2] != appearance.HeadAccessoryId || old[3] != appearance.AuraEffectId) return false;
-            _triangleCount += SelectExpression(appearance.ExpressionId);
+            if (ReactionExpression is null)
+                _triangleCount += SelectExpression(appearance.ExpressionId);
             _signature = signature;
         }
         UpdateColors(appearance.BodyColorHex, appearance.AccentColorHex);
         return true;
+    }
+
+    internal void SetReactionExpression(string? expression)
+    {
+        if (SelectExpression is null || ReactionExpression == expression)
+        {
+            return;
+        }
+
+        ReactionExpression = expression;
+        var savedExpression = AppearanceStructureSignature.Split('|')[1];
+        _triangleCount += SelectExpression(expression ?? savedExpression);
     }
 
     public static string BuildStructureSignature(PetAppearance appearance)

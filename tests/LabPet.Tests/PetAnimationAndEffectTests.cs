@@ -96,6 +96,83 @@ public sealed class PetAnimationAndEffectTests
     }
 
     [Fact]
+    public void Grab_AlternatesPawKicksAndReturnsSleepingPetToRestOnRelease()
+    {
+        RunOnSta(() =>
+        {
+            var rig = new ProceduralPetMeshFactory().BuildPetRig(new PetAppearance { SpeciesId = PetSpeciesIds.FluffyPuppy }, PetRigEffects.None);
+            var controller = new PetAnimationController();
+            controller.SetSleeping(true);
+            controller.AttachRig(rig, "#FF9EB5");
+
+            controller.SetGrabbed(true);
+            var leftLead = 0.0;
+            var rightLead = 0.0;
+            for (var i = 0; i < 40; i++)
+            {
+                controller.UpdateFrame(0.016, 0, 0);
+                var pawDifference = rig.LeftPawTranslate!.OffsetY - rig.RightPawTranslate!.OffsetY;
+                leftLead = Math.Max(leftLead, pawDifference);
+                rightLead = Math.Max(rightLead, -pawDifference);
+            }
+
+            Assert.True(leftLead > 0.10 && rightLead > 0.10);
+            Assert.True(controller.IsSleeping);
+            Assert.False(controller.IsWakingUp);
+
+            controller.SetGrabbed(false);
+            for (var i = 0; i < 100; i++)
+            {
+                controller.UpdateFrame(0.033, 0, 0);
+            }
+
+            Assert.False(controller.HasInteractiveMotion);
+            Assert.InRange(rig.EyeBlinkScale!.ScaleY, 0, 0.1);
+        });
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void GameReaction_SmilesOrCriesAndRestoresTheLatestSavedExpression(bool useExternalAssets)
+    {
+        RunOnSta(() =>
+        {
+            var procedural = new ProceduralPetMeshFactory();
+            IPetMeshFactory factory = useExternalAssets ? new BlenderAssetPetMeshFactory(procedural) : procedural;
+            var appearance = new PetAppearance { SpeciesId = PetSpeciesIds.MochiSpirit, ExpressionId = "sparkle" };
+            var rig = factory.BuildPetRig(appearance, PetRigEffects.None);
+            Assert.Equal(useExternalAssets, rig.IsExternalAsset);
+            var controller = new PetAnimationController();
+            controller.AttachRig(rig, appearance.AccentColorHex);
+
+            controller.TriggerGameReaction(won: true);
+            for (var i = 0; i < 10; i++)
+                controller.UpdateFrame(0.033, 0, 0);
+            Assert.Equal("happy", rig.ReactionExpression);
+            Assert.True(rig.BodyTranslate.OffsetY > 0.16);
+            Assert.False(controller.IsCrying);
+
+            controller.TriggerGameReaction(won: false);
+            for (var i = 0; i < 10; i++)
+                controller.UpdateFrame(0.033, 0, 0);
+            Assert.True(controller.IsCrying);
+            Assert.True(rig.HeadPitch.Angle > 7);
+
+            appearance.ExpressionId = "default";
+            Assert.True(rig.TryUpdateAppearance(appearance));
+            Assert.Equal("sleepy", rig.ReactionExpression);
+            for (var i = 0; i < 70; i++)
+                controller.UpdateFrame(0.033, 0, 0);
+
+            Assert.Null(rig.ReactionExpression);
+            Assert.False(controller.IsCrying);
+            Assert.False(controller.HasInteractiveMotion);
+            Assert.Equal(factory.BuildPetRig(appearance, PetRigEffects.None).TotalTriangleCount, rig.TotalTriangleCount);
+        });
+    }
+
+    [Fact]
     public void MusicParticles_EnforcePoolLimitReactionBurstAndCleanFadeOut()
     {
         RunOnSta(() =>

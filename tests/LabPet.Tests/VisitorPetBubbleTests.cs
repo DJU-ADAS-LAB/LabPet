@@ -918,7 +918,7 @@ public sealed class VisitorPetBubbleTests
     }
 
     [Fact]
-    public async Task VisitorPetWindow_DisplaySettingsAndNameplatePosition_MatchHostPetAcrossScales()
+    public async Task VisitorPetWindow_DisplaySettingsAndOverlayControls_StayAlignedAcrossScales()
     {
         var tempDir = Path.Combine(Path.GetTempPath(), "LabPet_VisitorLayoutTest_" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(tempDir);
@@ -959,6 +959,7 @@ public sealed class VisitorPetBubbleTests
                     window.Show();
                     await FlushUiAsync();
 
+                    var dismissButton = Assert.IsType<Button>(window.FindName("DismissButton"));
                     var cases = new (double Scale, double Opacity)[]
                     {
                         (0.5, 0.25),
@@ -985,6 +986,10 @@ public sealed class VisitorPetBubbleTests
                         Assert.Equal(opacity, window.AppliedViewportOpacity, precision: 4);
                         Assert.Equal(opacity, window.AppliedNameplateOpacity, precision: 4);
                         Assert.Equal(opacity, window.AppliedBubbleOpacity, precision: 4);
+                        Assert.InRange(Canvas.GetLeft(dismissButton) + dismissButton.Width / 2,
+                            expectedViewport.Width * 0.60, expectedViewport.Width * 0.90);
+                        Assert.InRange(Canvas.GetTop(dismissButton) + dismissButton.Height,
+                            expectedViewport.Height * 0.14, expectedViewport.Height * 0.48);
 
                         // 3D 캐릭터 발바닥·키보드 앵커 기준으로 네임텍이 뷰포트 하단 위쪽으로 당겨져 내 펫과 동일한 상대 위치에 놓이는지 확인
                         Assert.True(window.NameplateOffsetY < 0.0,

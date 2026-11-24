@@ -1004,6 +1004,15 @@ public sealed partial class CoinGamesViewModel
 
         if (myResult is not null)
         {
+            if (LabLadderEngine.IsLosingPrize(myResult.Prize))
+            {
+                PetEmotionTriggered?.Invoke(this, false);
+            }
+            else if (run.WagerCoins == 0 && LabLadderEngine.IsJackpot(myResult.Prize))
+            {
+                PetEmotionTriggered?.Invoke(this, true);
+            }
+
             if (run.IsMultiplayer)
             {
                 var modeLabel = run.WagerCoins > 0 ? "동시 사다리 결과" : "동시 사다리(무료) 결과";

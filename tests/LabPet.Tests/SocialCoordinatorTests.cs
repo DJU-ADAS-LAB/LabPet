@@ -428,6 +428,8 @@ public sealed class SocialCoordinatorTests : IAsyncLifetime
 
         using var games = new CoinGamesViewModel(soloStore, new SoloProgressionService(), _host);
         games.BindProfile(soloProfile);
+        var reactions = new List<bool>();
+        games.PetEmotionTriggered += (_, won) => reactions.Add(won);
 
         // 무료(0코인) 솔로 사다리: 도착 전 숨김, 완료 후 코인 변동 없음
         games.LadderParticipantsText = "나, 친구";
@@ -448,6 +450,7 @@ public sealed class SocialCoordinatorTests : IAsyncLifetime
         await games.CompleteLadderRevealAsync();
         Assert.False(games.IsLadderAnimating);
         Assert.Equal(100, soloProfile.SoloProgress.Coins);
+        Assert.Empty(reactions);
 
         // 유료(30코인) 솔로 잭팟: 시작 시 30코인 차감(70), 도착 전 지급 없음, 완료 시 잭팟 결과에 따라 1회 정산
         games.LadderPrizesText = "💰 잭팟! x1, 꽝 x1";
@@ -463,6 +466,7 @@ public sealed class SocialCoordinatorTests : IAsyncLifetime
 
         var expectedCoins = myWon ? 70 + 30 * 2 : 70;
         Assert.Equal(expectedCoins, soloProfile.SoloProgress.Coins);
+        Assert.Equal(myWon, Assert.Single(reactions));
     }
 
     private static Task WaitUntilPropertyAsync(CoinGamesViewModel vm, string propertyName, Func<bool> condition)
@@ -660,7 +664,7 @@ public sealed class SocialCoordinatorTests : IAsyncLifetime
     {
         var viewModel = new PetWindowViewModel(_store, _host);
         var friend = Assert.Single(_host.Friends);
-        var row = new QuickOverlayEntry { PetId = friend.PetId, DisplayTitle = friend.PetName, IsFriend = true, Friend = friend };
+        var row = new QuickOverlayEntry { PetId = friend.PetId, DisplayTitle = friend.PetName, Friend = friend };
 
         viewModel.OpenQuickMessageCommand.Execute(row);
         viewModel.QuickMessageText = "첫 메시지";
@@ -780,7 +784,7 @@ public sealed class SocialCoordinatorTests : IAsyncLifetime
     {
         var viewModel = new PetWindowViewModel(_store, _host);
         var friend = Assert.Single(_host.Friends);
-        var row = new QuickOverlayEntry { PetId = friend.PetId, IsFriend = true, Friend = friend };
+        var row = new QuickOverlayEntry { PetId = friend.PetId, Friend = friend };
         var saveStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var resumeSave = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         _coordinationStore.BeforeSaveFriendsAsync = () =>
@@ -814,12 +818,7 @@ public sealed class SocialCoordinatorTests : IAsyncLifetime
         var guestFriend = Assert.Single(_host.Friends);
         var petVm = new PetWindowViewModel(_store, _host);
         petVm.RefreshQuickOverlayEntries();
-        var offlineOverlayRow = Assert.Single(petVm.QuickOverlayEntries);
-        Assert.False(offlineOverlayRow.IsOnline);
-        Assert.True(offlineOverlayRow.HasSleepBadge);
-        Assert.False(offlineOverlayRow.CanInteract);
-        Assert.False(offlineOverlayRow.CanFollowMusic);
-        Assert.Equal("오프라인", offlineOverlayRow.StatusTooltip);
+        Assert.Empty(petVm.QuickOverlayEntries);
         Assert.True(new FriendListItemViewModel(guestFriend, null, false, false).ShowsSleepPose);
         var sleepObservedTcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
         var wakeObservedTcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -885,11 +884,8 @@ public sealed class SocialCoordinatorTests : IAsyncLifetime
 
             petVm.RefreshQuickOverlayEntries();
             var overlayRow = Assert.Single(petVm.QuickOverlayEntries);
-            Assert.Same(offlineOverlayRow, overlayRow);
-            Assert.True(overlayRow.IsOnline);
-            Assert.True(overlayRow.CanInteract);
             Assert.True(overlayRow.IsSleeping);
-            Assert.True(overlayRow.HasSleepBadge);
+            Assert.Equal("자는 중", overlayRow.StatusTooltip);
 
             // 2. 게스트 입력 재개로 수면 해제 -> 즉시 PresenceSync 푸시로 온라인·비수면 복귀
             await _guestTransport.UpdateLocalPresenceAsync(new LocalPresenceState(
@@ -913,9 +909,11 @@ public sealed class SocialCoordinatorTests : IAsyncLifetime
             petVm.RefreshQuickOverlayEntries();
             var awakeOverlayRow = Assert.Single(petVm.QuickOverlayEntries);
             Assert.False(awakeOverlayRow.IsSleeping);
-            Assert.False(awakeOverlayRow.HasSleepBadge);
+            Assert.Same(overlayRow, awakeOverlayRow);
+            petVm.OpenQuickMessageCommand.Execute(awakeOverlayRow);
+            Assert.Same(awakeOverlayRow, petVm.QuickMessageTarget);
 
-            // 마지막 인증 프레즌스가 만료되면 같은 행을 오프라인 수면 표시로 되돌린다.
+            // 마지막 인증 프레즌스가 만료되면 행과 해당 메시지 입력창을 닫는다.
             awakePeer.LastSeenUtc = DateTimeOffset.MinValue;
             var offlineObserved = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
             void ObserveOffline(object? sender, EventArgs args)
@@ -931,9 +929,8 @@ public sealed class SocialCoordinatorTests : IAsyncLifetime
                 ObserveOffline(null, EventArgs.Empty);
                 await offlineObserved.Task.WaitAsync(TimeSpan.FromSeconds(5));
                 petVm.RefreshQuickOverlayEntries();
-                Assert.Same(awakeOverlayRow, Assert.Single(petVm.QuickOverlayEntries));
-                Assert.False(awakeOverlayRow.IsOnline);
-                Assert.True(awakeOverlayRow.HasSleepBadge);
+                Assert.Empty(petVm.QuickOverlayEntries);
+                Assert.Null(petVm.QuickMessageTarget);
             }
             finally
             {

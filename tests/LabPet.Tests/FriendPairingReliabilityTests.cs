@@ -722,17 +722,8 @@ public sealed class FriendPairingReliabilityTests : IAsyncLifetime
             Assert.Contains("오프라인", vm.StatusBanner);
             Assert.Equal("다시 신청", offlinePeer.FriendRequestButtonText);
 
-            var petVm = new PetWindowViewModel(storeA, socialA);
-            var overlayEntry = new QuickOverlayEntry
-            {
-                PetId = offlinePeer.Snapshot.PetId,
-                DisplayTitle = offlinePeer.DisplayTitle,
-                Peer = offlinePeer.Snapshot
-            };
-            await petVm.QuickSendFriendRequestCommand.ExecuteAsync(overlayEntry);
-            Assert.False(overlayEntry.IsFriendRequestPending);
-            Assert.True(overlayEntry.CanSendFriendRequest);
-            Assert.Contains(petVm.BubbleLines, l => l.Text.Contains("오프라인", StringComparison.Ordinal));
+            Assert.False(offlinePeer.IsFriendRequestPending);
+            Assert.True(offlinePeer.CanSendFriendRequest);
 
             // 2. AUTH_FAILED (PUBLIC_KEY_MISMATCH) 전파 검증
             var attackerStore = new DeviceIdentityStore(Path.Combine(_tempRoot, "log_id_attacker"));

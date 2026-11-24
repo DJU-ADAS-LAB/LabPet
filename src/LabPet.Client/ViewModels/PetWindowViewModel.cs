@@ -20,31 +20,16 @@ public sealed partial class QuickOverlayEntry : ObservableObject
 
     public string PetId { get; init; } = string.Empty;
     [ObservableProperty] private string _displayTitle = string.Empty;
-    [ObservableProperty, NotifyPropertyChangedFor(nameof(CanInteract), nameof(CanFollowMusic), nameof(CanShowFriendRequestButton), nameof(CanSendFriendRequest), nameof(HasSleepBadge))]
-    private bool _isFriend;
-    [ObservableProperty, NotifyPropertyChangedFor(nameof(CanInteract), nameof(CanFollowMusic), nameof(HasSleepBadge), nameof(StatusTooltip), nameof(MusicTooltip))]
-    private bool _isOnline = true;
     [ObservableProperty, NotifyPropertyChangedFor(nameof(CanFollowMusic), nameof(MusicTooltip), nameof(MusicButtonIcon))]
     private bool _isMusicActive;
-    [ObservableProperty, NotifyPropertyChangedFor(nameof(HasSleepBadge), nameof(StatusTooltip))]
+    [ObservableProperty, NotifyPropertyChangedFor(nameof(StatusTooltip))]
     private bool _isSleeping;
     [ObservableProperty, NotifyPropertyChangedFor(nameof(CanFollowMusic), nameof(MusicTooltip), nameof(MusicButtonIcon))]
     private bool _isFollowingMusic;
-    [ObservableProperty, NotifyPropertyChangedFor(nameof(CanInteract), nameof(CanFollowMusic), nameof(CanShowFriendRequestButton), nameof(CanSendFriendRequest), nameof(MusicTooltip))]
-    private bool _requiresUpdate;
-    [ObservableProperty, NotifyPropertyChangedFor(nameof(CanSendFriendRequest), nameof(FriendRequestButtonText))]
-    private bool _isSendingFriendRequest;
-    [ObservableProperty, NotifyPropertyChangedFor(nameof(CanSendFriendRequest), nameof(FriendRequestButtonText))]
-    private bool _isFriendRequestPending;
     [ObservableProperty] private bool _isComposingMessage;
-    public bool CanInteract => IsFriend && IsOnline && !RequiresUpdate;
-    public bool CanFollowMusic => IsFriend && (IsFollowingMusic || (CanInteract && IsMusicActive));
-    public bool CanShowFriendRequestButton => !IsFriend && !RequiresUpdate;
-    public bool CanSendFriendRequest => !IsFriend && !RequiresUpdate && !IsSendingFriendRequest && !IsFriendRequestPending;
-    public string FriendRequestButtonText => IsSendingFriendRequest ? "전송 중..." : (IsFriendRequestPending ? "대기 중" : "+ 신청");
-    public bool HasSleepBadge => IsSleeping || (IsFriend && !IsOnline);
+    public bool CanFollowMusic => IsFollowingMusic || IsMusicActive;
     public Brush StatusDotBrush => OnlineDotBrush;
-    public string StatusTooltip => !IsOnline ? "오프라인" : IsSleeping ? "자는 중" : "온라인";
+    public string StatusTooltip => IsSleeping ? "자는 중" : "온라인";
     public FriendEntry? Friend { get; set; }
     public PeerSnapshot? Peer { get; set; }
 
@@ -52,8 +37,6 @@ public sealed partial class QuickOverlayEntry : ObservableObject
 
     public string MusicTooltip => IsFollowingMusic
         ? "노래 따라하기 중지"
-        : !IsOnline ? "오프라인"
-        : RequiresUpdate ? "업데이트 필요"
         : IsMusicActive ? "노래 따라하기 시작" : "음악 재생 중이 아님";
 
     private static Brush CreateFrozenBrush(string hex)
@@ -163,7 +146,7 @@ public sealed partial class PetWindowViewModel : ObservableObject
         : (CanRetryPendingFriendRequest ? "다시 시도" : "수락");
     public bool HasAnyBubble => IsUpdateBubbleVisible || HasPendingFriendRequest || IsBubbleVisible;
     public bool HasNoQuickOverlayEntries => QuickOverlayEntries.Count == 0;
-    public string QuickOverlayHeaderText => $"주변 · 친구 ({QuickOverlayEntries.Count})";
+    public string QuickOverlayHeaderText => $"온라인 친구 ({QuickOverlayEntries.Count})";
     private int _quickMessageDraftRevision;
 
     public string PendingFriendRequestText => PendingFriendRequest is null
@@ -274,59 +257,27 @@ public sealed partial class PetWindowViewModel : ObservableObject
 
         var items = new List<QuickOverlayEntry>();
 
-        // 1. 등록된 친구는 접속이 끊어져도 같은 목록에 남긴다.
         foreach (var f in friends)
         {
             var live = peers.FirstOrDefault(p => string.Equals(p.PetId, f.PetId, StringComparison.OrdinalIgnoreCase));
-
-            items.Add(new QuickOverlayEntry
-            {
-                PetId = f.PetId,
-                DisplayTitle = SocialCoordinatorService.FormatDisplayName(
-                    string.IsNullOrWhiteSpace(live?.OwnerName) ? f.OwnerName : live.OwnerName,
-                    string.IsNullOrWhiteSpace(live?.PetName) ? f.PetName : live.PetName),
-                IsFriend = true,
-                IsOnline = live is not null,
-                RequiresUpdate = live?.RequiresUpdate ?? false,
-                IsMusicActive = live?.IsMusicActive ?? false,
-                IsSleeping = live?.IsSleeping ?? false,
-                IsFollowingMusic = string.Equals(followingId, f.PetId, StringComparison.OrdinalIgnoreCase),
-                Friend = f,
-                Peer = live
-            });
-        }
-        // 2. 오프라인 친구는 주변 온라인 LAN 피어 표시 한도에 포함하지 않는다.
-        const int nearbyEntryLimit = 5;
-        var onlineEntryCount = items.Count(entry => entry is { IsOnline: true, RequiresUpdate: false });
-        foreach (var p in peers)
-        {
-            if (onlineEntryCount >= nearbyEntryLimit)
-            {
-                break;
-            }
-
-            if (p.IsFriend || items.Any(x => string.Equals(x.PetId, p.PetId, StringComparison.OrdinalIgnoreCase)))
+            if (live is null || live.RequiresUpdate)
             {
                 continue;
             }
 
             items.Add(new QuickOverlayEntry
             {
-                PetId = p.PetId,
-                DisplayTitle = SocialCoordinatorService.FormatDisplayName(p.OwnerName, p.PetName),
-                IsFriend = false,
-                IsMusicActive = p.IsMusicActive,
-                IsSleeping = p.IsSleeping,
-                RequiresUpdate = p.RequiresUpdate,
-                IsSendingFriendRequest = _social.IsOutgoingFriendRequestSending(p.PetId),
-                IsFriendRequestPending = _social.IsOutgoingFriendRequestPending(p.PetId),
-                Peer = p
+                PetId = f.PetId,
+                DisplayTitle = SocialCoordinatorService.FormatDisplayName(
+                    string.IsNullOrWhiteSpace(live.OwnerName) ? f.OwnerName : live.OwnerName,
+                    string.IsNullOrWhiteSpace(live.PetName) ? f.PetName : live.PetName),
+                IsMusicActive = live.IsMusicActive,
+                IsSleeping = live.IsSleeping,
+                IsFollowingMusic = string.Equals(followingId, f.PetId, StringComparison.OrdinalIgnoreCase),
+                Friend = f,
+                Peer = live
             });
-            onlineEntryCount++;
         }
-
-        items = items.OrderByDescending(entry => entry.IsOnline).ThenByDescending(entry => entry.IsFriend).ToList();
-
         // 친구 상태가 바뀌어도 같은 행과 입력 컨트롤을 유지한다.
         for (var index = 0; index < items.Count; index++)
         {
@@ -340,14 +291,9 @@ public sealed partial class PetWindowViewModel : ObservableObject
             }
 
             existing.DisplayTitle = item.DisplayTitle;
-            existing.IsFriend = item.IsFriend;
-            existing.IsOnline = item.IsOnline;
             existing.IsMusicActive = item.IsMusicActive;
             existing.IsSleeping = item.IsSleeping;
             existing.IsFollowingMusic = item.IsFollowingMusic;
-            existing.RequiresUpdate = item.RequiresUpdate;
-            existing.IsSendingFriendRequest = item.IsSendingFriendRequest;
-            existing.IsFriendRequestPending = item.IsFriendRequestPending;
             existing.Friend = item.Friend;
             existing.Peer = item.Peer;
             var oldIndex = QuickOverlayEntries.IndexOf(existing);
@@ -363,7 +309,7 @@ public sealed partial class PetWindowViewModel : ObservableObject
         }
 
         // 연결이 끊기거나 목록에서 사라진 친구는 빠른 메시지 입력을 닫는다.
-        if (QuickMessageTarget is { } target && (!target.CanInteract || !QuickOverlayEntries.Contains(target)))
+        if (QuickMessageTarget is { } target && !QuickOverlayEntries.Contains(target))
         {
             QuickMessageTarget = null;
         }
@@ -478,7 +424,7 @@ public sealed partial class PetWindowViewModel : ObservableObject
     [RelayCommand]
     private void OpenQuickMessage(QuickOverlayEntry? entry)
     {
-        if (entry is not { CanInteract: true })
+        if (entry?.Friend is null)
         {
             return;
         }
@@ -491,7 +437,7 @@ public sealed partial class PetWindowViewModel : ObservableObject
     [RelayCommand]
     private async Task SendQuickMessageAsync()
     {
-        if (QuickMessageTarget is not { CanInteract: true, Friend: { } friend })
+        if (QuickMessageTarget?.Friend is not { } friend)
         {
             return;
         }
@@ -520,7 +466,7 @@ public sealed partial class PetWindowViewModel : ObservableObject
     [RelayCommand]
     private async Task QuickPetFriendAsync(QuickOverlayEntry? entry)
     {
-        if (entry is not { CanInteract: true, Friend: { } friend })
+        if (entry?.Friend is not { } friend)
         {
             return;
         }
@@ -558,37 +504,6 @@ public sealed partial class PetWindowViewModel : ObservableObject
 
         var appearance = (entry.Peer?.Appearance ?? entry.Friend.CachedAppearance ?? new PetAppearance()).Clone();
         ToggleVisitFriendRequested?.Invoke(this, (entry.Friend, appearance));
-    }
-
-    [RelayCommand]
-    private async Task QuickSendFriendRequestAsync(QuickOverlayEntry? entry)
-    {
-        if (entry?.Peer is null || !entry.CanSendFriendRequest)
-        {
-            return;
-        }
-
-        entry.IsSendingFriendRequest = true;
-        try
-        {
-            var result = await _social.SendFriendRequestDetailedAsync(entry.Peer);
-            if (result.Succeeded)
-            {
-                entry.IsFriendRequestPending = true;
-                var routeLabel = result.Route == PeerTransportKind.GcpRelay ? "인터넷(GCP)" : "LAN";
-                ShowBubble($"{entry.DisplayTitle}에게 [{routeLabel}] 친구 신청 완료!", 2400);
-            }
-            else
-            {
-                entry.IsFriendRequestPending = result.ErrorCode == FriendOperationErrorCodes.DuplicatePendingRequest;
-                ShowBubble(SocialCoordinatorService.FormatFriendOperationFailure(result, isAccept: false, entry.DisplayTitle), 4200);
-            }
-        }
-        finally
-        {
-            entry.IsSendingFriendRequest = false;
-            RefreshQuickOverlayEntries();
-        }
     }
 
     public void EnqueueFriendRequest(PendingFriendRequest request)

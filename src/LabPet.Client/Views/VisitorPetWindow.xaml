@@ -200,7 +200,8 @@
                     MouseLeave="VisitorSurface_MouseLeave"
                     MouseLeftButtonDown="VisitorViewport_MouseLeftButtonDown"
                     MouseMove="VisitorViewport_MouseMove"
-                    MouseLeftButtonUp="VisitorViewport_MouseLeftButtonUp">
+                    MouseLeftButtonUp="VisitorViewport_MouseLeftButtonUp"
+                    LostMouseCapture="VisitorViewport_LostMouseCapture">
             <Viewport3D.CacheMode>
                 <BitmapCache RenderAtScale="1.5" />
             </Viewport3D.CacheMode>
@@ -233,20 +234,19 @@
             </Grid>
         </Viewbox>
 
-        <!-- 마우스 오버레이 시 우측 상단에 나타나는 돌려보내기(✕) 버튼 -->
-        <Button x:Name="DismissButton"
-                Grid.Row="0"
-                Content="✕"
-                ToolTip="친구 돌려보내기"
-                Style="{StaticResource VisitorDismissButtonStyle}"
-                HorizontalAlignment="Right"
-                VerticalAlignment="Top"
-                Margin="0,6,8,0"
-                Opacity="0"
-                IsHitTestVisible="False"
-                MouseEnter="VisitorSurface_MouseEnter"
-                MouseLeave="VisitorSurface_MouseLeave"
-                Click="DismissMenu_Click" />
+        <!-- 펫 모델의 오른쪽 위에 돌려보내기 버튼을 배치한다. -->
+        <Canvas Grid.Row="0" Width="{Binding ActualWidth, ElementName=VisitorViewport}"
+                HorizontalAlignment="Center">
+            <Button x:Name="DismissButton"
+                    Content="✕"
+                    ToolTip="친구 돌려보내기"
+                    Style="{StaticResource VisitorDismissButtonStyle}"
+                    Opacity="0"
+                    IsHitTestVisible="False"
+                    MouseEnter="VisitorSurface_MouseEnter"
+                    MouseLeave="VisitorSurface_MouseLeave"
+                    Click="DismissMenu_Click" />
+        </Canvas>
 
         <!-- 하단 글래스 이름표 (내 펫과 동일 위치·스타일) -->
         <Border x:Name="VisitorNameplate"

@@ -143,11 +143,7 @@ public partial class App : Application
         var animator = _serviceProvider.GetRequiredService<PetAnimationController>();
         gamesVm.IncomingInviteChanged += (_, _) => Dispatcher.BeginInvoke(() => SyncInviteCardWindow(gamesVm));
         gamesVm.GameNotification += (_, msg) => Dispatcher.BeginInvoke(() => petVm.ShowBubble(msg, 3400));
-        gamesVm.PetEmotionTriggered += (_, isHappy) => Dispatcher.BeginInvoke(() =>
-        {
-            if (isHappy) animator.TriggerPetReaction();
-            else animator.TriggerDizzyReaction();
-        });
+        gamesVm.PetEmotionTriggered += (_, isHappy) => Dispatcher.BeginInvoke(() => animator.TriggerGameReaction(isHappy));
         gamesVm.OpenGameScreenRequested += (_, screen) => Dispatcher.BeginInvoke(() =>
             _ = NavigateHubAsync(new NavigationRequest(
                 HubPage.Games,

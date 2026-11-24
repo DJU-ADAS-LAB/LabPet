@@ -577,17 +577,23 @@ public sealed class ProceduralPetMeshFactory : IPetMeshFactory
         headTransform.Children.Add(new RotateTransform3D(headRoll, pivot));
         headGroup.Transform = headTransform;
 
-        // 표정 파츠 (자동 눈 깜빡임용 EyeBlinkScale 반환)
-        var (exprTris, eyeBlinkScale) = BuildExpressionParts(
-            headGroup,
-            appearance.ExpressionId,
-            faceCenterY,
-            faceZ,
-            appearance.SpeciesId,
-            darkEyeMaterial,
-            whiteHighlightMaterial,
-            accentMaterial);
-        triangleCount += exprTris;
+        // 게임의 임시 표정과 사용자 설정 표정은 같은 얼굴 그룹을 교체한다.
+        var faceGroup = new Model3DGroup();
+        headGroup.Children.Add(faceGroup);
+        var eyeCenter = new Point3D(0, faceCenterY + 0.06, faceZ);
+        var eyeBlinkScale = new ScaleTransform3D(1, 1, 1, eyeCenter.X, eyeCenter.Y, eyeCenter.Z);
+        var expressionTriangles = 0;
+        var speciesId = appearance.SpeciesId;
+        int SelectExpression(string expression)
+        {
+            faceGroup.Children.Clear();
+            var previous = expressionTriangles;
+            expressionTriangles = BuildExpressionParts(
+                faceGroup, expression, faceCenterY, faceZ, speciesId,
+                darkEyeMaterial, whiteHighlightMaterial, accentMaterial, eyeBlinkScale);
+            return expressionTriangles - previous;
+        }
+        triangleCount += SelectExpression(appearance.ExpressionId);
 
         // 머리 소켓 3D 악세서리
         triangleCount += BuildHeadAccessory(
@@ -650,6 +656,7 @@ public sealed class ProceduralPetMeshFactory : IPetMeshFactory
             RootModel = rootGroup,
             TotalTriangleCount = triangleCount,
             NameplateAnchor = new Point3D(0, bodyGroup.Bounds.Y, 0.35),
+            BodyBounds = bodyGroup.Bounds,
             BodyScale = bodyScale,
             BodyTranslate = bodyTranslate,
             BodyYaw = bodyYaw,
@@ -659,6 +666,8 @@ public sealed class ProceduralPetMeshFactory : IPetMeshFactory
             HeadPitch = headPitch,
             HeadRoll = headRoll,
             EyeBlinkScale = eyeBlinkScale,
+            SelectExpression = SelectExpression,
+            CreateTearEffect = () => BuildTearEffect(headGroup, eyeCenter),
             ShadowScale = shadowScale,
             TypingKeyboardScale = typingKeyboardScale,
             LeftEarRotation = leftEarRot,
@@ -795,7 +804,14 @@ public sealed class ProceduralPetMeshFactory : IPetMeshFactory
         return (triangles, particles);
     }
 
-    private (int Triangles, ScaleTransform3D? EyeBlinkScale) BuildExpressionParts(
+    internal PetTearEffect BuildTearEffect(Model3DGroup head, Point3D eyeCenter)
+    {
+        var mesh = new MeshBuilder(true, false);
+        mesh.AddEllipsoid(Vector3.Zero, 0.047f, 0.075f, 0.032f, 10, 8);
+        return new PetTearEffect(head, eyeCenter, GetSharedMesh(mesh.ToMesh()));
+    }
+
+    private int BuildExpressionParts(
         Model3DGroup parent,
         string expressionId,
         float faceCenterY,
@@ -803,7 +819,8 @@ public sealed class ProceduralPetMeshFactory : IPetMeshFactory
         string speciesId,
         Material eyeMaterial,
         Material highlightMaterial,
-        Material cheekMaterial)
+        Material cheekMaterial,
+        ScaleTransform3D blinkScale)
     {
         var tris = 0;
         var isPuppy = speciesId == PetSpeciesIds.FluffyPuppy;
@@ -817,8 +834,7 @@ public sealed class ProceduralPetMeshFactory : IPetMeshFactory
         // 눈 그룹 (깜빡임 스케일 적용)
         var eyeY = faceCenterY + 0.06f;
         var canBlink = expressionId is not ("happy" or "sleepy");
-        var eyeBlinkScale = canBlink ? new ScaleTransform3D(1, 1, 1, 0, eyeY, faceZ) : null;
-        var eyeGroup = new Model3DGroup { Transform = eyeBlinkScale };
+        var eyeGroup = new Model3DGroup { Transform = canBlink ? blinkScale : null };
 
         var eyeMb = new MeshBuilder(true, false);
         var highlightMb = new MeshBuilder(true, false);
@@ -916,7 +932,7 @@ public sealed class ProceduralPetMeshFactory : IPetMeshFactory
         }
 
         tris += AddGeometry(parent, mouthMb, eyeMaterial);
-        return (tris, eyeBlinkScale);
+        return tris;
     }
 
     internal int BuildHeadAccessory(

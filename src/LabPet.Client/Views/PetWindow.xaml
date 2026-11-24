@@ -344,7 +344,8 @@
                     MouseLeave="OverlaySurface_MouseLeave"
                     MouseLeftButtonDown="PetViewport_MouseLeftButtonDown"
                     MouseMove="PetViewport_MouseMove"
-                    MouseLeftButtonUp="PetViewport_MouseLeftButtonUp">
+                    MouseLeftButtonUp="PetViewport_MouseLeftButtonUp"
+                    LostMouseCapture="PetViewport_LostMouseCapture">
             <Viewport3D.CacheMode>
                 <BitmapCache RenderAtScale="1.5" />
             </Viewport3D.CacheMode>
@@ -407,7 +408,7 @@
                                 Height="20" />
                     </DockPanel>
 
-                    <!-- 친구와 주변 피어 목록은 고정 높이를 넘으면 스크롤한다. -->
+                    <!-- 온라인 친구 목록은 고정 높이를 넘으면 스크롤한다. -->
                     <ScrollViewer MaxHeight="224" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
                     <ItemsControl ItemsSource="{Binding QuickOverlayEntries}">
                         <ItemsControl.ItemTemplate>
@@ -431,7 +432,7 @@
                                                     <ColumnDefinition Width="*" />
                                                 </Grid.ColumnDefinitions>
 
-                                                <!-- 깨어 있으면 상태 점, 수면 중이거나 오프라인이면 zzz를 표시한다. -->
+                                                <!-- 깨어 있으면 상태 점, 수면 중이면 zzz를 표시한다. -->
                                                 <Grid Grid.Column="0"
                                                       Width="{x:Static views:MiniSleepZzzIndicator.SlotWidth}"
                                                       Height="{x:Static views:MiniSleepZzzIndicator.SlotHeight}"
@@ -449,14 +450,14 @@
                                                             <Style TargetType="Ellipse">
                                                                 <Setter Property="Visibility" Value="Visible" />
                                                                 <Style.Triggers>
-                                                                    <DataTrigger Binding="{Binding HasSleepBadge}" Value="True">
+                                                                    <DataTrigger Binding="{Binding IsSleeping}" Value="True">
                                                                         <Setter Property="Visibility" Value="Collapsed" />
                                                                     </DataTrigger>
                                                                 </Style.Triggers>
                                                             </Style>
                                                         </Ellipse.Style>
                                                     </Ellipse>
-                                                    <views:MiniSleepZzzIndicator Visibility="{Binding HasSleepBadge, Converter={StaticResource BoolToVis}}"
+                                                    <views:MiniSleepZzzIndicator Visibility="{Binding IsSleeping, Converter={StaticResource BoolToVis}}"
                                                                                  HorizontalAlignment="Center"
                                                                                  VerticalAlignment="Center" />
                                                 </Grid>
@@ -470,21 +471,18 @@
                                                            TextTrimming="CharacterEllipsis" />
                                             </Grid>
 
-                                            <!-- 친구인 경우: 메시지 / 쓰다듬기 / 노래 따라하기 / 데려오기 -->
+                                            <!-- 메시지 / 쓰다듬기 / 노래 따라하기 / 데려오기 -->
                                             <StackPanel Grid.Column="1"
                                                         Orientation="Horizontal"
-                                                        VerticalAlignment="Center"
-                                                        Visibility="{Binding IsFriend, Converter={StaticResource BoolToVis}}">
+                                                        VerticalAlignment="Center">
                                                 <Button Content="💬"
                                                         ToolTip="빠른 메시지"
-                                                        IsEnabled="{Binding CanInteract}"
                                                         Style="{StaticResource MiniActionIconButton}"
                                                         Command="{Binding DataContext.OpenQuickMessageCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
                                                         CommandParameter="{Binding}"
                                                         Margin="0,0,3,0" />
                                                 <Button Content="👋"
                                                         ToolTip="쓰다듬기"
-                                                        IsEnabled="{Binding CanInteract}"
                                                         Style="{StaticResource MiniActionIconButton}"
                                                         Command="{Binding DataContext.QuickPetFriendCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
                                                         CommandParameter="{Binding}"
@@ -502,18 +500,6 @@
                                                         Command="{Binding DataContext.QuickToggleVisitFriendCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
                                                         CommandParameter="{Binding}" />
                                             </StackPanel>
-
-                                            <!-- 주변 미등록 피어인 경우: + 신청 -->
-                                            <Button Grid.Column="1"
-                                                    VerticalAlignment="Center"
-                                                    Content="{Binding FriendRequestButtonText}"
-                                                    IsEnabled="{Binding CanSendFriendRequest}"
-                                                    Padding="7,2"
-                                                    FontSize="10.5"
-                                                    Height="22"
-                                                    Command="{Binding DataContext.QuickSendFriendRequestCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
-                                                    CommandParameter="{Binding}"
-                                                    Visibility="{Binding CanShowFriendRequestButton, Converter={StaticResource BoolToVis}}" />
                                         </Grid>
                                         <DockPanel Margin="0,6,0,1"
                                                    Background="Transparent"
@@ -547,8 +533,7 @@
                     </ItemsControl>
                     </ScrollViewer>
 
-                    <!-- 주변/친구 없을 때 초미니 1줄 안내 -->
-                    <TextBlock Text="표시할 친구나 주변 펫이 없어요"
+                    <TextBlock Text="온라인 친구가 없어요"
                                FontSize="11"
                                Foreground="#FF9CA3AF"
                                HorizontalAlignment="Center"

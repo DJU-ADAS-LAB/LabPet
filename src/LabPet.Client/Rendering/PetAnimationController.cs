@@ -48,6 +48,8 @@ public sealed class PetAnimationController
 
     // 상호작용·수면·기상 반응 상태
     private const double WakeUpReactionDuration = 0.95;
+    private const double GameWinDuration = 1.35;
+    private const double GameLossDuration = 2.10;
     private const double SleepEyeClosedScale = 0.07;
 
     private double _petReactionTime;
@@ -55,6 +57,12 @@ public sealed class PetAnimationController
     private double _wakeUpReactionTime;
     private bool _isSleeping;
     private double _sleepWeight;
+    private bool _isGrabbed;
+    private double _grabWeight;
+    private double _grabPhase;
+    private bool _gameWon;
+    private double _gameReactionTime;
+    private PetTearEffect? _tearEffect;
 
     // 비트 펄스 및 타이핑 자세/교대 타건 상태
     private double _beatPulse;
@@ -95,9 +103,11 @@ public sealed class PetAnimationController
     public PetMotionClipKind CurrentMotionClip => _currentClip;
     public bool IsSleeping => _isSleeping;
     public bool IsWakingUp => _wakeUpReactionTime > 0.01;
+    internal bool IsCrying => _tearEffect?.IsVisible == true;
 
     internal bool HasInteractiveMotion =>
         _petReactionTime > 0 || _dizzyReactionTime > 0 || _wakeUpReactionTime > 0
+        || _isGrabbed || _grabWeight > 0 || _gameReactionTime > 0
         || (_sleepWeight > 0.01 && _sleepWeight < 0.99)
         || _typingStanceHoldTime > 0
         || _typingStanceWeight > 0.01 || Volatile.Read(ref _pendingPawTaps) > 0
@@ -105,7 +115,13 @@ public sealed class PetAnimationController
 
     public void AttachRig(PetRigHandle rig, string accentHex)
     {
+        ResetGameVisuals();
         _rig = rig;
+        _tearEffect = null;
+        if (_gameReactionTime > 0)
+        {
+            ApplyGameExpression();
+        }
         _speciesProfile = SpeciesMotionProfile.ForSpecies(rig.SpeciesId);
         _currentClip = PetMotionClipKind.Idle;
         _previousClip = PetMotionClipKind.Idle;
@@ -142,7 +158,12 @@ public sealed class PetAnimationController
 
     internal void DetachRig()
     {
+        ResetGameVisuals();
         _rig = null;
+        _tearEffect = null;
+        _gameReactionTime = 0;
+        _isGrabbed = false;
+        _grabWeight = 0;
         _particleStates = [];
         _wakeUpReactionTime = 0.0;
     }
@@ -162,6 +183,8 @@ public sealed class PetAnimationController
         {
             _wakeUpReactionTime = 0;
             _petReactionTime = _dizzyReactionTime = _typingStanceHoldTime = 0;
+            _gameReactionTime = 0;
+            ResetGameVisuals();
         }
         else
         {
@@ -190,6 +213,48 @@ public sealed class PetAnimationController
     public void TriggerDizzyReaction()
     {
         if (!_isSleeping && !IsWakingUp) _dizzyReactionTime = 1.4;
+    }
+
+    internal void SetGrabbed(bool grabbed)
+    {
+        if (grabbed && _grabWeight == 0)
+        {
+            _grabPhase = 0;
+        }
+        _isGrabbed = grabbed;
+    }
+
+    internal void TriggerGameReaction(bool won)
+    {
+        if (_isSleeping)
+        {
+            return;
+        }
+
+        _gameWon = won;
+        _gameReactionTime = won ? GameWinDuration : GameLossDuration;
+        _petReactionTime = _dizzyReactionTime = _wakeUpReactionTime = 0;
+        ApplyGameExpression();
+        if (won)
+        {
+            _tearEffect?.Update(0, 0);
+            EmitReactionStarBurst(count: 4);
+        }
+    }
+
+    private void ApplyGameExpression()
+    {
+        _rig?.SetReactionExpression(_gameWon ? "happy" : "sleepy");
+        if (!_gameWon)
+        {
+            _tearEffect ??= _rig?.CreateTearEffect?.Invoke();
+        }
+    }
+
+    private void ResetGameVisuals()
+    {
+        _rig?.SetReactionExpression(null);
+        _tearEffect?.Update(0, 0);
     }
 
     /// <summary>키보드 타이핑 시 앞발/팔/날개 두드리기 모션을 스레드 안전하게 요청한다.</summary>
@@ -265,7 +330,7 @@ public sealed class PetAnimationController
 
         // 키보드 타이핑 자세 및 좌/우 교대 타건
         var taps = Interlocked.Exchange(ref _pendingPawTaps, 0);
-        if (taps > 0 && !_isSleeping && !IsWakingUp)
+        if (taps > 0 && !_isSleeping && !IsWakingUp && !_isGrabbed)
         {
             _typingStanceHoldTime = 0.95;
             if ((_nextPawParity++ & 1) == 0)
@@ -296,7 +361,7 @@ public sealed class PetAnimationController
 
         if (rig.TypingKeyboardScale is not null)
         {
-            var kbScale = _isSleeping || stance < 0.01 ? 0.0 : stance;
+            var kbScale = _isSleeping || _isGrabbed || stance < 0.01 ? 0.0 : stance;
             rig.TypingKeyboardScale.ScaleX = kbScale;
             rig.TypingKeyboardScale.ScaleY = kbScale;
             rig.TypingKeyboardScale.ScaleZ = kbScale;
@@ -341,8 +406,9 @@ public sealed class PetAnimationController
         }
 
         // 수면 비중 보간 (잠들 때는 느긋하게, 깨어날 때는 재빠르게 전환)
-        var sleepTarget = _isSleeping ? 1.0 : 0.0;
-        var sleepSpeed = _isSleeping ? 2.8 : 14.0;
+        var targetSleeping = _isSleeping && !_isGrabbed;
+        var sleepTarget = targetSleeping ? 1.0 : 0.0;
+        var sleepSpeed = targetSleeping ? 2.8 : 14.0;
         _sleepWeight = Math.Clamp(
             _sleepWeight + (sleepTarget - _sleepWeight) * (1.0 - Math.Exp(-sleepSpeed * deltaSeconds)),
             0.0,
@@ -379,7 +445,16 @@ public sealed class PetAnimationController
         var poseDamp = 1.0 - Math.Exp(-14.0 * deltaSeconds);
         _smoothedPose = PetPose.Lerp(in _smoothedPose, in targetPose, poseDamp);
 
-        var activeStance = stance * awakeFactor;
+        _grabWeight = Math.Clamp(_grabWeight + deltaSeconds * (_isGrabbed ? 5.5 : -8.0), 0, 1);
+        if (_grabWeight > 0)
+        {
+            _grabPhase = (_grabPhase + deltaSeconds * 25.0) % (2 * Math.PI);
+        }
+        var grabWeight = PetMotionClips.SmoothStep(_grabWeight);
+        var grabSwing = Math.Sin(_grabPhase) * grabWeight;
+        var leftKick = Math.Max(0, grabSwing);
+        var rightKick = Math.Max(0, -grabSwing);
+        var activeStance = stance * awakeFactor * (1.0 - grabWeight);
         var p = _smoothedPose;
         var offsetX = p.BodyOffsetX * (1.0 - activeStance * 0.7);
         var offsetY = p.BodyOffsetY + anyTapWave * 0.03 * awakeFactor;
@@ -468,6 +543,46 @@ public sealed class PetAnimationController
             emissiveStrength = Math.Max(emissiveStrength, (1.0 - pWake) * 0.16);
         }
 
+        // 잡힌 동안 몸을 좌우로 비틀고 양쪽 앞발을 번갈아 걷어찬다.
+        offsetY += (0.11 + 0.045 * Math.Abs(Math.Cos(_grabPhase))) * grabWeight;
+        bodyRoll += grabSwing * 13.0;
+        bodyYawExtra += grabSwing * 11.0;
+        headRollExtra -= grabSwing * 6.0;
+
+        var gameArmLift = 0.0;
+        if (_gameReactionTime > 0)
+        {
+            _gameReactionTime = Math.Max(0, _gameReactionTime - deltaSeconds);
+            var duration = _gameWon ? GameWinDuration : GameLossDuration;
+            var elapsed = duration - _gameReactionTime;
+            var weight = Math.Min(1.0, elapsed * 8.0) * Math.Min(1.0, _gameReactionTime * 4.0);
+            if (_gameWon)
+            {
+                // 눈웃음을 유지하며 어깨를 들고 두 번 가볍게 뛰어오른다.
+                var hop = Math.Abs(Math.Sin(elapsed / duration * Math.PI * 2)) * weight;
+                offsetY += hop * 0.28;
+                scaleY += hop * 0.09;
+                headPitchExtra -= hop * 9.0;
+                gameArmLift = (weight + hop) * 15.0;
+            }
+            else
+            {
+                // 고개와 어깨를 떨구고 숨을 들이쉬듯 몸을 떨며 눈물이 떨어진다.
+                var sob = Math.Sin(elapsed * 19.0) * weight;
+                offsetY -= weight * 0.075 - sob * 0.018;
+                scaleY -= weight * 0.06;
+                headPitchExtra += weight * 13.0 + sob * 3.0;
+                headRollExtra += sob * 4.0;
+                gameArmLift = -weight * 12.0;
+                _tearEffect?.Update(elapsed, weight);
+            }
+
+            if (_gameReactionTime == 0)
+            {
+                ResetGameVisuals();
+            }
+        }
+
         // 귀 적용 (rig.json / 종별 기본 각도 + 깜짝 기상 귀 쫑긋)
         if (rig.LeftEarRotation is not null && rig.RightEarRotation is not null)
         {
@@ -493,19 +608,19 @@ public sealed class PetAnimationController
             var reachZ = proceduralStandingPuppy ? 0.30 : 0.25;
             var strikeHeight = proceduralStandingPuppy ? 0.12 : 0.14;
 
-            rig.LeftPawTranslate.OffsetY = activeStance * liftY + leftStrike * strikeHeight * awakeFactor + p.LeftPawY * (1.0 - activeStance);
-            rig.LeftPawTranslate.OffsetZ = activeStance * reachZ + p.LeftPawZ * (1.0 - activeStance);
-            rig.RightPawTranslate.OffsetY = activeStance * liftY + rightStrike * strikeHeight * awakeFactor + p.RightPawY * (1.0 - activeStance);
-            rig.RightPawTranslate.OffsetZ = activeStance * reachZ + p.RightPawZ * (1.0 - activeStance);
+            rig.LeftPawTranslate.OffsetY = activeStance * liftY + leftStrike * strikeHeight * awakeFactor + p.LeftPawY * (1.0 - activeStance) + leftKick * 0.16;
+            rig.LeftPawTranslate.OffsetZ = activeStance * reachZ + p.LeftPawZ * (1.0 - activeStance) + leftKick * 0.12;
+            rig.RightPawTranslate.OffsetY = activeStance * liftY + rightStrike * strikeHeight * awakeFactor + p.RightPawY * (1.0 - activeStance) + rightKick * 0.16;
+            rig.RightPawTranslate.OffsetZ = activeStance * reachZ + p.RightPawZ * (1.0 - activeStance) + rightKick * 0.12;
         }
 
         // 미니 팔/날개 (모션 클립 + 쓰다듬기/깜짝 기상 반응 + 타이핑 타건)
         if (rig.LeftArmRotation is not null && rig.RightArmRotation is not null)
         {
-            var reactionLift = _petReactionTime > 0 ? 18.0 * (_petReactionTime / 0.90) : 0.0;
+            var reactionLift = 18.0 * (_petReactionTime / 0.90) + gameArmLift + grabWeight * 16.0;
             var stanceInward = activeStance * 28.0;
-            rig.LeftArmRotation.Angle = p.LeftArmRoll * (1.0 - activeStance * 0.7) + reactionLift + stanceInward - leftStrike * 26.0 * awakeFactor + wakeArmBoost;
-            rig.RightArmRotation.Angle = p.RightArmRoll * (1.0 - activeStance * 0.7) - reactionLift - stanceInward + rightStrike * 26.0 * awakeFactor - wakeArmBoost;
+            rig.LeftArmRotation.Angle = p.LeftArmRoll * (1.0 - activeStance * 0.7) + reactionLift + stanceInward - leftStrike * 26.0 * awakeFactor + wakeArmBoost + leftKick * 24.0;
+            rig.RightArmRotation.Angle = p.RightArmRoll * (1.0 - activeStance * 0.7) - reactionLift - stanceInward + rightStrike * 26.0 * awakeFactor - wakeArmBoost - rightKick * 24.0;
         }
 
         if (rig.LeftArmPitch is not null && rig.RightArmPitch is not null)

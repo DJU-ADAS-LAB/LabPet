@@ -540,6 +540,11 @@ public partial class PetWindow : Window, IMessageBubbleTarget
         Win32WindowHelper.SetClickThrough(this, enable);
         if (enable)
         {
+            if (_isPointerPressed)
+            {
+                EndPetGrab();
+                PetViewport.ReleaseMouseCapture();
+            }
             ClosePetOverlays();
         }
     }
@@ -750,7 +755,7 @@ public partial class PetWindow : Window, IMessageBubbleTarget
     private void PetViewport_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
     {
         // 3D 히트 테스트로 실제 펫 메시 위를 눌렀는지 확인
-        if (!HitTestPetMesh(e.GetPosition(PetViewport)))
+        if (!HitTestPetMesh(e.GetPosition(PetViewport)) || !PetViewport.CaptureMouse())
         {
             return;
         }
@@ -765,7 +770,7 @@ public partial class PetWindow : Window, IMessageBubbleTarget
         _pressScreenPoint = PointToScreen(e.GetPosition(this));
         _lastScreenPoint = _pressScreenPoint;
 
-        PetViewport.CaptureMouse();
+        _animator.SetGrabbed(true);
         e.Handled = true;
     }
 
@@ -812,15 +817,10 @@ public partial class PetWindow : Window, IMessageBubbleTarget
             return;
         }
 
-        _isPointerPressed = false;
+        var wasDragging = _isDraggingWindow;
+        EndPetGrab();
         PetViewport.ReleaseMouseCapture();
-
-        if (_isDraggingWindow)
-        {
-            _isDraggingWindow = false;
-            SaveRestingPosition();
-        }
-        else
+        if (!wasDragging)
         {
             // 이동 거리 5px 이하: 쓰다듬기 3D 반응
             _animator.TriggerPetReaction();
@@ -828,6 +828,26 @@ public partial class PetWindow : Window, IMessageBubbleTarget
         }
 
         e.Handled = true;
+    }
+
+    private void PetViewport_LostMouseCapture(object sender, MouseEventArgs e)
+    {
+        if (_isPointerPressed && !PetViewport.IsMouseCaptured)
+        {
+            EndPetGrab();
+        }
+    }
+
+    private void EndPetGrab()
+    {
+        var wasDragging = _isDraggingWindow;
+        _isPointerPressed = false;
+        _isDraggingWindow = false;
+        _animator.SetGrabbed(false);
+        if (wasDragging)
+        {
+            SaveRestingPosition();
+        }
     }
 
     private void DetectRapidShake(double stepDxPixels)

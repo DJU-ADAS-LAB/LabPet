@@ -116,6 +116,7 @@ public partial class VisitorPetWindow : Window, IMessageBubbleTarget
         Loaded += (_, _) =>
         {
             UpdateNameplatePosition();
+            UpdateDismissButtonPosition();
             RepositionChatComposerPopup();
             RepositionBubblePopup();
         };
@@ -135,6 +136,7 @@ public partial class VisitorPetWindow : Window, IMessageBubbleTarget
         VisitorViewport.SizeChanged += (_, _) =>
         {
             UpdateNameplatePosition();
+            UpdateDismissButtonPosition();
             RepositionChatComposerPopup();
             RepositionBubblePopup();
             _onBubbleLayoutChanged?.Invoke();
@@ -274,6 +276,26 @@ public partial class VisitorPetWindow : Window, IMessageBubbleTarget
         }
     }
 
+    private void UpdateDismissButtonPosition()
+    {
+        var bounds = _currentRig?.BodyBounds ?? Rect3D.Empty;
+        if (bounds.IsEmpty || VisitorViewport.ActualWidth < DismissButton.Width
+            || VisitorViewport.ActualHeight < DismissButton.Height)
+        {
+            return;
+        }
+
+        var anchor = new Point3D(
+            bounds.X + bounds.SizeX * 0.88,
+            bounds.Y + bounds.SizeY * 0.86,
+            bounds.Z + bounds.SizeZ * 0.70);
+        if (VisitorPetVisual.TransformToAncestor(VisitorViewport).TryTransform(anchor, out var position))
+        {
+            Canvas.SetLeft(DismissButton, Math.Clamp(position.X, 0, VisitorViewport.ActualWidth - DismissButton.Width));
+            Canvas.SetTop(DismissButton, Math.Clamp(position.Y - DismissButton.Height, 0, VisitorViewport.ActualHeight - DismissButton.Height));
+        }
+    }
+
     public void PlaceBeside(Window hostWindow)
     {
         var workArea = GetLogicalWorkAreaFor(hostWindow);
@@ -333,15 +355,21 @@ public partial class VisitorPetWindow : Window, IMessageBubbleTarget
         VisitorPetVisual.Content = rig.RootModel;
         _nameplateAnchor = rig.NameplateAnchor;
         UpdateNameplatePosition();
+        if (IsLoaded)
+        {
+            UpdateDismissButtonPosition();
+        }
         _animator.AttachRig(rig, appearance.AccentColorHex);
     }
 
     private void ApplyFriendSleepState(bool isSleeping)
     {
         _animator.SetSleeping(isSleeping);
-        VisitorSleepBadge.Visibility = isSleeping ? Visibility.Visible : Visibility.Collapsed;
+        UpdateSleepBadgeVisibility();
     }
 
+    private void UpdateSleepBadgeVisibility()
+        => VisitorSleepBadge.Visibility = _animator.IsSleeping && !_isPointerPressed ? Visibility.Visible : Visibility.Collapsed;
     public bool TryShowFriendMessage(ReceivedFriendMessage message)
         => ShowChatMessage(message.Text, DefaultChatMessageDurationMs);
 
@@ -711,7 +739,7 @@ public partial class VisitorPetWindow : Window, IMessageBubbleTarget
 
     private void VisitorViewport_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
     {
-        if (!HitTestVisitorMesh(e.GetPosition(VisitorViewport)))
+        if (!HitTestVisitorMesh(e.GetPosition(VisitorViewport)) || !VisitorViewport.CaptureMouse())
         {
             return;
         }
@@ -721,7 +749,8 @@ public partial class VisitorPetWindow : Window, IMessageBubbleTarget
         _isDraggingWindow = false;
         _pressScreenPoint = PointToScreen(e.GetPosition(this));
         _lastScreenPoint = _pressScreenPoint;
-        VisitorViewport.CaptureMouse();
+        _animator.SetGrabbed(true);
+        UpdateSleepBadgeVisibility();
         e.Handled = true;
     }
 
@@ -760,20 +789,34 @@ public partial class VisitorPetWindow : Window, IMessageBubbleTarget
             return;
         }
 
-        _isPointerPressed = false;
+        var wasDragging = _isDraggingWindow;
+        var wasComposerOpen = _wasComposerOpenOnMouseDown;
+        EndVisitorGrab();
         VisitorViewport.ReleaseMouseCapture();
-
-        if (_isDraggingWindow)
+        if (!wasDragging)
         {
-            _isDraggingWindow = false;
-        }
-        else
-        {
-            HandleVisitorClick(_wasComposerOpenOnMouseDown);
+            HandleVisitorClick(wasComposerOpen);
         }
 
-        _wasComposerOpenOnMouseDown = false;
         e.Handled = true;
+    }
+
+    private void VisitorViewport_LostMouseCapture(object sender, MouseEventArgs e)
+    {
+        if (_isPointerPressed && !VisitorViewport.IsMouseCaptured)
+        {
+            EndVisitorGrab();
+        }
+    }
+
+    private void EndVisitorGrab()
+    {
+        _isPointerPressed = false;
+        _isDraggingWindow = false;
+        _wasComposerOpenOnMouseDown = false;
+        _animator.SetGrabbed(false);
+        UpdateSleepBadgeVisibility();
+        ScheduleComposerClose();
     }
 
     internal void HandleVisitorClick(bool wasComposerOpen = false)

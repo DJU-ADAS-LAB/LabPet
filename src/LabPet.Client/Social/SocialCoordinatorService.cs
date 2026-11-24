@@ -263,12 +263,6 @@ public sealed class SocialCoordinatorService : IAsyncDisposable
         }
     }
 
-    public bool IsOutgoingFriendRequestSending(string petId)
-        => GetOutgoingFriendRequestState(petId) == OutgoingFriendRequestState.Sending;
-
-    public bool IsOutgoingFriendRequestPending(string petId)
-        => GetOutgoingFriendRequestState(petId) == OutgoingFriendRequestState.Pending;
-
     public async Task<bool> SendFriendRequestAsync(PeerSnapshot peer)
         => (await SendFriendRequestDetailedAsync(peer).ConfigureAwait(false)).Succeeded;
 

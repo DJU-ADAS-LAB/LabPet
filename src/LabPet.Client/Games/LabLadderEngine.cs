@@ -580,9 +580,11 @@ public static partial class LabLadderEngine
 
     internal static bool IsJackpot(string prize) => prize.Contains("잭팟", StringComparison.OrdinalIgnoreCase);
 
+    internal static bool IsLosingPrize(string prize) => string.Equals(prize.Trim(), "꽝", StringComparison.Ordinal);
+
     private static bool IsFillerPrize(string prize)
         => string.Equals(prize.Trim(), "통과", StringComparison.Ordinal)
-            || string.Equals(prize.Trim(), "꽝", StringComparison.Ordinal);
+            || IsLosingPrize(prize);
 }
 
 public sealed class LadderMemberStateDto
