@@ -166,7 +166,7 @@ public partial class PetWindow : Window, IMessageBubbleTarget
 
         _overlayCloseTimer = new DispatcherTimer
         {
-            Interval = TimeSpan.FromMilliseconds(360)
+            Interval = QuickMessageInputBehavior.DismissDelay
         };
         _overlayCloseTimer.Tick += OnOverlayCloseTick;
 
@@ -444,8 +444,8 @@ public partial class PetWindow : Window, IMessageBubbleTarget
             return;
         }
 
-        if (!PetViewport.IsMouseOver && !FriendOverlayCard.IsMouseOver && !PetControls.IsMouseOver
-            && !FriendOverlayCard.IsMouseCaptureWithin && !PetControls.IsMouseCaptureWithin)
+        if (!PetViewport.IsMouseOver && !QuickMessageInputBehavior.IsActive(FriendOverlayCard)
+            && !QuickMessageInputBehavior.IsActive(PetControls))
         {
             ClosePetOverlays();
             return;
@@ -453,7 +453,7 @@ public partial class PetWindow : Window, IMessageBubbleTarget
 
         var editor = _messageEditorToClose;
         _messageEditorToClose = null;
-        if (editor is { IsMouseOver: false, IsMouseCaptureWithin: false, IsKeyboardFocusWithin: false, DataContext: QuickOverlayEntry target }
+        if (editor is { DataContext: QuickOverlayEntry target } && !QuickMessageInputBehavior.IsActive(editor)
             && ReferenceEquals(_viewModel.QuickMessageTarget, target))
         {
             _viewModel.QuickMessageTarget = null;
@@ -512,21 +512,14 @@ public partial class PetWindow : Window, IMessageBubbleTarget
             {
                 if (FriendOverlayPopup.IsOpen && input.IsVisible)
                 {
-                    FocusQuickMessageInput(input);
+                    QuickMessageInputBehavior.Focus(input);
                 }
             });
         }
     }
 
     private void QuickMessageInput_PreviewMouseDown(object sender, MouseButtonEventArgs e)
-        => FocusQuickMessageInput((TextBox)sender);
-
-    private static void FocusQuickMessageInput(TextBox input)
-    {
-        Win32WindowHelper.ActivatePopupForKeyboardInput(input);
-        input.Focus();
-        Keyboard.Focus(input);
-    }
+        => QuickMessageInputBehavior.Focus((TextBox)sender);
 
     private void QuickMessageInput_KeyDown(object sender, KeyEventArgs e)
     {

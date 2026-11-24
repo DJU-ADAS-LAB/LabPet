@@ -183,6 +183,14 @@ internal static class VisitorBubblePlacementCalculator
     internal static Point ToRelativePopupOffset(Point chosenScreenTopLeft, Rect targetPhysicalBounds)
         => new(chosenScreenTopLeft.X - targetPhysicalBounds.Left, chosenScreenTopLeft.Y - targetPhysicalBounds.Top);
 
+    internal static double CalculateTailOffset(
+        double targetX, double originalTipX, double cardLeft, double cardWidth, double tailWidth)
+    {
+        const double cornerInset = 4.0;
+        var inset = Math.Min(cardWidth / 2, tailWidth / 2 + cornerInset);
+        return Math.Clamp(targetX, cardLeft + inset, cardLeft + cardWidth - inset) - originalTipX;
+    }
+
     internal static Point ClampToWorkArea(Point topLeft, Size size, Rect workArea)
     {
         var maxLeft = workArea.Right - size.Width;

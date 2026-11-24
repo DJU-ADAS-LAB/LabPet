@@ -230,7 +230,7 @@ public partial class FriendsPageView : UserControl, IHubPageLifecycle, IDisposab
         _currentRig = rig;
         FriendPreviewPet.Content = rig.RootModel;
         _previewAnimator.AttachRig(rig, appearance.AccentColorHex);
-        _previewAnimator.SetSleeping(selected.IsSleeping);
+        _previewAnimator.SetSleeping(selected.ShowsSleepPose);
     }
 
     private void ClearFriendPreviewMesh()
@@ -253,9 +253,10 @@ public partial class FriendsPageView : UserControl, IHubPageLifecycle, IDisposab
             return;
         }
 
-        _previewAnimator.SetSleeping(_viewModel.SelectedFriend.IsSleeping);
+        var showsSleepPose = _viewModel.SelectedFriend.ShowsSleepPose;
+        _previewAnimator.SetSleeping(showsSleepPose);
 
-        if (!_isRotating)
+        if (!_isRotating && !showsSleepPose)
         {
             _turntableYaw.Angle = (_turntableYaw.Angle + dt * 22.0) % 360.0;
         }

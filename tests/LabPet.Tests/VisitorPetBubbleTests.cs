@@ -2,6 +2,8 @@ using System.IO;
 using System.Net;
 using System.Net.Sockets;
 using System.Windows;
+using System.Windows.Controls;
+using Polygon = System.Windows.Shapes.Polygon;
 using System.Windows.Threading;
 using LabPet.Client.Audio;
 using LabPet.Client.Network;
@@ -393,7 +395,7 @@ public sealed class VisitorPetBubbleTests
     }
 
     [Fact]
-    public async Task VisitorPetWindow_ClickOpensChatComposer_SendsChatMessageWithoutPetting_AndNeverOverlapsBubbles()
+    public async Task VisitorPetWindow_UsesSleepPose_AlignsBubbleTail_AndKeepsComposerAfterSend()
     {
         var tempDir = Path.Combine(Path.GetTempPath(), "LabPet_VisitorComposerTest_" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(tempDir);
@@ -438,8 +440,15 @@ public sealed class VisitorPetBubbleTests
             ]);
 
             var receivedBubbleTcs = new TaskCompletionSource<BubbleMessageReceivedEventArgs>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var secondBubbleTcs = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
             var petInteractionCount = 0;
-            peerTransport.BubbleMessageReceived += (_, e) => receivedBubbleTcs.TrySetResult(e);
+            peerTransport.BubbleMessageReceived += (_, e) =>
+            {
+                if (!receivedBubbleTcs.TrySetResult(e))
+                {
+                    secondBubbleTcs.TrySetResult(e.Text);
+                }
+            };
             peerTransport.PetInteractionReceived += (_, _) => Interlocked.Increment(ref petInteractionCount);
 
             var meshFactory = new ProceduralPetMeshFactory();
@@ -464,6 +473,29 @@ public sealed class VisitorPetBubbleTests
 
                     window.Show();
                     await FlushUiAsync();
+                    Assert.True(window.ShowsSleepingPose);
+
+                    var viewport = Assert.IsType<Viewport3D>(window.FindName("VisitorViewport"));
+                    var sleepBadge = Assert.IsType<Viewbox>(window.FindName("VisitorSleepBadge"));
+                    var sleepOverlay = Assert.IsType<SleepZzzOverlay>(Assert.IsType<Grid>(sleepBadge.Child).Children[0]);
+                    Assert.Equal(HorizontalAlignment.Right, sleepOverlay.HorizontalAlignment);
+                    Assert.True(sleepOverlay.IsAnimating);
+
+                    hostTransport.HandleDiscoveryHello(new DiscoveryHelloPacket
+                    {
+                        PetId = peerProfile.PetId, TcpPort = peerTransport.BoundTcpPort
+                    }, IPAddress.Loopback.ToString(), CancellationToken.None);
+                    await WaitUntilAsync(() => !window.ShowsSleepingPose);
+                    Assert.False(sleepOverlay.IsAnimating);
+
+                    Assert.True(window.TryShowFriendMessage(CreateMessage(friend.PetId, "정렬 확인")));
+                    await FlushUiAsync();
+                    var tail = Assert.IsType<Polygon>(window.FindName("VisitorBubbleTail"));
+                    Assert.True(tail.IsVisible);
+                    var shape = tail.RenderedGeometry.Bounds;
+                    var tailTip = tail.PointToScreen(new Point(shape.Left + shape.Width / 2, shape.Bottom));
+                    var petCenter = viewport.PointToScreen(new Point(viewport.ActualWidth / 2, 0));
+                    Assert.InRange(Math.Abs(tailTip.X - petCenter.X), 0, 1);
 
                     // 클릭 시 쓰다듬기 대신 채팅 입력창이 열려야 한다.
                     window.HandleVisitorClick();
@@ -482,14 +514,24 @@ public sealed class VisitorPetBubbleTests
                         window.CurrentBubblePhysicalBounds.IntersectsWith(window.CurrentComposerPhysicalBounds),
                         $"방문 펫 말풍선과 채팅 입력창이 겹침: {window.CurrentBubblePhysicalBounds} vs {window.CurrentComposerPhysicalBounds}");
 
-                    // 메시지 입력 및 전송 시 채팅 패킷만 전송되고 입력창은 닫힌다.
+                    // 성공하면 발송한 문장만 비우고 같은 입력창에서 다시 보낼 수 있다.
                     window.ChatComposerInputText = "방문 펫에서 바로 보낸 메시지!";
-                    Assert.True(await window.SendVisitorChatMessageAsync());
-                    await FlushUiAsync();
+                    var sendButton = Assert.IsType<Button>(window.FindName("SendVisitorChatButton"));
+                    sendButton.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
 
                     var delivered = await receivedBubbleTcs.Task.WaitAsync(TimeSpan.FromSeconds(5));
+                    await WaitUntilAsync(() => window.ChatComposerInputText.Length == 0);
                     Assert.Equal("방문 펫에서 바로 보낸 메시지!", delivered.Text);
                     Assert.Equal(0, Volatile.Read(ref petInteractionCount));
+                    Assert.True(window.IsChatComposerOpen);
+                    Assert.Empty(window.ChatComposerInputText);
+
+                    window.ChatComposerInputText = "이어 보내는 메시지";
+                    Assert.True(await window.SendVisitorChatMessageAsync());
+                    Assert.Equal("이어 보내는 메시지", await secondBubbleTcs.Task.WaitAsync(TimeSpan.FromSeconds(5)));
+                    Assert.True(window.IsChatComposerOpen);
+
+                    window.HandleVisitorClick();
                     Assert.False(window.IsChatComposerOpen);
                 }
                 finally

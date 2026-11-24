@@ -8,17 +8,10 @@ namespace LabPet.Client.Views;
 /// <summary>
 /// 펫이 수면(IsSleeping) 상태일 때 머리 위로 'z -> Z -> Z' 3단 글자 방울이
 /// 시차를 두고 살랑거리며 떠올랐다가 사라지는 저부하 WPF 애니메이션 오버레이.
-/// Visibility가 Visible일 때만 Storyboard가 동작하고, 숨겨지면 즉시 정지한다.
+/// 실제 화면에 보일 때만 애니메이션을 재생한다.
 /// </summary>
 public sealed class SleepZzzOverlay : Grid
 {
-    public static readonly DependencyProperty FlipHorizontalProperty =
-        DependencyProperty.Register(
-            nameof(FlipHorizontal),
-            typeof(bool),
-            typeof(SleepZzzOverlay),
-            new PropertyMetadata(false, OnFlipHorizontalChanged));
-
     private static readonly Brush BubbleBackgroundBrush = CreateFrozenBrush(Color.FromArgb(0xEE, 0xED, 0xF2, 0xFF));
     private static readonly Brush BubbleBorderBrush = CreateFrozenBrush(Color.FromArgb(0xFF, 0xC7, 0xD2, 0xFE));
     private static readonly Brush BubbleTextBrush = CreateFrozenBrush(Color.FromArgb(0xFF, 0x4F, 0x46, 0xE5));
@@ -30,15 +23,6 @@ public sealed class SleepZzzOverlay : Grid
     private Storyboard? _storyboard;
 
     /// <summary>
-    /// true이면 왼쪽 상단 배치용으로 좌우 이동 궤적을 반전한다.
-    /// </summary>
-    public bool FlipHorizontal
-    {
-        get => (bool)GetValue(FlipHorizontalProperty);
-        set => SetValue(FlipHorizontalProperty, value);
-    }
-
-    /// <summary>
     /// 현재 ZZZ 플로팅 애니메이션이 재생 중인지 여부(단위 테스트 및 상태 확인용).
     /// </summary>
     public bool IsAnimating { get; private set; }
@@ -47,13 +31,6 @@ public sealed class SleepZzzOverlay : Grid
     /// 생성된 Z 방울 개수 (항상 3: z, Z, Z).
     /// </summary>
     public int BubbleCount => _bubbles.Length;
-
-    static SleepZzzOverlay()
-    {
-        VisibilityProperty.OverrideMetadata(
-            typeof(SleepZzzOverlay),
-            new FrameworkPropertyMetadata(Visibility.Visible, (d, _) => ((SleepZzzOverlay)d).SyncAnimationState()));
-    }
 
     public SleepZzzOverlay()
     {
@@ -64,9 +41,7 @@ public sealed class SleepZzzOverlay : Grid
 
         BuildVisualBubbles();
         RebuildStoryboard();
-        SyncAnimationState();
-
-        IsVisibleChanged += OnIsVisibleChanged;
+        IsVisibleChanged += (_, _) => SyncAnimationState();
         Loaded += (_, _) => SyncAnimationState();
         Unloaded += (_, _) => StopAnimation();
     }
@@ -76,20 +51,6 @@ public sealed class SleepZzzOverlay : Grid
         var brush = new SolidColorBrush(color);
         brush.Freeze();
         return brush;
-    }
-
-    private static void OnFlipHorizontalChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
-    {
-        if (d is SleepZzzOverlay overlay)
-        {
-            var wasAnimating = overlay.IsAnimating;
-            overlay.StopAnimation();
-            overlay.RebuildStoryboard();
-            if (wasAnimating || overlay.IsVisible)
-            {
-                overlay.SyncAnimationState();
-            }
-        }
     }
 
     private void BuildVisualBubbles()
@@ -155,7 +116,6 @@ public sealed class SleepZzzOverlay : Grid
             RepeatBehavior = RepeatBehavior.Forever
         };
 
-        var dir = FlipHorizontal ? -1.0 : 1.0;
         const double cycleSeconds = 2.4;
         ReadOnlySpan<double> delays = [0.0, 0.8, 1.6];
         ReadOnlySpan<double> baseAngles = [-9.0, 7.0, -11.0];
@@ -203,15 +163,14 @@ public sealed class SleepZzzOverlay : Grid
                 Duration = TimeSpan.FromSeconds(cycleSeconds)
             };
             moveXAnim.KeyFrames.Add(new LinearDoubleKeyFrame(0.0, KeyTime.FromTimeSpan(TimeSpan.Zero)));
-            moveXAnim.KeyFrames.Add(new EasingDoubleKeyFrame(5.5 * dir, KeyTime.FromTimeSpan(TimeSpan.FromSeconds(0.75)), new SineEase { EasingMode = EasingMode.EaseInOut }));
-            moveXAnim.KeyFrames.Add(new EasingDoubleKeyFrame(1.5 * dir, KeyTime.FromTimeSpan(TimeSpan.FromSeconds(1.50)), new SineEase { EasingMode = EasingMode.EaseInOut }));
-            moveXAnim.KeyFrames.Add(new EasingDoubleKeyFrame((9.0 + i * 2.0) * dir, KeyTime.FromTimeSpan(TimeSpan.FromSeconds(2.25)), new SineEase { EasingMode = EasingMode.EaseOut }));
-            moveXAnim.KeyFrames.Add(new LinearDoubleKeyFrame((9.0 + i * 2.0) * dir, KeyTime.FromTimeSpan(TimeSpan.FromSeconds(cycleSeconds))));
+            var endX = 8.0 + i * 1.5;
+            moveXAnim.KeyFrames.Add(new EasingDoubleKeyFrame(endX, KeyTime.FromTimeSpan(TimeSpan.FromSeconds(2.25)), new SineEase { EasingMode = EasingMode.EaseInOut }));
+            moveXAnim.KeyFrames.Add(new LinearDoubleKeyFrame(endX, KeyTime.FromTimeSpan(TimeSpan.FromSeconds(cycleSeconds))));
             Storyboard.SetTarget(moveXAnim, translate);
             Storyboard.SetTargetProperty(moveXAnim, new PropertyPath(TranslateTransform.XProperty));
             sb.Children.Add(moveXAnim);
 
-            // 4) 크기 성장 (ScaleX / ScaleY: 0.48 -> 1.08)
+            // 4) 작은 방울에서 시작해 일정한 속도로 커진다.
             foreach (var prop in new[] { ScaleTransform.ScaleXProperty, ScaleTransform.ScaleYProperty })
             {
                 var scaleAnim = new DoubleAnimationUsingKeyFrames
@@ -220,8 +179,8 @@ public sealed class SleepZzzOverlay : Grid
                     Duration = TimeSpan.FromSeconds(cycleSeconds)
                 };
                 scaleAnim.KeyFrames.Add(new LinearDoubleKeyFrame(0.48, KeyTime.FromTimeSpan(TimeSpan.Zero)));
-                scaleAnim.KeyFrames.Add(new EasingDoubleKeyFrame(1.0, KeyTime.FromTimeSpan(TimeSpan.FromSeconds(1.10)), new BackEase { EasingMode = EasingMode.EaseOut, Amplitude = 0.25 }));
-                scaleAnim.KeyFrames.Add(new LinearDoubleKeyFrame(1.10, KeyTime.FromTimeSpan(TimeSpan.FromSeconds(2.25))));
+                scaleAnim.KeyFrames.Add(new EasingDoubleKeyFrame(1.0, KeyTime.FromTimeSpan(TimeSpan.FromSeconds(1.25)), new SineEase { EasingMode = EasingMode.EaseOut }));
+                scaleAnim.KeyFrames.Add(new LinearDoubleKeyFrame(1.04, KeyTime.FromTimeSpan(TimeSpan.FromSeconds(2.25))));
                 scaleAnim.KeyFrames.Add(new LinearDoubleKeyFrame(0.48, KeyTime.FromTimeSpan(TimeSpan.FromSeconds(cycleSeconds))));
                 Storyboard.SetTarget(scaleAnim, scale);
                 Storyboard.SetTargetProperty(scaleAnim, new PropertyPath(prop));
@@ -229,7 +188,7 @@ public sealed class SleepZzzOverlay : Grid
             }
 
             // 5) 살짝 기울어지며 흔들리는 각도 (RotateTransform.Angle)
-            var baseAngle = baseAngles[i] * dir;
+            var baseAngle = baseAngles[i];
             var rotAnim = new DoubleAnimationUsingKeyFrames
             {
                 BeginTime = delay,
@@ -247,12 +206,9 @@ public sealed class SleepZzzOverlay : Grid
         _storyboard = sb;
     }
 
-    private void OnIsVisibleChanged(object sender, DependencyPropertyChangedEventArgs e)
-        => SyncAnimationState();
-
-    public void SyncAnimationState()
+    private void SyncAnimationState()
     {
-        if (Visibility == Visibility.Visible)
+        if (IsLoaded && IsVisible)
         {
             StartAnimation();
         }
@@ -262,7 +218,7 @@ public sealed class SleepZzzOverlay : Grid
         }
     }
 
-    public void StartAnimation()
+    private void StartAnimation()
     {
         if (IsAnimating || _storyboard is null)
         {
@@ -273,7 +229,7 @@ public sealed class SleepZzzOverlay : Grid
         _storyboard.Begin(this, isControllable: true);
     }
 
-    public void StopAnimation()
+    private void StopAnimation()
     {
         if (!IsAnimating || _storyboard is null)
         {
@@ -281,7 +237,7 @@ public sealed class SleepZzzOverlay : Grid
         }
 
         IsAnimating = false;
-        _storyboard.Stop(this);
+        _storyboard.Remove(this);
         foreach (var bubble in _bubbles)
         {
             bubble.Opacity = 0.0;

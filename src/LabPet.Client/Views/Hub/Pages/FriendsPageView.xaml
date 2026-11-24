@@ -191,8 +191,8 @@
                                                     Padding="5,1"
                                                     Margin="6,0,0,0"
                                                     VerticalAlignment="Center"
-                                                    Visibility="{Binding IsSleeping, Converter={StaticResource HubBoolToVis}}">
-                                                <TextBlock Text="zzz" FontSize="10" FontWeight="Bold" Foreground="#FF4F46E5" />
+                                                    Visibility="{Binding ShowsSleepPose, Converter={StaticResource HubBoolToVis}}">
+                                                <views:MiniSleepZzzIndicator />
                                             </Border>
                                         </StackPanel>
                                     </DockPanel>
@@ -257,10 +257,11 @@
                                     <ModelVisual3D x:Name="FriendPreviewPet" />
                                 </Viewport3D>
 
-                                <views:SleepZzzOverlay HorizontalAlignment="Right"
-                                                       VerticalAlignment="Top"
-                                                       Margin="0,8,20,0"
-                                                       Visibility="{Binding SelectedFriend.IsSleeping, FallbackValue=Collapsed, Converter={StaticResource HubBoolToVis}}" />
+                                <Grid Width="{Binding Width, ElementName=FriendPreviewViewport}"
+                                      HorizontalAlignment="Center" IsHitTestVisible="False"
+                                      Visibility="{Binding SelectedFriend.ShowsSleepPose, FallbackValue=Collapsed, Converter={StaticResource HubBoolToVis}}">
+                                    <views:SleepZzzOverlay Style="{StaticResource PetSleepBadgeStyle}" />
+                                </Grid>
 
                                 <TextBlock Text="왼쪽 목록에서 친구를 선택하면 3D 외형을 미리 볼 수 있습니다"
                                            Foreground="#FFCBD5E1"

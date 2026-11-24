@@ -69,6 +69,7 @@ public sealed class FriendListItemViewModel
     public bool IsOnline { get; }
     public bool IsMusicActive { get; }
     public bool IsSleeping { get; }
+    public bool ShowsSleepPose => IsSleeping || !IsOnline;
     public bool IsFollowingMusic { get; }
     public bool IsVisitingDesktop { get; }
     public bool RequiresUpdate { get; }

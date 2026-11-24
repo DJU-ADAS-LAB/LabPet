@@ -812,6 +812,15 @@ public sealed class SocialCoordinatorTests : IAsyncLifetime
     public async Task LocalSleepState_SyncsPeerSnapshotAndShowsZzzInFriendAndOverlayStatus()
     {
         var guestFriend = Assert.Single(_host.Friends);
+        var petVm = new PetWindowViewModel(_store, _host);
+        petVm.RefreshQuickOverlayEntries();
+        var offlineOverlayRow = Assert.Single(petVm.QuickOverlayEntries);
+        Assert.False(offlineOverlayRow.IsOnline);
+        Assert.True(offlineOverlayRow.HasSleepBadge);
+        Assert.False(offlineOverlayRow.CanInteract);
+        Assert.False(offlineOverlayRow.CanFollowMusic);
+        Assert.Equal("오프라인", offlineOverlayRow.StatusTooltip);
+        Assert.True(new FriendListItemViewModel(guestFriend, null, false, false).ShowsSleepPose);
         var sleepObservedTcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
         var wakeObservedTcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
 
@@ -874,9 +883,11 @@ public sealed class SocialCoordinatorTests : IAsyncLifetime
             var peerVm = new PeerListItemViewModel(sleepingPeer);
             Assert.True(peerVm.IsSleeping);
 
-            var petVm = new PetWindowViewModel(_store, _host);
             petVm.RefreshQuickOverlayEntries();
             var overlayRow = Assert.Single(petVm.QuickOverlayEntries);
+            Assert.Same(offlineOverlayRow, overlayRow);
+            Assert.True(overlayRow.IsOnline);
+            Assert.True(overlayRow.CanInteract);
             Assert.True(overlayRow.IsSleeping);
             Assert.True(overlayRow.HasSleepBadge);
 
@@ -903,6 +914,31 @@ public sealed class SocialCoordinatorTests : IAsyncLifetime
             var awakeOverlayRow = Assert.Single(petVm.QuickOverlayEntries);
             Assert.False(awakeOverlayRow.IsSleeping);
             Assert.False(awakeOverlayRow.HasSleepBadge);
+
+            // 마지막 인증 프레즌스가 만료되면 같은 행을 오프라인 수면 표시로 되돌린다.
+            awakePeer.LastSeenUtc = DateTimeOffset.MinValue;
+            var offlineObserved = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            void ObserveOffline(object? sender, EventArgs args)
+            {
+                if (_host.DiscoveredPeers.All(peer => peer.PetId != guestFriend.PetId))
+                {
+                    offlineObserved.TrySetResult();
+                }
+            }
+            _host.StateChanged += ObserveOffline;
+            try
+            {
+                ObserveOffline(null, EventArgs.Empty);
+                await offlineObserved.Task.WaitAsync(TimeSpan.FromSeconds(5));
+                petVm.RefreshQuickOverlayEntries();
+                Assert.Same(awakeOverlayRow, Assert.Single(petVm.QuickOverlayEntries));
+                Assert.False(awakeOverlayRow.IsOnline);
+                Assert.True(awakeOverlayRow.HasSleepBadge);
+            }
+            finally
+            {
+                _host.StateChanged -= ObserveOffline;
+            }
         }
         finally
         {

@@ -361,13 +361,14 @@
         </Viewport3D>
 
         <!-- 5분 무입력 수면 상태 플로팅 ZZZ 방울 애니메이션 (Viewport 위에 겹치되 클릭을 방해하지 않음) -->
-        <views:SleepZzzOverlay x:Name="PetSleepZzzOverlay"
-                               Grid.Row="0"
-                               HorizontalAlignment="Right"
-                               VerticalAlignment="Top"
-                               Margin="0,4,10,0"
-                               Opacity="{Binding PetOpacity}"
-                               Visibility="{Binding IsSleeping, Converter={StaticResource BoolToVis}}" />
+        <Viewbox Grid.Row="0" Width="{Binding Width, ElementName=PetViewport}"
+                 HorizontalAlignment="Center" VerticalAlignment="Top" IsHitTestVisible="False"
+                 Opacity="{Binding PetOpacity}"
+                 Visibility="{Binding IsSleeping, Converter={StaticResource BoolToVis}}">
+            <Grid Width="214" Height="90">
+                <views:SleepZzzOverlay Style="{StaticResource PetSleepBadgeStyle}" />
+            </Grid>
+        </Viewbox>
 
         <!-- 마우스 오버레이 미니멀 주변 친구 퀵 팝업 -->
         <Popup x:Name="FriendOverlayPopup"
@@ -406,7 +407,8 @@
                                 Height="20" />
                     </DockPanel>
 
-                    <!-- 온라인 친구 · 주변 피어 초미니 리스트 -->
+                    <!-- 친구와 주변 피어 목록은 고정 높이를 넘으면 스크롤한다. -->
+                    <ScrollViewer MaxHeight="224" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
                     <ItemsControl ItemsSource="{Binding QuickOverlayEntries}">
                         <ItemsControl.ItemTemplate>
                             <DataTemplate>
@@ -429,12 +431,15 @@
                                                     <ColumnDefinition Width="*" />
                                                 </Grid.ColumnDefinitions>
 
-                                                <!-- 왼쪽 고정 상태 슬롯: 깨어 있으면 점, 수면 중이면 미니 대각선 zzz 애니메이션 -->
+                                                <!-- 깨어 있으면 상태 점, 수면 중이거나 오프라인이면 zzz를 표시한다. -->
                                                 <Grid Grid.Column="0"
-                                                      Width="14"
-                                                      Height="14"
-                                                      Margin="0,0,5,0"
-                                                      VerticalAlignment="Center">
+                                                      Width="{x:Static views:MiniSleepZzzIndicator.SlotWidth}"
+                                                      Height="{x:Static views:MiniSleepZzzIndicator.SlotHeight}"
+                                                      Margin="0,0,4,0"
+                                                      VerticalAlignment="Center"
+                                                      Background="Transparent"
+                                                      ToolTip="{Binding StatusTooltip}"
+                                                      AutomationProperties.Name="{Binding StatusTooltip}">
                                                     <Ellipse Width="6"
                                                              Height="6"
                                                              Fill="{Binding StatusDotBrush}"
@@ -472,12 +477,14 @@
                                                         Visibility="{Binding IsFriend, Converter={StaticResource BoolToVis}}">
                                                 <Button Content="💬"
                                                         ToolTip="빠른 메시지"
+                                                        IsEnabled="{Binding CanInteract}"
                                                         Style="{StaticResource MiniActionIconButton}"
                                                         Command="{Binding DataContext.OpenQuickMessageCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
                                                         CommandParameter="{Binding}"
                                                         Margin="0,0,3,0" />
                                                 <Button Content="👋"
                                                         ToolTip="쓰다듬기"
+                                                        IsEnabled="{Binding CanInteract}"
                                                         Style="{StaticResource MiniActionIconButton}"
                                                         Command="{Binding DataContext.QuickPetFriendCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
                                                         CommandParameter="{Binding}"
@@ -538,9 +545,10 @@
                             </DataTemplate>
                         </ItemsControl.ItemTemplate>
                     </ItemsControl>
+                    </ScrollViewer>
 
                     <!-- 주변/친구 없을 때 초미니 1줄 안내 -->
-                    <TextBlock Text="주변에 온라인 친구가 없어요"
+                    <TextBlock Text="표시할 친구나 주변 펫이 없어요"
                                FontSize="11"
                                Foreground="#FF9CA3AF"
                                HorizontalAlignment="Center"

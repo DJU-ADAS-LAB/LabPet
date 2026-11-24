@@ -1,5 +1,7 @@
 using System.Runtime.CompilerServices;
 using System.Runtime.ExceptionServices;
+using System.Windows;
+using System.Windows.Controls;
 using LabPet.Client.Interop;
 using LabPet.Client.Rendering;
 using LabPet.Shared.Models;
@@ -258,49 +260,60 @@ public sealed class PetAnimationAndEffectTests
     }
 
     [Fact]
-    public void SleepZzzOverlay_StartsAndStopsFloatingAnimationWithVisibility()
+    public Task SleepZzzOverlay_AnimatesOnlyWhileItsHostIsVisible()
     {
-        RunOnSta(() =>
+        return WpfTestHost.RunAsync(async () =>
         {
-            var overlay = new LabPet.Client.Views.SleepZzzOverlay
+            var overlay = new LabPet.Client.Views.SleepZzzOverlay();
+            var host = new Grid { Children = { overlay } };
+            var window = new Window { Content = host, ShowActivated = false, ShowInTaskbar = false };
+            try
             {
-                Visibility = System.Windows.Visibility.Collapsed
-            };
+                Assert.Equal(3, overlay.BubbleCount);
+                Assert.False(overlay.IsAnimating);
+                window.Show();
+                await WpfTestHost.FlushAsync();
+                Assert.True(overlay.IsAnimating);
 
-            Assert.Equal(3, overlay.BubbleCount);
-            Assert.False(overlay.IsAnimating);
-
-            overlay.Visibility = System.Windows.Visibility.Visible;
-            Assert.True(overlay.IsAnimating);
-
-            overlay.FlipHorizontal = true;
-            Assert.True(overlay.IsAnimating);
-
-            overlay.Visibility = System.Windows.Visibility.Collapsed;
-            Assert.False(overlay.IsAnimating);
+                host.Visibility = Visibility.Collapsed;
+                Assert.False(overlay.IsAnimating);
+                host.Visibility = Visibility.Visible;
+                Assert.True(overlay.IsAnimating);
+            }
+            finally
+            {
+                window.Close();
+            }
         });
     }
 
     [Fact]
-    public void MiniSleepZzzIndicator_StartsAndStopsDiagonalAnimationWithFixedSlotSize()
+    public Task MiniSleepZzzIndicator_StartsAndStopsWithFixedSlotSize()
     {
-        RunOnSta(() =>
+        return WpfTestHost.RunAsync(async () =>
         {
-            var indicator = new LabPet.Client.Views.MiniSleepZzzIndicator
-            {
-                Visibility = System.Windows.Visibility.Collapsed
-            };
-
-            Assert.Equal(14.0, indicator.Width);
-            Assert.Equal(14.0, indicator.Height);
+            var indicator = new LabPet.Client.Views.MiniSleepZzzIndicator { Visibility = Visibility.Collapsed };
+            Assert.Equal(20.0, indicator.Width);
+            Assert.Equal(16.0, indicator.Height);
             Assert.Equal(3, indicator.LetterCount);
-            Assert.False(indicator.IsAnimating);
+            var window = new Window { Content = indicator, ShowActivated = false, ShowInTaskbar = false };
+            try
+            {
+                window.Show();
+                await WpfTestHost.FlushAsync();
+                Assert.False(indicator.IsAnimating);
 
-            indicator.Visibility = System.Windows.Visibility.Visible;
-            Assert.True(indicator.IsAnimating);
+                indicator.Visibility = Visibility.Visible;
+                await WpfTestHost.FlushAsync();
+                Assert.True(indicator.IsAnimating);
 
-            indicator.Visibility = System.Windows.Visibility.Collapsed;
-            Assert.False(indicator.IsAnimating);
+                indicator.Visibility = Visibility.Collapsed;
+                Assert.False(indicator.IsAnimating);
+            }
+            finally
+            {
+                window.Close();
+            }
         });
     }
 
