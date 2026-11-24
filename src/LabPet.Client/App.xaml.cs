@@ -11,6 +11,7 @@ using LabPet.Client.Updates;
 using LabPet.Client.ViewModels;
 using LabPet.Client.Views;
 using LabPet.Client.Views.Hub;
+using LabPet.Client.Views.Hub.Pages;
 using LabPet.Shared.Transport;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -533,7 +534,19 @@ public partial class App : Application
         services.AddSingleton<CoinGamesViewModel>();
         services.AddSingleton<IHubNavigationService>(sp => new HubNavigationService(() => sp.GetRequiredService<HubWindow>()));
         services.AddTransient<HubViewModel>();
-        services.AddTransient<Func<HubPage, System.Windows.Controls.UserControl>>(_ => page => CreatePlaceholderHubPage(page));
+        services.AddTransient<HomePageViewModel>();
+        services.AddTransient<HomePageView>();
+        services.AddTransient<GrowthPageView>();
+        services.AddTransient<PomodoroPageView>();
+        services.AddTransient<GamesPageView>();
+        services.AddTransient<Func<HubPage, System.Windows.Controls.UserControl>>(sp => page => page switch
+        {
+            HubPage.Home => sp.GetRequiredService<HomePageView>(),
+            HubPage.Growth => sp.GetRequiredService<GrowthPageView>(),
+            HubPage.Pomodoro => sp.GetRequiredService<PomodoroPageView>(),
+            HubPage.Games => sp.GetRequiredService<GamesPageView>(),
+            _ => CreatePlaceholderHubPage(page)
+        });
         services.AddTransient<HubWindow>();
         services.AddTransient<OnboardingViewModel>();
         services.AddTransient<SoloHubViewModel>();

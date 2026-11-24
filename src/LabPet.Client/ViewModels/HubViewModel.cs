@@ -99,6 +99,7 @@ public sealed partial class HubViewModel : ObservableObject, IDisposable
         ];
 
         _petViewModel.ProfileUpdated += OnPetProfileUpdated;
+        _petViewModel.ProfileProgressUpdated += OnPetProfileUpdated;
         Games.ProfileChanged += OnGamesProfileChanged;
         _navigation.Navigated += OnNavigated;
 
@@ -115,6 +116,7 @@ public sealed partial class HubViewModel : ObservableObject, IDisposable
 
         _disposed = true;
         _petViewModel.ProfileUpdated -= OnPetProfileUpdated;
+        _petViewModel.ProfileProgressUpdated -= OnPetProfileUpdated;
         Games.ProfileChanged -= OnGamesProfileChanged;
         _navigation.Navigated -= OnNavigated;
     }

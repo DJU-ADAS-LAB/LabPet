@@ -1,0 +1,208 @@
+<UserControl x:Class="LabPet.Client.Views.Hub.Pages.HomePageView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+    <ScrollViewer VerticalScrollBarVisibility="Auto" CanContentScroll="False">
+        <StackPanel>
+            <!-- 상단 펫 요약 및 빠른 실행 히어로 카드 -->
+            <Border Style="{StaticResource HubCardStyle}" Margin="0,0,0,16">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+
+                    <Border Grid.Column="0"
+                            Width="76"
+                            Height="76"
+                            CornerRadius="18"
+                            Background="{StaticResource HubAccentSoftBrush}"
+                            BorderBrush="{StaticResource HubAccentBorderBrush}"
+                            BorderThickness="1"
+                            Margin="0,0,18,0"
+                            VerticalAlignment="Center">
+                        <Image Source="{Binding PetPortrait}"
+                               Margin="6"
+                               RenderOptions.BitmapScalingMode="HighQuality" />
+                    </Border>
+
+                    <StackPanel Grid.Column="1" VerticalAlignment="Center" Margin="0,0,16,0">
+                        <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                            <TextBlock Text="{Binding PetName}"
+                                       FontSize="20"
+                                       FontWeight="Bold"
+                                       Foreground="{StaticResource HubTextPrimaryBrush}" />
+                            <Border Style="{StaticResource HubBadgeStyle}"
+                                    Background="{StaticResource HubAccentSoftBrush}"
+                                    Margin="10,0,0,0">
+                                <TextBlock Text="{Binding LevelText}"
+                                           FontSize="12"
+                                           FontWeight="Bold"
+                                           Foreground="{StaticResource HubAccentTextBrush}" />
+                            </Border>
+                            <Border Style="{StaticResource HubBadgeStyle}" Margin="6,0,0,0">
+                                <TextBlock Text="{Binding SpeciesDisplayName}"
+                                           FontSize="11.5"
+                                           FontWeight="SemiBold"
+                                           Foreground="{StaticResource HubTextSecondaryBrush}" />
+                            </Border>
+                        </StackPanel>
+
+                        <StackPanel Orientation="Horizontal" Margin="0,5,0,10">
+                            <TextBlock FontSize="12.5" Foreground="{StaticResource HubTextSecondaryBrush}">
+                                <Run Text="주인: " />
+                                <Run Text="{Binding OwnerNameText, Mode=OneWay}" FontWeight="SemiBold" Foreground="{StaticResource HubTextPrimaryBrush}" />
+                                <Run Text="   ·   친구 코드: " />
+                                <Run Text="{Binding FriendCode, Mode=OneWay}" FontWeight="SemiBold" Foreground="{StaticResource HubTextPrimaryBrush}" />
+                            </TextBlock>
+                        </StackPanel>
+
+                        <DockPanel Margin="0,0,0,5">
+                            <TextBlock Text="레벨 경험치" FontSize="11.5" FontWeight="SemiBold" Foreground="{StaticResource HubTextSecondaryBrush}" />
+                            <TextBlock DockPanel.Dock="Right" Text="{Binding XpProgressText}" FontSize="11.5" FontWeight="Bold" Foreground="{StaticResource HubTextPrimaryBrush}" />
+                        </DockPanel>
+                        <ProgressBar Height="8"
+                                     Maximum="100"
+                                     Value="{Binding XpPercent}"
+                                     Foreground="{StaticResource HubAccentBrush}"
+                                     Background="{StaticResource HubSubtleFillBrush}" />
+                    </StackPanel>
+
+                    <StackPanel Grid.Column="2" VerticalAlignment="Center" Width="178">
+                        <Button Content="외형 · 이름 꾸미기"
+                                Style="{StaticResource GamePrimaryButtonStyle}"
+                                Command="{Binding OpenAppearanceCommand}"
+                                Padding="14,9"
+                                Margin="0,0,0,8" />
+                        <UniformGrid Columns="2">
+                            <Button Content="집중 시작"
+                                    Style="{StaticResource GameSecondaryButtonStyle}"
+                                    Command="{Binding StartFocusCommand}"
+                                    Padding="10,7"
+                                    Margin="0,0,4,0" />
+                            <Button Content="코인 게임"
+                                    Style="{StaticResource GameSecondaryButtonStyle}"
+                                    Command="{Binding OpenGamesCommand}"
+                                    Padding="10,7"
+                                    Margin="4,0,0,0" />
+                        </UniformGrid>
+                    </StackPanel>
+                </Grid>
+            </Border>
+
+            <!-- 주요 상태 요약 4열 -->
+            <UniformGrid Columns="4" Margin="0,0,0,16">
+                <Border Style="{StaticResource HubCardStyle}" Padding="16" Margin="0,0,6,0">
+                    <StackPanel>
+                        <TextBlock Text="보유 코인" FontSize="12" Foreground="{StaticResource HubTextSecondaryBrush}" />
+                        <TextBlock Text="{Binding CoinsText}"
+                                   FontSize="20"
+                                   FontWeight="Bold"
+                                   Foreground="{StaticResource GameCoinBrush}"
+                                   Margin="0,6,0,4" />
+                        <Button Content="게임으로 이동"
+                                Style="{StaticResource GameGhostButtonStyle}"
+                                Command="{Binding OpenGamesCommand}"
+                                HorizontalAlignment="Left"
+                                Padding="0,2" />
+                    </StackPanel>
+                </Border>
+
+                <Border Style="{StaticResource HubCardStyle}" Padding="16" Margin="6,0">
+                    <StackPanel>
+                        <TextBlock Text="온라인 친구" FontSize="12" Foreground="{StaticResource HubTextSecondaryBrush}" />
+                        <TextBlock FontSize="20" FontWeight="Bold" Foreground="{StaticResource HubTextPrimaryBrush}" Margin="0,6,0,4">
+                            <Run Text="{Binding OnlineFriendCount, Mode=OneWay}" /><Run Text="명" />
+                        </TextBlock>
+                        <TextBlock Text="{Binding FriendSummaryText}"
+                                   FontSize="11.5"
+                                   Foreground="{StaticResource HubTextSecondaryBrush}"
+                                   TextTrimming="CharacterEllipsis" />
+                    </StackPanel>
+                </Border>
+
+                <Border Style="{StaticResource HubCardStyle}" Padding="16" Margin="6,0">
+                    <StackPanel>
+                        <TextBlock Text="뽀모도로" FontSize="12" Foreground="{StaticResource HubTextSecondaryBrush}" />
+                        <TextBlock Text="{Binding PomodoroRemainingText}"
+                                   FontSize="20"
+                                   FontWeight="Bold"
+                                   Foreground="{StaticResource HubAccentTextBrush}"
+                                   Margin="0,6,0,4" />
+                        <TextBlock FontSize="11.5" Foreground="{StaticResource HubTextSecondaryBrush}">
+                            <Run Text="{Binding PomodoroPhaseText, Mode=OneWay}" />
+                            <Run Text=" · " />
+                            <Run Text="{Binding PomodoroStatusText, Mode=OneWay}" />
+                        </TextBlock>
+                    </StackPanel>
+                </Border>
+
+                <Border Style="{StaticResource HubCardStyle}" Padding="16" Margin="6,0,0,0">
+                    <StackPanel>
+                        <TextBlock Text="네트워크 연결" FontSize="12" Foreground="{StaticResource HubTextSecondaryBrush}" />
+                        <TextBlock Text="{Binding ConnectionSummaryText}"
+                                   FontSize="13.5"
+                                   FontWeight="Bold"
+                                   Foreground="{StaticResource HubTextPrimaryBrush}"
+                                   TextWrapping="Wrap"
+                                   Margin="0,8,0,6" />
+                        <Button Content="네트워크 설정"
+                                Style="{StaticResource GameGhostButtonStyle}"
+                                Command="{Binding OpenNetworkSettingsCommand}"
+                                HorizontalAlignment="Left"
+                                Padding="0,2" />
+                    </StackPanel>
+                </Border>
+            </UniformGrid>
+
+            <!-- 누적 활동량 및 성장 상세 이동 -->
+            <Border Style="{StaticResource HubCardStyle}">
+                <StackPanel>
+                    <DockPanel Margin="0,0,0,14" LastChildFill="False">
+                        <StackPanel DockPanel.Dock="Left">
+                            <TextBlock Text="누적 활동 및 성장 기록" Style="{StaticResource HubSectionTitleStyle}" />
+                            <TextBlock Text="PC 입력과 함께한 시간에 따라 경험치와 코인이 자동으로 쌓입니다." Style="{StaticResource HubCaptionTextStyle}" Margin="0,2,0,0" />
+                        </StackPanel>
+                        <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center">
+                            <Button Content="친구 목록 보기"
+                                    Style="{StaticResource GameOutlineButtonStyle}"
+                                    Command="{Binding OpenFriendsCommand}"
+                                    Margin="0,0,8,0" />
+                            <Button Content="성장 · 오디오 상세"
+                                    Style="{StaticResource GameSecondaryButtonStyle}"
+                                    Command="{Binding OpenGrowthCommand}" />
+                        </StackPanel>
+                    </DockPanel>
+
+                    <UniformGrid Columns="4">
+                        <Border Style="{StaticResource HubSubtlePanelStyle}" Margin="0,0,6,0">
+                            <StackPanel>
+                                <TextBlock Text="키보드 입력" FontSize="11.5" Foreground="{StaticResource HubTextSecondaryBrush}" />
+                                <TextBlock Text="{Binding TotalKeystrokes}" FontSize="20" FontWeight="Bold" Foreground="{StaticResource HubTextPrimaryBrush}" Margin="0,4,0,0" />
+                            </StackPanel>
+                        </Border>
+                        <Border Style="{StaticResource HubSubtlePanelStyle}" Margin="6,0">
+                            <StackPanel>
+                                <TextBlock Text="마우스 클릭" FontSize="11.5" Foreground="{StaticResource HubTextSecondaryBrush}" />
+                                <TextBlock Text="{Binding TotalMouseClicks}" FontSize="20" FontWeight="Bold" Foreground="{StaticResource HubTextPrimaryBrush}" Margin="0,4,0,0" />
+                            </StackPanel>
+                        </Border>
+                        <Border Style="{StaticResource HubSubtlePanelStyle}" Margin="6,0">
+                            <StackPanel>
+                                <TextBlock Text="함께한 시간(분)" FontSize="11.5" Foreground="{StaticResource HubTextSecondaryBrush}" />
+                                <TextBlock Text="{Binding TotalUptimeMinutes}" FontSize="20" FontWeight="Bold" Foreground="{StaticResource HubTextPrimaryBrush}" Margin="0,4,0,0" />
+                            </StackPanel>
+                        </Border>
+                        <Border Style="{StaticResource HubSubtlePanelStyle}" Margin="6,0,0,0">
+                            <StackPanel>
+                                <TextBlock Text="완료 뽀모도로" FontSize="11.5" Foreground="{StaticResource HubTextSecondaryBrush}" />
+                                <TextBlock Text="{Binding CompletedPomodoros}" FontSize="20" FontWeight="Bold" Foreground="{StaticResource HubTextPrimaryBrush}" Margin="0,4,0,0" />
+                            </StackPanel>
+                        </Border>
+                    </UniformGrid>
+                </StackPanel>
+            </Border>
+        </StackPanel>
+    </ScrollViewer>
+</UserControl>

@@ -93,6 +93,7 @@ public sealed partial class PetWindowViewModel : ObservableObject
     public event EventHandler? ExitRequested;
     public event EventHandler<bool>? ClickThroughChanged;
     public event EventHandler<PetProfile>? ProfileUpdated;
+    public event EventHandler<PetProfile>? ProfileProgressUpdated;
     public event EventHandler<double>? PetScaleChanged;
     public event EventHandler<double>? PetOpacityChanged;
     public event EventHandler<(FriendEntry Friend, PetAppearance Appearance)>? ToggleVisitFriendRequested;
@@ -738,6 +739,7 @@ public sealed partial class PetWindowViewModel : ObservableObject
         await _store.SaveProfileAsync(CurrentProfile);
         var label = SocialCoordinatorService.FormatDisplayName(CurrentProfile.OwnerName, CurrentProfile.PetName);
         TrayTooltip = $"{label} · Lv.{CurrentProfile.SoloProgress.Level}";
+        ProfileProgressUpdated?.Invoke(this, CurrentProfile);
     }
 
     [RelayCommand]

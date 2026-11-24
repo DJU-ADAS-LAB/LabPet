@@ -1,0 +1,7 @@
+<UserControl x:Class="LabPet.Client.Views.Hub.Pages.GamesPageView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:games="clr-namespace:LabPet.Client.Views.Games">
+
+    <games:GamesHubView x:Name="GamesHubControl" />
+</UserControl>
