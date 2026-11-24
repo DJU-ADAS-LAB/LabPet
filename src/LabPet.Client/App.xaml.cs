@@ -157,6 +157,7 @@ public partial class App : Application
             petId => _visitorWindows.TryGetValue(petId, out var visitor) ? visitor : null,
             () => _petWindow);
         social.FriendMessageReceived += OnSocialFriendMessageReceived;
+        social.FriendStatusNotification += OnSocialFriendStatusNotification;
         _petWindow.LocationChanged += (_, _) => RepositionInviteCard();
         _petWindow.SizeChanged += (_, _) => RepositionInviteCard();
         _petWindow.InitializeWithProfile(profile);
@@ -171,6 +172,14 @@ public partial class App : Application
         }
 
         Dispatcher.BeginInvoke(() => _messageRouter?.Route(message));
+    }
+
+    private void OnSocialFriendStatusNotification(object? sender, FriendStatusNotice notice)
+    {
+        if (!Dispatcher.HasShutdownStarted && !Dispatcher.HasShutdownFinished)
+        {
+            Dispatcher.BeginInvoke(() => _messageRouter?.RouteStatus(notice));
+        }
     }
 
     private Task<bool> NavigateHubAsync(NavigationRequest request)
@@ -266,7 +275,8 @@ public partial class App : Application
             _serviceProvider.GetRequiredService<IAudioAnalyzer>(),
             _serviceProvider.GetRequiredService<SocialCoordinatorService>(),
             GetOccupiedVisitorBubbleBounds,
-            RepositionOtherVisitorBubbles);
+            RepositionOtherVisitorBubbles,
+            target => CloseOtherVisitorChatComposers(_visitorWindows.Values, target));
 
         visitor.ApplyDisplaySettings(petVm.PetScale, petVm.PetOpacity);
         visitor.PlaceBeside(_petWindow);
@@ -277,6 +287,17 @@ public partial class App : Application
         visitor.Show();
         visitor.ShowVisitorBubble("놀러 왔어!", 2200);
         petVm.NotifyVisitorStateChanged();
+    }
+
+    internal static void CloseOtherVisitorChatComposers(IEnumerable<VisitorPetWindow> visitors, VisitorPetWindow target)
+    {
+        foreach (var visitor in visitors)
+        {
+            if (!ReferenceEquals(visitor, target) && visitor.IsChatComposerOpen)
+            {
+                visitor.CloseChatComposer();
+            }
+        }
     }
 
     private void RemoveVisitorWindow(string petId)
@@ -353,6 +374,7 @@ public partial class App : Application
         if (_social is not null)
         {
             _social.FriendMessageReceived -= OnSocialFriendMessageReceived;
+            _social.FriendStatusNotification -= OnSocialFriendStatusNotification;
             _social = null;
         }
 

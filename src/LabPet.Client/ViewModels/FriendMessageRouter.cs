@@ -17,6 +17,7 @@ public interface IMessageBubbleTarget
 {
     bool IsAvailableForMessages { get; }
     bool TryShowFriendMessage(ReceivedFriendMessage message);
+    bool TryShowFriendStatus(string text, int durationMs, bool animate);
 }
 
 /// <summary>
@@ -77,6 +78,20 @@ public sealed class FriendMessageRouter
         }
 
         return FriendMessageRouteOutcome.Dropped;
+    }
+
+    internal FriendMessageRouteOutcome RouteStatus(FriendStatusNotice notice)
+    {
+        var visitor = _resolveVisitor(notice.FriendPetId);
+        if (visitor is { IsAvailableForMessages: true } && visitor.TryShowFriendStatus(notice.Text, notice.DurationMs, animate: true))
+        {
+            return FriendMessageRouteOutcome.Visitor;
+        }
+
+        var host = _resolveHost();
+        return host is { IsAvailableForMessages: true } && host.TryShowFriendStatus(notice.Text, notice.DurationMs, notice.AnimateHost)
+            ? FriendMessageRouteOutcome.Host
+            : FriendMessageRouteOutcome.Dropped;
     }
 
     private bool TryReserveMessageId(string senderPetId, string messageId)

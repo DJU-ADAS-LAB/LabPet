@@ -14,7 +14,8 @@ internal static class VisitorBubblePlacementCalculator
         Rect workAreaPhysical,
         IReadOnlyList<Rect>? occupiedBubbleBounds = null,
         double overlapYPhysical = 8.0,
-        double gapPhysical = 8.0)
+        double gapPhysical = 8.0,
+        bool allowAboveObstacles = true)
     {
         var centerX = targetPhysicalBounds.Left + (targetPhysicalBounds.Width - popupPhysicalSize.Width) * 0.5;
         var aboveY = targetPhysicalBounds.Top - popupPhysicalSize.Height + overlapYPhysical;
@@ -46,7 +47,10 @@ internal static class VisitorBubblePlacementCalculator
                 // 기존 말풍선 좌측/우측/상단 회피 후보 추가
                 candidates.Add(new Point(other.Left - popupPhysicalSize.Width - gapPhysical, aboveY));
                 candidates.Add(new Point(other.Right + gapPhysical, aboveY));
-                candidates.Add(new Point(centerX, other.Top - popupPhysicalSize.Height - gapPhysical));
+                if (allowAboveObstacles)
+                {
+                    candidates.Add(new Point(centerX, other.Top - popupPhysicalSize.Height - gapPhysical));
+                }
             }
         }
 

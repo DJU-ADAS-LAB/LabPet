@@ -73,6 +73,38 @@ public sealed class SocialCoordinatorTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task PetInteraction_EnforcesOneSecondBetweenSendsAndReportsTheCorrectFriend()
+    {
+        var friend = Assert.Single(_host.Friends);
+        using var received = new SemaphoreSlim(0);
+        _guestTransport.PetInteractionReceived += (_, _) => received.Release();
+        var noticeReceived = new TaskCompletionSource<FriendStatusNotice>(TaskCreationOptions.RunContinuationsAsynchronously);
+        _host.FriendStatusNotification += (_, notice) =>
+        {
+            if (notice.AnimateHost)
+            {
+                noticeReceived.TrySetResult(notice);
+            }
+        };
+
+        var first = _host.SendPetInteractionAsync(friend);
+        Assert.Equal(PetInteractionSendResult.Cooldown, await _host.SendPetInteractionAsync(friend));
+        Assert.False(_host.TryReservePetInteraction());
+        Assert.Equal(PetInteractionSendResult.Sent, await first);
+        Assert.True(await received.WaitAsync(TimeSpan.FromSeconds(5)));
+
+        await Task.Delay(TimeSpan.FromSeconds(1));
+        Assert.Equal(PetInteractionSendResult.Sent, await _host.SendPetInteractionAsync(friend));
+        Assert.True(await received.WaitAsync(TimeSpan.FromSeconds(5)));
+        Assert.Equal(0, received.CurrentCount);
+
+        Assert.True(await _guestTransport.SendPetInteractionAsync(_hostAsFriend, "pet"));
+        var notice = await noticeReceived.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(friend.PetId, notice.FriendPetId);
+        Assert.Contains("쓰다듬어 줬어요!", notice.Text);
+    }
+
+    [Fact]
     public async Task LadderSettlement_UsesTheAgreedWagerAndPaysOnlyOnce()
     {
         using var games = new CoinGamesViewModel(_store, new SoloProgressionService(), _host);

@@ -141,9 +141,9 @@
                StaysOpen="True"
                PopupAnimation="None"
                IsOpen="False">
+            <Border Padding="8">
             <Border x:Name="VisitorChatComposerCard"
                     Width="226"
-                    Margin="8"
                     Padding="8,6"
                     CornerRadius="12"
                     Background="#F7FFFFFF"
@@ -185,6 +185,7 @@
                              PreviewMouseDown="VisitorChatInput_PreviewMouseDown"
                              KeyDown="VisitorChatInput_KeyDown" />
                 </DockPanel>
+            </Border>
             </Border>
         </Popup>
 

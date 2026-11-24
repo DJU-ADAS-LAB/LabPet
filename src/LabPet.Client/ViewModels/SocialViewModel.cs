@@ -347,15 +347,18 @@ public sealed partial class SocialViewModel : ObservableObject
     [RelayCommand]
     private async Task SendPetInteractionAsync()
     {
-        if (SelectedFriend is null || !SelectedFriend.CanInteract)
+        if (SelectedFriend is not { CanInteract: true } friend)
         {
             return;
         }
 
-        var ok = await _social.SendPetInteractionAsync(SelectedFriend.Entry);
-        StatusBanner = ok
-            ? $"{SelectedFriend.DisplayTitle}을(를) 쓰다듬어 주었습니다."
-            : "쓰다듬기 전송에 실패했습니다.";
+        var result = await _social.SendPetInteractionAsync(friend.Entry);
+        if (result != PetInteractionSendResult.Cooldown)
+        {
+            StatusBanner = result == PetInteractionSendResult.Sent
+                ? $"{friend.DisplayTitle}을(를) 쓰다듬어 주었습니다."
+                : "쓰다듬기 전송에 실패했습니다.";
+        }
     }
 
     [RelayCommand]

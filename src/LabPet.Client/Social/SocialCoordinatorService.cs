@@ -39,6 +39,15 @@ public sealed record ReceivedFriendMessage(
     PetAppearance Appearance,
     string MessageId = "");
 
+internal sealed record FriendStatusNotice(string FriendPetId, string Text, int DurationMs, bool AnimateHost = true);
+
+public enum PetInteractionSendResult
+{
+    Unavailable,
+    Sent,
+    Cooldown
+}
+
 /// <summary>
 /// ISocialTransport, friends.json 저장소, 보너스 코인, 노래 따라하기(팔로워 타임아웃·우선순위)를 조정하는 소셜 코디네이터.
 /// ViewModel과 View는 구체 전송 구현체가 아닌 ISocialTransport/SocialCoordinatorService만 의존한다.
@@ -64,6 +73,7 @@ public sealed class SocialCoordinatorService : IAsyncDisposable
     private volatile FriendEntry[] _friends = [];
     private uint _musicFrameSequence;
     private bool _isLocalSleeping;
+    private long _nextPetInteractionTicks;
     private Task _lastRemoteAcceptPersistTask = Task.CompletedTask;
 
     // 노래 따라하기 팔로워 상태
@@ -87,6 +97,7 @@ public sealed class SocialCoordinatorService : IAsyncDisposable
     public event EventHandler? StateChanged;
     public event EventHandler<PendingFriendRequest>? FriendRequestArrived;
     public event EventHandler<ReceivedFriendMessage>? FriendMessageReceived;
+    internal event EventHandler<FriendStatusNotice>? FriendStatusNotification;
     public event EventHandler<string>? SocialNotification;
     public event EventHandler<TransportErrorEventArgs>? TransportErrorReported;
     public event EventHandler? PetReactionTriggered;
@@ -642,15 +653,31 @@ public sealed class SocialCoordinatorService : IAsyncDisposable
         return ok;
     }
 
-    public async Task<bool> SendPetInteractionAsync(FriendEntry friend)
+    internal bool TryReservePetInteraction()
     {
-        var ok = await _transport.SendPetInteractionAsync(FindFriend(friend.PetId) ?? friend, "pet").ConfigureAwait(false);
-        if (ok)
+        var next = Volatile.Read(ref _nextPetInteractionTicks);
+        var now = _clock.Elapsed.Ticks;
+        return now >= next
+            && Interlocked.CompareExchange(ref _nextPetInteractionTicks, now + TimeSpan.TicksPerSecond, next) == next;
+    }
+
+    public async Task<PetInteractionSendResult> SendPetInteractionAsync(FriendEntry friend)
+    {
+        if (!TryReservePetInteraction())
         {
-            await RewardSocialBonusAsync(friend.PetId, coins: 2).ConfigureAwait(false);
+            return PetInteractionSendResult.Cooldown;
         }
 
-        return ok;
+        var target = FindFriend(friend.PetId) ?? friend;
+        if (!await _transport.SendPetInteractionAsync(target, "pet").ConfigureAwait(false))
+        {
+            return PetInteractionSendResult.Unavailable;
+        }
+
+        await RewardSocialBonusAsync(target.PetId, coins: 2).ConfigureAwait(false);
+        var name = FormatDisplayName(target.OwnerName, target.PetName);
+        FriendStatusNotification?.Invoke(this, new FriendStatusNotice(target.PetId, $"{name}을(를) 쓰다듬어 주었습니다.", 2000, AnimateHost: false));
+        return PetInteractionSendResult.Sent;
     }
 
     public async Task<bool> ToggleMusicFollowAsync(FriendEntry hostFriend)
@@ -876,16 +903,14 @@ public sealed class SocialCoordinatorService : IAsyncDisposable
     {
         var name = await RewardSocialBonusAsync(e.SenderPetId, coins: 1).ConfigureAwait(false);
 
-        SocialNotification?.Invoke(this, $"{name}의 반응: {e.ReactionId}");
-        PetReactionTriggered?.Invoke(this, EventArgs.Empty);
+        FriendStatusNotification?.Invoke(this, new FriendStatusNotice(e.SenderPetId, $"{name}의 반응: {e.ReactionId}", 2600));
     }
 
     private async void OnPetInteractionReceived(object? sender, PetInteractionReceivedEventArgs e)
     {
         var name = await RewardSocialBonusAsync(e.SenderPetId, coins: 2).ConfigureAwait(false);
 
-        SocialNotification?.Invoke(this, $"{name}(이)가 쓰다듬어 줬어요!");
-        PetReactionTriggered?.Invoke(this, EventArgs.Empty);
+        FriendStatusNotification?.Invoke(this, new FriendStatusNotice(e.SenderPetId, $"{name}(이)가 쓰다듬어 줬어요!", 2600));
     }
 
     private void OnMusicFrameReceived(object? sender, MusicFrameReceivedEventArgs e)

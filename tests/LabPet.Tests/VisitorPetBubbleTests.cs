@@ -5,6 +5,7 @@ using System.Windows;
 using System.Windows.Controls;
 using Polygon = System.Windows.Shapes.Polygon;
 using System.Windows.Threading;
+using LabPet.Client;
 using LabPet.Client.Audio;
 using LabPet.Client.Network;
 using LabPet.Client.Rendering;
@@ -31,6 +32,7 @@ public sealed class VisitorPetBubbleTests
         public bool IsAvailableForMessages { get; set; } = initiallyAvailable;
         public bool AcceptMessages { get; set; } = acceptMessages;
         public List<ReceivedFriendMessage> ReceivedMessages { get; } = [];
+        public List<string> ReceivedStatuses { get; } = [];
 
         public bool TryShowFriendMessage(ReceivedFriendMessage message)
         {
@@ -40,6 +42,12 @@ public sealed class VisitorPetBubbleTests
             }
 
             ReceivedMessages.Add(message);
+            return true;
+        }
+
+        public bool TryShowFriendStatus(string text, int durationMs, bool animate)
+        {
+            ReceivedStatuses.Add(text);
             return true;
         }
     }
@@ -392,6 +400,100 @@ public sealed class VisitorPetBubbleTests
         Assert.True(workArea.Contains(composerRectTop));
         Assert.True(workArea.Contains(bubbleRectTop));
         Assert.False(composerRectTop.IntersectsWith(bubbleRectTop), $"최상단 배치 겹침: {composerRectTop} vs {bubbleRectTop}");
+    }
+
+    [Fact]
+    public void VisitorComposerPlacement_UsesTheSideWhenABubbleBlocksTheSpaceAboveThePet()
+    {
+        var workArea = new Rect(0, 0, 1600, 900);
+        var pet = new Rect(600, 440, 214, 175);
+        var composerSize = new Size(242, 58);
+        var occupied = new Rect(470, 310, 475, 138);
+        var composer = new Rect(VisitorBubblePlacementCalculator.CalculatePlacement(
+            pet, composerSize, workArea, [occupied], overlapYPhysical: 4, allowAboveObstacles: false), composerSize);
+
+        Assert.True(workArea.Contains(composer));
+        Assert.False(composer.IntersectsWith(occupied));
+        Assert.False(composer.IntersectsWith(pet));
+        Assert.True(composer.Bottom >= pet.Top);
+    }
+
+    [Fact]
+    public async Task VisitorPetWindow_SwitchesSingleComposerAndRoutesStatusToTheMatchingPet()
+    {
+        var transport = new LanP2pTransport(udpDiscoveryPort: 0, udpMusicPort: 0, tcpControlPort: 0);
+        var store = new JsonAppDataStore(new StateMigrator(), Path.Combine(Path.GetTempPath(), "LabPet_VisitorSwitch_" + Guid.NewGuid().ToString("N")));
+        await using var social = new SocialCoordinatorService(transport, store, new SoloProgressionService());
+        using var audio = new NullAudioAnalyzer();
+        var meshFactory = new ProceduralPetMeshFactory();
+
+        await WpfTestHost.RunAsync(async () =>
+        {
+            var windows = new Dictionary<string, VisitorPetWindow>();
+            void CloseOtherComposers(VisitorPetWindow target) => App.CloseOtherVisitorChatComposers(windows.Values, target);
+            VisitorPetWindow ShowVisitor(string petId, double left)
+            {
+                var friend = new FriendEntry { PetId = petId };
+                var visitor = new VisitorPetWindow(friend, friend.CachedAppearance, meshFactory, audio, social,
+                    beforeChatComposerOpen: CloseOtherComposers)
+                {
+                    ShowActivated = false,
+                    Left = left,
+                    Top = 400
+                };
+                windows.Add(petId, visitor);
+                visitor.Show();
+                return visitor;
+            }
+
+            try
+            {
+                var first = ShowVisitor("first", 310);
+                var second = ShowVisitor("second", 485);
+                var host = new StubMessageTarget();
+                var router = new FriendMessageRouter(petId => windows.GetValueOrDefault(petId), () => host);
+                await FlushUiAsync();
+
+                first.HandleVisitorClick();
+                await FlushUiAsync();
+                Assert.True(first.IsChatComposerOpen);
+                first.ChatComposerInputText = "보내기 전 문장";
+
+                second.HandleVisitorClick();
+                await FlushUiAsync();
+                Assert.False(first.IsChatComposerOpen);
+                Assert.True(first.CurrentComposerPhysicalBounds.IsEmpty);
+                Assert.True(second.IsChatComposerOpen);
+                var composer = Assert.IsType<Border>(second.FindName("VisitorChatComposerCard"));
+                var viewport = Assert.IsType<Viewport3D>(second.FindName("VisitorViewport"));
+                Assert.True(composer.PointToScreen(new Point(0, composer.ActualHeight)).Y > viewport.PointToScreen(new Point()).Y);
+
+                Assert.Equal(FriendMessageRouteOutcome.Visitor, router.RouteStatus(new("second", "쓰다듬기 전송!", 5000)));
+                await FlushUiAsync();
+                Assert.False(first.HasStatusBubble);
+                Assert.Equal("쓰다듬기 전송!", second.StatusBubbleText);
+                Assert.Empty(host.ReceivedStatuses);
+                Assert.True(second.CurrentBubblePhysicalBounds.Bottom < second.CurrentComposerPhysicalBounds.Top);
+                var status = Assert.IsType<Border>(second.FindName("VisitorStatusBubble"));
+                Assert.True(status.IsVisible);
+                Assert.True(status.PointToScreen(new Point(0, status.ActualHeight)).Y < composer.PointToScreen(new Point()).Y);
+
+                first.HandleVisitorClick();
+                await FlushUiAsync();
+                Assert.True(first.IsChatComposerOpen);
+                Assert.False(second.IsChatComposerOpen);
+                Assert.Equal("보내기 전 문장", first.ChatComposerInputText);
+                Assert.Equal(FriendMessageRouteOutcome.Host, router.RouteStatus(new("absent", "쓰다듬어 줬어요!", 2000)));
+                Assert.Equal("쓰다듬어 줬어요!", Assert.Single(host.ReceivedStatuses));
+            }
+            finally
+            {
+                foreach (var visitor in windows.Values)
+                {
+                    visitor.Close();
+                }
+            }
+        }).WaitAsync(TimeSpan.FromSeconds(15));
     }
 
     [Fact]

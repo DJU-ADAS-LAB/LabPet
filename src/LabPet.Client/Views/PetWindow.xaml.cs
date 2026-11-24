@@ -659,6 +659,21 @@ public partial class PetWindow : Window, IMessageBubbleTarget
         Dispatcher.BeginInvoke(() => _viewModel.ShowBubble(message, SocialNotificationBubbleDurationMs));
     }
 
+    public bool TryShowFriendStatus(string text, int durationMs, bool animate)
+    {
+        if (!IsAvailableForMessages)
+        {
+            return false;
+        }
+
+        _viewModel.ShowBubble(text, durationMs);
+        if (animate)
+        {
+            _animator.TriggerPetReaction();
+        }
+        return true;
+    }
+
     private void OnSocialPetReactionTriggered(object? sender, EventArgs e)
     {
         Dispatcher.BeginInvoke(() => _animator.TriggerPetReaction());
@@ -820,7 +835,7 @@ public partial class PetWindow : Window, IMessageBubbleTarget
         var wasDragging = _isDraggingWindow;
         EndPetGrab();
         PetViewport.ReleaseMouseCapture();
-        if (!wasDragging)
+        if (!wasDragging && _social.TryReservePetInteraction())
         {
             // 이동 거리 5px 이하: 쓰다듬기 3D 반응
             _animator.TriggerPetReaction();

@@ -471,8 +471,10 @@ public sealed partial class PetWindowViewModel : ObservableObject
             return;
         }
 
-        var ok = await _social.SendPetInteractionAsync(friend);
-        ShowBubble(ok ? $"{entry.DisplayTitle}을(를) 쓰다듬어 주었습니다." : "쓰다듬기 전송 실패", 2000);
+        if (await _social.SendPetInteractionAsync(friend) == PetInteractionSendResult.Unavailable)
+        {
+            ShowBubble("쓰다듬기 전송 실패", 2000);
+        }
     }
 
     [RelayCommand]

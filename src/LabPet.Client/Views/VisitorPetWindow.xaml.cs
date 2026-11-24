@@ -36,6 +36,7 @@ public partial class VisitorPetWindow : Window, IMessageBubbleTarget
     private readonly BubbleMessageStack _chatBubbleStack = new(PetWindowViewModel.MaxBubbleLines);
     private readonly Func<string, IReadOnlyList<Rect>>? _occupiedBubbleBoundsProvider;
     private readonly Action? _onBubbleLayoutChanged;
+    private readonly Action<VisitorPetWindow>? _beforeChatComposerOpen;
 
     private readonly DispatcherTimer _frameTimer;
     private readonly DispatcherTimer _dismissHideTimer;
@@ -91,7 +92,8 @@ public partial class VisitorPetWindow : Window, IMessageBubbleTarget
         IAudioAnalyzer audioAnalyzer,
         SocialCoordinatorService social,
         Func<string, IReadOnlyList<Rect>>? occupiedBubbleBoundsProvider = null,
-        Action? onBubbleLayoutChanged = null)
+        Action? onBubbleLayoutChanged = null,
+        Action<VisitorPetWindow>? beforeChatComposerOpen = null)
     {
         InitializeComponent();
 
@@ -101,6 +103,7 @@ public partial class VisitorPetWindow : Window, IMessageBubbleTarget
         _social = social;
         _occupiedBubbleBoundsProvider = occupiedBubbleBoundsProvider;
         _onBubbleLayoutChanged = onBubbleLayoutChanged;
+        _beforeChatComposerOpen = beforeChatComposerOpen;
 
         VisitorChatItemsControl.ItemsSource = _chatBubbleStack.Items;
         _chatBubbleStack.Changed += OnChatBubbleStackChanged;
@@ -373,6 +376,21 @@ public partial class VisitorPetWindow : Window, IMessageBubbleTarget
     public bool TryShowFriendMessage(ReceivedFriendMessage message)
         => ShowChatMessage(message.Text, DefaultChatMessageDurationMs);
 
+    public bool TryShowFriendStatus(string text, int durationMs, bool animate)
+    {
+        if (!IsAvailableForMessages)
+        {
+            return false;
+        }
+
+        ShowVisitorBubble(text, durationMs);
+        if (animate)
+        {
+            _animator.TriggerPetReaction();
+        }
+        return true;
+    }
+
     internal bool ShowChatMessage(string text, int durationMs = DefaultChatMessageDurationMs)
     {
         if (_isClosingOrClosed || !IsVisible || Dispatcher.HasShutdownStarted)
@@ -597,13 +615,15 @@ public partial class VisitorPetWindow : Window, IMessageBubbleTarget
             : GetScaledPrimaryWorkArea(dpi);
 
         var occupied = _occupiedBubbleBoundsProvider?.Invoke(FriendPetId) ?? [];
+        var petBoundsPhysical = GetPopupPetBounds(targetBoundsPhysical);
         var chosen = VisitorBubblePlacementCalculator.CalculatePlacement(
-            targetBoundsPhysical,
+            petBoundsPhysical,
             popupSize,
             workAreaPhysical,
             occupied,
             ChatComposerBottomOverlap * dpi.DpiScaleY,
-            BubbleCollisionGap * dpi.DpiScaleX);
+            BubbleCollisionGap * dpi.DpiScaleX,
+            allowAboveObstacles: false);
 
         _currentComposerPhysicalBounds = new Rect(chosen, popupSize);
 
@@ -632,8 +652,9 @@ public partial class VisitorPetWindow : Window, IMessageBubbleTarget
 
         var occupied = _occupiedBubbleBoundsProvider?.Invoke(FriendPetId) ?? [];
         var composerBounds = CurrentComposerPhysicalBounds;
+        var petBoundsPhysical = GetPopupPetBounds(targetBoundsPhysical);
         var chosen = VisitorBubblePlacementCalculator.CalculateStackedBubblePlacement(
-            targetBoundsPhysical,
+            petBoundsPhysical,
             composerBounds,
             popupSize,
             workAreaPhysical,
@@ -643,7 +664,7 @@ public partial class VisitorPetWindow : Window, IMessageBubbleTarget
 
         _currentBubblePhysicalBounds = new Rect(chosen, popupSize);
         var targetCenterX = targetBoundsPhysical.Left + targetBoundsPhysical.Width / 2;
-        VisitorBubbleTail.Visibility = chosen.Y < targetBoundsPhysical.Top && chosen.X <= targetCenterX
+        VisitorBubbleTail.Visibility = chosen.Y < petBoundsPhysical.Top && chosen.X <= targetCenterX
             && targetCenterX <= chosen.X + popupSize.Width
             && (composerBounds.IsEmpty || chosen.Y + popupSize.Height <= composerBounds.Top + 2.0)
             ? Visibility.Visible
@@ -651,6 +672,26 @@ public partial class VisitorPetWindow : Window, IMessageBubbleTarget
 
         var relativeOffset = VisitorBubblePlacementCalculator.ToRelativePopupOffset(chosen, targetBoundsPhysical);
         return [new CustomPopupPlacement(relativeOffset, PopupPrimaryAxis.Horizontal)];
+    }
+
+    private Rect GetPopupPetBounds(Rect viewportPhysicalBounds)
+    {
+        var bounds = _currentRig?.BodyBounds ?? Rect3D.Empty;
+        if (bounds.IsEmpty)
+        {
+            return viewportPhysicalBounds;
+        }
+
+        // 투명한 뷰포트 여백 대신 캐릭터 머리 바로 위를 팝업 기준점으로 사용한다.
+        var head = new Point3D(0, bounds.Y + bounds.SizeY, bounds.Z + bounds.SizeZ * 0.65);
+        if (!VisitorPetVisual.TransformToAncestor(VisitorViewport).TryTransform(head, out var headInViewport))
+        {
+            return viewportPhysicalBounds;
+        }
+
+        var headY = VisitorViewport.PointToScreen(headInViewport).Y;
+        headY = Math.Clamp(headY, viewportPhysicalBounds.Top, viewportPhysicalBounds.Bottom);
+        return new Rect(viewportPhysicalBounds.Left, headY, viewportPhysicalBounds.Width, viewportPhysicalBounds.Bottom - headY);
     }
 
     private static Rect GetScaledPrimaryWorkArea(DpiScale dpi)
@@ -833,11 +874,12 @@ public partial class VisitorPetWindow : Window, IMessageBubbleTarget
 
     internal void OpenChatComposer()
     {
-        if (_isClosingOrClosed || Dispatcher.HasShutdownStarted)
+        if (_isClosingOrClosed || Dispatcher.HasShutdownStarted || VisitorChatComposerPopup.IsOpen)
         {
             return;
         }
 
+        _beforeChatComposerOpen?.Invoke(this);
         VisitorChatInput.ToolTip = $"{SocialCoordinatorService.FormatDisplayName(_friend.OwnerName, _friend.PetName)}에게 메시지";
         _composerCloseTimer.Stop();
         _isActivatingComposer = true;
@@ -984,9 +1026,10 @@ public partial class VisitorPetWindow : Window, IMessageBubbleTarget
 
     private async void PetFriendMenu_Click(object sender, RoutedEventArgs e)
     {
-        _animator.TriggerPetReaction();
-        var ok = await _social.SendPetInteractionAsync(_friend);
-        ShowVisitorBubble(ok ? "쓰다듬기 전송!" : "오프라인 상태예요", 1800);
+        if (await _social.SendPetInteractionAsync(_friend) == PetInteractionSendResult.Unavailable)
+        {
+            ShowVisitorBubble("쓰다듬기를 보내지 못했어요", 1800);
+        }
     }
 
     private void VisitorContextMenu_Opened(object sender, RoutedEventArgs e)
