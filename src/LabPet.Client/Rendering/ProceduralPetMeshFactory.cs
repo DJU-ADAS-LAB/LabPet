@@ -685,13 +685,17 @@ public sealed class ProceduralPetMeshFactory : IPetMeshFactory
         };
     }
 
+    internal const float TypingKeyboardCenterY = -0.76f;
+    internal const float TypingKeyboardCenterZ = 0.82f;
+    internal const float TypingKeyboardKeyTopY = TypingKeyboardCenterY + 0.055f + 0.02f;
+
     internal (int Triangles, ScaleTransform3D Scale) BuildTypingKeyboard(
         Model3DGroup rootGroup,
         Color accentColor,
         SolidColorBrush? sharedAccentBrush = null)
     {
-        const float centerY = -0.76f;
-        const float centerZ = 0.82f;
+        const float centerY = TypingKeyboardCenterY;
+        const float centerZ = TypingKeyboardCenterZ;
         var scale = new ScaleTransform3D(0, 0, 0, 0, centerY, centerZ);
         var keyboard = new Model3DGroup { Transform = scale };
 

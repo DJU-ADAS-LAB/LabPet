@@ -32,6 +32,8 @@ public sealed class PetAnimationController
 
     // 누적 위상 (위상 점프 없이 부드럽게 속도 변화)
     private double _dancePhase;
+    private double _lastBeatTime = double.NegativeInfinity;
+    private double _beatInterval;
     private double _tailPhase;
     private double _auraPhase;
 
@@ -158,7 +160,8 @@ public sealed class PetAnimationController
         _isSleeping = isSleeping;
         if (isSleeping)
         {
-            _wakeUpReactionTime = 0.0;
+            _wakeUpReactionTime = 0;
+            _petReactionTime = _dizzyReactionTime = _typingStanceHoldTime = 0;
         }
         else
         {
@@ -178,12 +181,16 @@ public sealed class PetAnimationController
     /// <summary>쓰다듬기/기쁨 3D 반응(부피 보존형 점프 + 발광 + 별 파티클 버스트)을 트리거한다.</summary>
     public void TriggerPetReaction()
     {
+        if (_isSleeping || IsWakingUp) return;
         _petReactionTime = 0.90;
         EmitReactionStarBurst(count: 3);
     }
 
     /// <summary>창을 빠르게 좌우로 흔들었을 때 어지러움 3D 반응을 트리거한다.</summary>
-    public void TriggerDizzyReaction() => _dizzyReactionTime = 1.4;
+    public void TriggerDizzyReaction()
+    {
+        if (!_isSleeping && !IsWakingUp) _dizzyReactionTime = 1.4;
+    }
 
     /// <summary>키보드 타이핑 시 앞발/팔/날개 두드리기 모션을 스레드 안전하게 요청한다.</summary>
     public void TriggerTypingPawTap() => Interlocked.Increment(ref _pendingPawTaps);
@@ -239,6 +246,15 @@ public sealed class PetAnimationController
         if (_pendingBeat)
         {
             _pendingBeat = false;
+            var interval = _elapsedSeconds - _lastBeatTime;
+            if (interval >= 0.25)
+            {
+                if (interval <= 1.5)
+                    _beatInterval = _beatInterval == 0 ? interval : _beatInterval * 0.72 + interval * 0.28;
+                else
+                    _beatInterval = 0;
+                _lastBeatTime = _elapsedSeconds;
+            }
             _beatPulse = 1.0;
             beatTriggeredThisFrame = true;
         }
@@ -249,7 +265,7 @@ public sealed class PetAnimationController
 
         // 키보드 타이핑 자세 및 좌/우 교대 타건
         var taps = Interlocked.Exchange(ref _pendingPawTaps, 0);
-        if (taps > 0)
+        if (taps > 0 && !_isSleeping && !IsWakingUp)
         {
             _typingStanceHoldTime = 0.95;
             if ((_nextPawParity++ & 1) == 0)
@@ -280,7 +296,7 @@ public sealed class PetAnimationController
 
         if (rig.TypingKeyboardScale is not null)
         {
-            var kbScale = stance < 0.01 ? 0.0 : stance;
+            var kbScale = _isSleeping || stance < 0.01 ? 0.0 : stance;
             rig.TypingKeyboardScale.ScaleX = kbScale;
             rig.TypingKeyboardScale.ScaleY = kbScale;
             rig.TypingKeyboardScale.ScaleZ = kbScale;
@@ -299,6 +315,8 @@ public sealed class PetAnimationController
 
         // 누적 위상 갱신
         var grooveSpeed = 2.1 + musicEnergy * 2.5;
+        if (_beatInterval > 0 && _elapsedSeconds - _lastBeatTime < 2)
+            grooveSpeed += (Math.Clamp(Math.PI / _beatInterval, 2.2, 7.0) - grooveSpeed) * _musicWeight;
         _dancePhase += deltaSeconds * grooveSpeed;
         _tailPhase += deltaSeconds * (3.0 + musicEnergy * 2.8);
         _auraPhase = (_auraPhase + deltaSeconds * (12.0 + treble * 10.0 + beat * 16.0)) % 360.0;
@@ -367,7 +385,7 @@ public sealed class PetAnimationController
         var offsetY = p.BodyOffsetY + anyTapWave * 0.03 * awakeFactor;
         var scaleY = p.BodyScaleY - anyTapWave * 0.035 * awakeFactor;
         var bodyRoll = p.BodyRoll * (1.0 - activeStance * 0.5) + signedTap * 4.0 * awakeFactor;
-        var bodyYawExtra = p.BodyYaw * (1.0 - activeStance * 0.75);
+        var bodyYawExtra = p.BodyYaw * (1.0 - activeStance * 0.75) + signedTap * 3.5 * awakeFactor;
         var bodyPitchExtra = p.BodyPitch * (1.0 - activeStance * 0.7);
         var headYawExtra = p.HeadYaw * (1.0 - activeStance * 0.8);
         var headPitchExtra = p.HeadPitch + activeStance * 11.0 + anyTapWave * 5.0 * awakeFactor;
@@ -506,10 +524,10 @@ public sealed class PetAnimationController
 
         rig.BodyTranslate.OffsetX = Math.Clamp(offsetX, -0.25, 0.25);
         rig.BodyTranslate.OffsetY = Math.Clamp(offsetY, -0.15, 0.45);
-        rig.BodyTranslate.OffsetZ = Math.Clamp(p.BodyOffsetZ, -0.15, 0.15);
+        rig.BodyTranslate.OffsetZ = Math.Clamp(p.BodyOffsetZ + activeStance * 0.11, -0.15, 0.22);
 
         rig.BodyYaw.Angle = _currentLookX * 14.0 * (1.0 - activeStance * 0.65) * awakeFactor + bodyYawExtra + dizzyYaw;
-        rig.BodyPitch.Angle = _currentLookY * 8.0 * (1.0 - activeStance * 0.7) * awakeFactor + activeStance * 4.5 + bodyPitchExtra;
+        rig.BodyPitch.Angle = _currentLookY * 8.0 * (1.0 - activeStance * 0.7) * awakeFactor + activeStance * 7.0 + anyTapWave * 2.2 * awakeFactor + bodyPitchExtra;
         rig.BodyRoll.Angle = Math.Clamp(bodyRoll, -26.0, 26.0);
 
         if (rig.ShadowScale is not null)
@@ -522,6 +540,13 @@ public sealed class PetAnimationController
         rig.HeadYaw.Angle = _currentLookX * 18.0 * awakeFactor + headYawExtra;
         rig.HeadPitch.Angle = _currentLookY * 12.0 * awakeFactor + headPitchExtra;
         rig.HeadRoll.Angle = Math.Clamp(headRollExtra, -22.0, 22.0);
+
+        var stride = Math.Sin(_dancePhase * 2) * (14 * bass + 7 * mid) * awakeFactor * (1 - activeStance);
+        var walk = _smoothedPose.StepWeight * awakeFactor * (1 - activeStance);
+        stride += Math.Sin(_dancePhase * 2) * walk * 18;
+        var waveTime = _petReactionTime > 0 && !_isSleeping && !IsWakingUp ? 0.90 - _petReactionTime : -1;
+        rig.Skin?.Update(rig, (float)deltaSeconds, (float)stride, (float)activeStance,
+            (float)(leftStrike * awakeFactor), (float)(rightStrike * awakeFactor), (float)waveTime, (float)walk);
 
         if (rig.AuraRotation is not null)
         {
@@ -594,7 +619,8 @@ public sealed class PetAnimationController
 
         // 주파수 지배 대역에 따라 가장 어울리는 클립을 우선하되 연속 반복 방지
         PetMotionClipKind preferred;
-        if (bass > 0.68 && _currentClip != PetMotionClipKind.HappyJump && _clipCycleCursor % 3 == 0)
+        var cursor = _clipCycleCursor++;
+        if (bass > 0.68 && _currentClip != PetMotionClipKind.HappyJump && cursor % 3 == 0)
         {
             preferred = PetMotionClipKind.HappyJump;
         }
@@ -608,7 +634,7 @@ public sealed class PetAnimationController
         }
         else
         {
-            preferred = cycle[_clipCycleCursor++ % cycle.Length];
+            preferred = cycle[cursor % cycle.Length];
             if (preferred == _currentClip && cycle.Length > 1)
             {
                 preferred = cycle[_clipCycleCursor++ % cycle.Length];

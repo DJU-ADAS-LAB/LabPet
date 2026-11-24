@@ -76,6 +76,7 @@ jobs:
         shell: pwsh
         run: |
           vpk pack `
+            --runtime win-x64 `
             -u LabPet `
             -v "${{ steps.version.outputs.version }}" `
             -p ./publish/win-x64 `

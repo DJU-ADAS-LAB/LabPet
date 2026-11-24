@@ -216,11 +216,9 @@ public partial class PetWindow : Window, IMessageBubbleTarget
 
     private void OnProfileUpdated(object? sender, PetProfile profile)
     {
-        var structureSig = PetRigHandle.BuildStructureSignature(profile.Appearance);
         if (_currentRig is not null &&
-            string.Equals(_currentRig.AppearanceStructureSignature, structureSig, StringComparison.Ordinal))
+            _currentRig.TryUpdateAppearance(profile.Appearance))
         {
-            _currentRig.UpdateColors(profile.Appearance.BodyColorHex, profile.Appearance.AccentColorHex);
             _animator.UpdateAccentColor(profile.Appearance.AccentColorHex);
         }
         else

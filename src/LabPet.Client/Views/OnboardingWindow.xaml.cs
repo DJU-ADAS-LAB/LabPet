@@ -86,11 +86,9 @@ public partial class OnboardingWindow : Window
 
     private void RebuildPreviewMesh(PetAppearance appearance)
     {
-        var structureSig = PetRigHandle.BuildStructureSignature(appearance);
         if (_currentRig is not null &&
-            string.Equals(_currentRig.AppearanceStructureSignature, structureSig, StringComparison.Ordinal))
+            _currentRig.TryUpdateAppearance(appearance))
         {
-            _currentRig.UpdateColors(appearance.BodyColorHex, appearance.AccentColorHex);
             _previewAnimator.UpdateAccentColor(appearance.AccentColorHex);
             return;
         }

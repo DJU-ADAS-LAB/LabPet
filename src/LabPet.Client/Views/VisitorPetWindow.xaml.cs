@@ -281,11 +281,9 @@ public partial class VisitorPetWindow : Window, IMessageBubbleTarget
         }
 
         _appliedAppearanceSignature = sig;
-        var structureSig = PetRigHandle.BuildStructureSignature(appearance);
         if (_currentRig is not null &&
-            string.Equals(_currentRig.AppearanceStructureSignature, structureSig, StringComparison.Ordinal))
+            _currentRig.TryUpdateAppearance(appearance))
         {
-            _currentRig.UpdateColors(appearance.BodyColorHex, appearance.AccentColorHex);
             _animator.UpdateAccentColor(appearance.AccentColorHex);
             return;
         }

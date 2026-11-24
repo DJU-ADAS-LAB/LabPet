@@ -34,11 +34,16 @@ public sealed class PetRigHandle
 {
     public required string SpeciesId { get; init; }
     public required Model3DGroup RootModel { get; init; }
-    public required int TotalTriangleCount { get; init; }
+    public required int TotalTriangleCount { get => _triangleCount; init => _triangleCount = value; }
+    private int _triangleCount;
+    internal Transform3D? BodyTransform { get; init; }
+    internal PetSkinInstance? Skin { get; init; }
+    internal Func<string, int>? SelectExpression { get; init; }
     internal Point3D NameplateAnchor { get; init; }
 
     /// <summary>색상을 제외한 구조 시그니처 (SpeciesId|ExpressionId|HeadAccessoryId|AuraEffectId).</summary>
-    public string AppearanceStructureSignature { get; init; } = string.Empty;
+    public string AppearanceStructureSignature { get => _signature; init => _signature = value; }
+    private string _signature = string.Empty;
 
     /// <summary>Blender 외부 에셋(.obj)에서 로드되었는지 여부 (폴백 시 false).</summary>
     public bool IsExternalAsset { get; init; }
@@ -98,6 +103,21 @@ public sealed class PetRigHandle
     public SolidColorBrush? EarInnerDarkDiffuseBrush { get; init; }
     public SolidColorBrush? AccentDiffuseBrush { get; init; }
     public SolidColorBrush? AuraDiffuseBrush { get; init; }
+
+    internal bool TryUpdateAppearance(PetAppearance appearance)
+    {
+        var signature = BuildStructureSignature(appearance);
+        if (signature != AppearanceStructureSignature)
+        {
+            var old = AppearanceStructureSignature.Split('|');
+            if (SelectExpression == null || old.Length != 4 || old[0] != appearance.SpeciesId ||
+                old[2] != appearance.HeadAccessoryId || old[3] != appearance.AuraEffectId) return false;
+            _triangleCount += SelectExpression(appearance.ExpressionId);
+            _signature = signature;
+        }
+        UpdateColors(appearance.BodyColorHex, appearance.AccentColorHex);
+        return true;
+    }
 
     public static string BuildStructureSignature(PetAppearance appearance)
         => $"{appearance.SpeciesId}|{appearance.ExpressionId}|{appearance.HeadAccessoryId}|{appearance.AuraEffectId}";

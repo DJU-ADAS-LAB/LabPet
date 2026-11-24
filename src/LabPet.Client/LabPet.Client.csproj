@@ -44,6 +44,7 @@
     <PackageReference Include="Microsoft.AspNetCore.SignalR.Client" Version="10.0.15" />
     <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="10.0.15" />
     <PackageReference Include="NAudio" Version="2.2.1" />
+    <PackageReference Include="SharpGLTF.Core" Version="1.0.7" />
     <PackageReference Include="Velopack" Version="1.2.161" />
   </ItemGroup>
 

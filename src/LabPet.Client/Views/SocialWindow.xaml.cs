@@ -98,12 +98,10 @@ public partial class SocialWindow : Window
         }
 
         _renderedSignature = sig;
-        var structureSig = PetRigHandle.BuildStructureSignature(appearance);
         if (_currentRig is not null &&
             string.Equals(_renderedFriendPetId, selected.Entry.PetId, StringComparison.OrdinalIgnoreCase) &&
-            string.Equals(_currentRig.AppearanceStructureSignature, structureSig, StringComparison.Ordinal))
+            _currentRig.TryUpdateAppearance(appearance))
         {
-            _currentRig.UpdateColors(appearance.BodyColorHex, appearance.AccentColorHex);
             _previewAnimator.UpdateAccentColor(appearance.AccentColorHex);
             return;
         }

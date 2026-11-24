@@ -22,6 +22,140 @@ public sealed class BlenderAssetPipelineTests
     [InlineData(PetSpeciesIds.Hachiware)]
     [InlineData(PetSpeciesIds.Chiikawa)]
     [InlineData(PetSpeciesIds.Usagi)]
+    public void WeightedSkin_BendsFiniteVerticesAndKeepsOtherPetInBindPose(string species)
+    {
+        RunOnSta(() =>
+        {
+            var factory = new BlenderAssetPetMeshFactory(new ProceduralPetMeshFactory());
+            var appearance = new PetAppearance { SpeciesId = species };
+            var rig = factory.BuildPetRig(appearance);
+            var second = factory.BuildPetRig(appearance);
+            var asset = Assert.IsType<PetSkinInstance>(rig.Skin).Asset;
+            Assert.Same(asset, second.Skin!.Asset);
+            Assert.All(asset.Bones.Select((b, i) => (b, i)), v => Assert.InRange(v.b.Parent, -1, v.i - 1));
+            foreach (var left in asset.Bones.Where(b => b.Name.StartsWith("Left", StringComparison.Ordinal)))
+            {
+                var right = Assert.Single(asset.Bones, b => b.Name == "Right" + left.Name[4..]);
+                Assert.Equal(-left.Bind.Translation.X, right.Bind.Translation.X, 4);
+                Assert.Equal(left.Bind.Translation.Y, right.Bind.Translation.Y, 4);
+                Assert.Equal(left.End.Z, right.End.Z, 4);
+            }
+            Assert.Contains(asset.Surfaces.Values, s => s.Weights.Any(w => w.X > 0.05 && w.Y > 0.05));
+            var models = GeometryModels(rig.RootModel).ToArray();
+            var original = models.Select(m => m.Geometry).ToArray();
+            var controller = new PetAnimationController();
+            controller.AttachRig(rig, appearance.AccentColorHex);
+            for (int i = 0; i < 60; i++)
+            {
+                controller.UpdateAudioSnapshot(0.8f, 0.5f, 0.7f, i % 20 == 0);
+                controller.UpdateFrame(1.0 / 60, 0.5, 0.2);
+            }
+            var displacement = models.SelectMany((m, i) =>
+                ((MeshGeometry3D)m.Geometry).Positions.Zip(((MeshGeometry3D)original[i]).Positions,
+                    (a, b) => (a - b).Length)).ToArray();
+            Assert.All(displacement, d => Assert.InRange(d, 0, 1.2));
+            Assert.True(displacement.Max() > 0.01);
+            Assert.All(GeometryModels(second.RootModel), m => Assert.True(m.Geometry.IsFrozen));
+            appearance.ExpressionId = "happy";
+            Assert.True(rig.TryUpdateAppearance(appearance));
+            Assert.Same(asset, rig.Skin!.Asset);
+        });
+    }
+
+    [Theory]
+    [InlineData(PetSpeciesIds.MochiSpirit)]
+    [InlineData(PetSpeciesIds.ChibiCat)]
+    [InlineData(PetSpeciesIds.FluffyCloud)]
+    [InlineData(PetSpeciesIds.FluffyPuppy)]
+    [InlineData(PetSpeciesIds.Hachiware)]
+    [InlineData(PetSpeciesIds.Chiikawa)]
+    [InlineData(PetSpeciesIds.Usagi)]
+    public void UnifiedTypingKeyboard_AttachesSingleDeskKeyboardAndAnimatesTowardIt(string species)
+    {
+        RunOnSta(() =>
+        {
+            var factory = new BlenderAssetPetMeshFactory(new ProceduralPetMeshFactory());
+            var appearance = new PetAppearance { SpeciesId = species };
+            var rig = factory.BuildPetRig(appearance, PetRigEffects.TypingKeyboard);
+
+            var keyboard = Assert.Single(
+                rig.RootModel.Children.OfType<Model3DGroup>(),
+                group => ReferenceEquals(group.Transform, rig.TypingKeyboardScale));
+            var parts = GeometryModels(keyboard).Select(part => part.Bounds).ToArray();
+            Assert.Equal(3, parts.Length);
+            var deck = parts[0];
+            var keys = parts[1];
+            var spacebar = parts[2];
+            Assert.InRange(deck.X + deck.SizeX * 0.5, -0.01, 0.01);
+            Assert.True(deck.SizeX > 1.0);
+            Assert.True(spacebar.Z > deck.Z);
+            Assert.True(spacebar.Z + spacebar.SizeZ < keys.Z);
+
+            var keyboardModels = GeometryModels(keyboard).ToHashSet();
+            var characterModels = GeometryModels(rig.RootModel).Where(m => !keyboardModels.Contains(m)).ToArray();
+            var restPositions = characterModels
+                .Select(m => ((MeshGeometry3D)m.Geometry).Positions.ToArray())
+                .ToArray();
+
+            var controller = new PetAnimationController();
+            controller.AttachRig(rig, appearance.AccentColorHex);
+
+            controller.TriggerTypingPawTap();
+            for (int i = 0; i < 12; i++)
+            {
+                controller.UpdateFrame(1.0 / 60, 0, 0);
+            }
+
+            Assert.NotNull(rig.TypingKeyboardScale);
+            Assert.True(rig.TypingKeyboardScale!.ScaleX > 0.5);
+            Assert.True(rig.BodyTranslate.OffsetZ > 0.05);
+            Assert.True(rig.BodyPitch.Angle > 2.5);
+
+            var leftTapPositions = characterModels
+                .Select(m => ((MeshGeometry3D)m.Geometry).Positions.ToArray())
+                .ToArray();
+
+            controller.TriggerTypingPawTap();
+            for (int i = 0; i < 8; i++)
+            {
+                controller.UpdateFrame(1.0 / 60, 0, 0);
+            }
+
+            var rightTapPositions = characterModels
+                .Select(m => ((MeshGeometry3D)m.Geometry).Positions.ToArray())
+                .ToArray();
+
+            var maxForwardDeltaZ = 0.0;
+            var maxLeftRightDelta = 0.0;
+            for (int i = 0; i < characterModels.Length; i++)
+            {
+                for (int v = 0; v < restPositions[i].Length; v++)
+                {
+                    var rest = restPositions[i][v];
+                    var left = leftTapPositions[i][v];
+                    var right = rightTapPositions[i][v];
+                    Assert.True(double.IsFinite(left.X) && double.IsFinite(left.Y) && double.IsFinite(left.Z));
+                    Assert.True(double.IsFinite(right.X) && double.IsFinite(right.Y) && double.IsFinite(right.Z));
+                    Assert.InRange((left - rest).Length, 0, 1.2);
+                    Assert.InRange((right - rest).Length, 0, 1.2);
+                    maxForwardDeltaZ = Math.Max(maxForwardDeltaZ, Math.Max(left.Z - rest.Z, right.Z - rest.Z));
+                    maxLeftRightDelta = Math.Max(maxLeftRightDelta, (right - left).Length);
+                }
+            }
+
+            Assert.True(maxForwardDeltaZ > 0.02);
+            Assert.True(maxLeftRightDelta > 0.01);
+        });
+    }
+
+    [Theory]
+    [InlineData(PetSpeciesIds.MochiSpirit)]
+    [InlineData(PetSpeciesIds.ChibiCat)]
+    [InlineData(PetSpeciesIds.FluffyCloud)]
+    [InlineData(PetSpeciesIds.FluffyPuppy)]
+    [InlineData(PetSpeciesIds.Hachiware)]
+    [InlineData(PetSpeciesIds.Chiikawa)]
+    [InlineData(PetSpeciesIds.Usagi)]
     public void BuildPetRig_LoadsShippedBlenderAssetsForAllFourSpecies(string speciesId)
     {
         RunOnSta(() =>
@@ -40,6 +174,72 @@ public sealed class BlenderAssetPipelineTests
             Assert.InRange(rig.TotalTriangleCount, 1200, 12000);
             Assert.Equal(BlenderAssetPetMeshFactory.MaxPooledParticles, rig.MusicParticles.Count);
         });
+    }
+
+    [Fact]
+    public void CorruptGlb_UsesShippedObjBeforeProceduralFallback()
+    {
+        RunOnSta(() =>
+        {
+            var root = Directory.CreateTempSubdirectory();
+            try
+            {
+                var relative = Path.Combine("Characters", PetSpeciesIds.Usagi);
+                var dir = Directory.CreateDirectory(Path.Combine(root.FullName, relative));
+                var assets = Path.Combine(AppContext.BaseDirectory, "Assets", "Models", relative);
+                File.Copy(Path.Combine(assets, "model.obj"), Path.Combine(dir.FullName, "model.obj"));
+                File.Copy(Path.Combine(assets, "rig.json"), Path.Combine(dir.FullName, "rig.json"));
+                File.WriteAllBytes(Path.Combine(dir.FullName, "model.glb"), "glTF"u8.ToArray());
+                var factory = new BlenderAssetPetMeshFactory(new ProceduralPetMeshFactory(), root.FullName);
+                var rig = factory.BuildPetRig(new PetAppearance { SpeciesId = PetSpeciesIds.Usagi });
+                Assert.True(rig.IsExternalAsset);
+                Assert.Null(rig.Skin);
+            }
+            finally { root.Delete(true); }
+        });
+    }
+
+    [Fact]
+    public void AnimatedMeshes_ReuseBuffersAndReleaseRigAfterDetach()
+    {
+        RunOnSta(() =>
+        {
+            var factory = new BlenderAssetPetMeshFactory(new ProceduralPetMeshFactory());
+            var animator = new PetAnimationController();
+            var weak = Exercise(factory, animator);
+            for (int i = 0; i < 4 && weak.IsAlive; i++)
+            {
+                GC.Collect();
+                GC.WaitForPendingFinalizers();
+                GC.Collect();
+            }
+            Assert.False(weak.IsAlive);
+            GC.KeepAlive(factory);
+            GC.KeepAlive(animator);
+        });
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        static WeakReference Exercise(BlenderAssetPetMeshFactory factory, PetAnimationController animator)
+        {
+            var appearance = new PetAppearance { SpeciesId = PetSpeciesIds.FluffyPuppy };
+            var rig = factory.BuildPetRig(appearance, PetRigEffects.MusicParticles);
+            animator.AttachRig(rig, appearance.AccentColorHex);
+            animator.UpdateFrame(1d/60, 0, 0);
+            var active = GeometryModels(rig.RootModel).Where(m => !m.Geometry.IsFrozen).ToArray();
+            Assert.NotEmpty(active);
+            var buffers = active.Select(m => ((MeshGeometry3D)m.Geometry).Positions).ToArray();
+            for (int i = 0; i < 3600; i++)
+            {
+                if (i % 600 == 0) animator.SetSleeping(!animator.IsSleeping);
+                if (i % 14 == 0) animator.TriggerTypingPawTap();
+                animator.UpdateAudioSnapshot(0.5f, 0.35f, 0.6f, i % 30 == 0);
+                animator.UpdateFrame(1d/60, Math.Sin(i * 0.02), 0.25);
+            }
+            for (int i = 0; i < active.Length; i++)
+                Assert.Same(buffers[i], ((MeshGeometry3D)active[i].Geometry).Positions);
+            animator.DetachRig();
+            return new WeakReference(rig.Skin!);
+        }
     }
 
     [Theory]

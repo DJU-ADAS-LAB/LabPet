@@ -18,7 +18,6 @@ WPF 3D 좌표계 규약:
 """
 
 import argparse
-import json
 import math
 import os
 import sys
@@ -29,6 +28,9 @@ from mathutils import Vector, Matrix, Euler
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 REPO_ROOT = os.path.abspath(os.path.join(SCRIPT_DIR, "..", ".."))
+sys.path.insert(0, SCRIPT_DIR)
+from character_skin import export_character
+
 MODELS_ROOT = os.path.join(REPO_ROOT, "src", "LabPet.Client", "Assets", "Models")
 
 # Blender 5.2 Metaball threshold=0.60, stiffness=2.0 기준 실측 반지름 역보정 배율
@@ -416,11 +418,21 @@ def create_conformed_clay_patch(
         if shape_fn is not None:
             ux_norm, vy_norm = shape_fn(ux_norm, vy_norm)
         sample_plane_pt = center_p + u_axis * (ux_norm * rx) + v_axis * (vy_norm * ry)
-        cast_origin = sample_plane_pt + center_n * 0.90
-        cast_dir = (focus_pt - cast_origin).normalized()
+        cast_dir = (focus_pt - sample_plane_pt).normalized()
+        cast_origin = sample_plane_pt - cast_dir * 0.90
         ok, surf_p, surf_n = sample_surface_wpf(target_obj, cast_origin, cast_dir)
         if not ok:
+            low, high = 0.0, 1.0
             surf_p, surf_n = center_p, center_n
+            for _ in range(6):
+                mid = (low + high) * 0.5
+                sample = center_p.lerp(sample_plane_pt, mid)
+                direction = (focus_pt - sample).normalized()
+                hit, pos, normal = sample_surface_wpf(target_obj, sample - direction * 0.90, direction)
+                if hit:
+                    low, surf_p, surf_n = mid, pos, normal
+                else:
+                    high = mid
         if radial_t >= 0.999:
             offset = rim_offset
         else:
@@ -531,11 +543,6 @@ def export_obj(filepath, objects):
 
     return total_tris
 
-
-def save_rig_metadata(filepath, meta_dict):
-    os.makedirs(os.path.dirname(filepath), exist_ok=True)
-    with open(filepath, "w", encoding="utf-8", newline="\n") as f:
-        json.dump(meta_dict, f, indent=2, ensure_ascii=False)
 
 
 # ---------------------------------------------------------------------------
@@ -800,7 +807,7 @@ def build_fluffy_puppy():
         # 상체 / 가슴 볼륨
         ((0.0, -0.32, 0.04), (0.42, 0.34, 0.38), None, 2.1),
         # 아래 통통한 배 / 엉덩이 (안정감 있게 둥글고 묵직함)
-        ((0.0, -0.58, -0.02), (0.50, 0.34, 0.44), None, 2.2),
+        ((0.0, -0.58, -0.02), (0.48, 0.32, 0.43), None, 2.2),
         # 포동포동 좌우 앉은 허벅지 (몸통 옆에 부드럽게 융합)
         ((-0.34, -0.66, -0.02), (0.24, 0.25, 0.28), (0.0, 0.22, -0.15), 2.0),
         ((0.34, -0.66, -0.02), (0.24, 0.25, 0.28), (0.0, -0.22, 0.15), 2.0),
@@ -932,7 +939,7 @@ def build_fluffy_puppy():
         ((-0.26, 0.22, 0.18), (0.46, 0.34, 0.44), (0.0, 0.15, 0.08), 2.1),
         ((0.26, 0.22, 0.18), (0.46, 0.34, 0.44), (0.0, -0.15, -0.08), 2.1),
         # 부드럽게 앞으로 솟아오른 일체형 주둥이(머즐) — 3/4 측면에서도 귀여운 강아지 코 라인 강조
-        ((0.0, 0.165, 0.60), (0.285, 0.205, 0.275), (-0.12, 0.0, 0.0), 2.2),
+        ((0.0, 0.165, 0.60), (0.315, 0.185, 0.29), (-0.12, 0.0, 0.0), 2.2),
     ]
     head_clay = create_metaball_clay(
         "_PuppyHeadClay",
@@ -991,8 +998,8 @@ def build_fluffy_puppy():
             # 귀 뿌리는 머리 두개골 측면 내부(x ≈ side*0.52)까지 자연스럽게 들어감
             ((side * 0.53, 0.57, 0.07), (0.155, 0.145, 0.155), (0.0, 0.0, side * 0.28), 2.0),
             ((side * 0.65, 0.39, 0.11), (0.135, 0.195, 0.175), (0.06, -side * 0.14, side * 0.18), 2.1),
-            ((side * 0.69, 0.17, 0.13), (0.142, 0.195, 0.185), (0.08, -side * 0.16, side * 0.08), 2.2),
-            ((side * 0.67, 0.03, 0.11), (0.122, 0.115, 0.155), None, 2.0),
+            ((side * 0.77, 0.14, 0.21), (0.157, 0.225, 0.18), (0.08, -side * 0.16, side * 0.08), 2.2),
+            ((side * 0.77, 0.00, 0.21), (0.15, 0.14, 0.165), None, 2.0),
         ]
         ear_obj = create_metaball_clay(
             ear_name,
@@ -1024,7 +1031,6 @@ def build_fluffy_puppy():
 
     head_socket_y, head_radius_x = measure_head_crown_and_radius(head_clay, head_center_z=0.10)
     puppy_dir = os.path.join(MODELS_ROOT, "Characters", "fluffy_puppy")
-    tris = export_obj(os.path.join(puppy_dir, "model.obj"), objects)
     rig_meta = {
         "coordinateSystem": "WPF_Y_UP_Z_FRONT",
         "unitScale": 1.0,
@@ -1044,8 +1050,7 @@ def build_fluffy_puppy():
         "rightEarBaseAngle": 0.0,
         "tailPivot": {"x": tail_pivot[0], "y": tail_pivot[1], "z": tail_pivot[2]},
     }
-    save_rig_metadata(os.path.join(puppy_dir, "rig.json"), rig_meta)
-    print(f"[fluffy_puppy] exported model.obj ({tris} tris across expression layers) & rig.json (crown={head_socket_y}, rx={head_radius_x})")
+    export_character(puppy_dir, objects, rig_meta)
 
 
 # ---------------------------------------------------------------------------
@@ -1137,13 +1142,13 @@ def build_chibi_cat():
             (0.08, -0.57, -0.50, 0.102),
             (0.19, -0.45, -0.66, 0.105),
             (0.26, -0.25, -0.76, 0.110),
-            (0.27, -0.04, -0.76, 0.108),
-            (0.21, 0.12, -0.68, 0.095),
+            (0.35, -0.04, -0.79, 0.108),
+            (0.38, 0.18, -0.64, 0.095),
         ],
         resolution_u=5,
         bevel_resolution=2,
     )
-    tail_tip_ball = create_sculpted_quad_mesh("_CatTailTipSphere", "body", (0.21, 0.12, -0.68), (0.10, 0.10, 0.10), subsurf_levels=1)
+    tail_tip_ball = create_sculpted_quad_mesh("_CatTailTipSphere", "body", (0.38, 0.18, -0.64), (0.10, 0.10, 0.10), subsurf_levels=1)
     tail_clay = create_voxel_fused_clay(
         "_CatTailClay",
         "body",
@@ -1156,7 +1161,7 @@ def build_chibi_cat():
         "_CatTailTipPatch",
         "body_light",
         tail_clay,
-        ray_origin_wpf=(0.21, 0.85, -0.68),
+        ray_origin_wpf=(0.38, 0.85, -0.64),
         ray_dir_wpf=(0.0, -1.0, 0.0),
         rx=0.095,
         ry=0.095,
@@ -1170,9 +1175,9 @@ def build_chibi_cat():
 
     # 4) Head (통통한 만두형 볼살 + 부드럽게 융합된 일체형 고양이 머즐)
     head_elements = [
-        ((0.0, 0.39, 0.01), (0.76, 0.62, 0.68), None, 2.0),
-        ((-0.26, 0.24, 0.14), (0.48, 0.36, 0.48), None, 2.1),
-        ((0.26, 0.24, 0.14), (0.48, 0.36, 0.48), None, 2.1),
+        ((0.0, 0.39, 0.01), (0.77, 0.56, 0.65), None, 2.0),
+        ((-0.26, 0.24, 0.14), (0.50, 0.34, 0.48), None, 2.1),
+        ((0.26, 0.24, 0.14), (0.50, 0.34, 0.48), None, 2.1),
         ((0.0, 0.22, 0.56), (0.25, 0.17, 0.20), None, 2.15),
     ]
     head_clay = create_metaball_clay(
@@ -1219,7 +1224,7 @@ def build_chibi_cat():
         ear_elements = [
             ((side * 0.43, 0.79, 0.01), (0.22, 0.16, 0.17), (0.0, 0.0, -side * 0.22), 2.0),
             ((side * 0.49, 0.94, 0.02), (0.165, 0.145, 0.135), (0.0, 0.0, -side * 0.28), 2.1),
-            ((side * 0.56, 1.07, 0.03), (0.092, 0.095, 0.092), None, 2.0),
+            ((side * 0.61, 1.13, 0.015), (0.092, 0.095, 0.092), None, 2.0),
         ]
         outer_ear = create_metaball_clay(
             f"_{ear_name}_Outer",
@@ -1251,7 +1256,7 @@ def build_chibi_cat():
     # 6) 얼굴 표정 4종 + 볼터치
     expr_parts, blink_center = build_conformed_face_expressions(
         head_clay,
-        eye_x=0.255,
+        eye_x=0.282,
         eye_y=0.365,
         eye_rx=0.104,
         eye_ry=0.118,
@@ -1267,7 +1272,6 @@ def build_chibi_cat():
 
     head_socket_y, head_radius_x = measure_head_crown_and_radius(head_clay, head_center_z=0.01)
     cat_dir = os.path.join(MODELS_ROOT, "Characters", "chibi_cat")
-    tris = export_obj(os.path.join(cat_dir, "model.obj"), objects)
     rig_meta = {
         "coordinateSystem": "WPF_Y_UP_Z_FRONT",
         "unitScale": 1.0,
@@ -1287,8 +1291,7 @@ def build_chibi_cat():
         "rightEarBaseAngle": 0.0,
         "tailPivot": {"x": tail_pivot[0], "y": tail_pivot[1], "z": tail_pivot[2]},
     }
-    save_rig_metadata(os.path.join(cat_dir, "rig.json"), rig_meta)
-    print(f"[chibi_cat] exported model.obj ({tris} tris across expression layers) & rig.json (crown={head_socket_y}, rx={head_radius_x})")
+    export_character(cat_dir, objects, rig_meta)
 
 
 # ---------------------------------------------------------------------------
@@ -1302,30 +1305,42 @@ def build_fluffy_cloud():
     # 1) Head: 양옆·위·아래가 뭉게구름 3봉우리 아치로 둥글게 퍼진 매끈한 클레이 ☁️ 구름
     cloud_elements = [
         # 중앙 포동한 얼굴 쿠션
-        ((0.0, -0.02, 0.22), (0.62, 0.42, 0.58), None, 2.0),
+        ((0.0, -0.02, 0.22), (0.69, 0.44, 0.60), None, 2.0),
         # 좌우 통통한 볼 구름 봉우리
         ((-0.72, -0.03, 0.00), (0.37, 0.34, 0.38), None, 2.5),
         ((0.72, -0.03, 0.00), (0.37, 0.34, 0.38), None, 2.5),
         # 상단 3봉우리 구름 왕관 (양옆 봉우리가 높고 풍성해서 뾰족한 유령처럼 보이지 않음)
-        ((-0.46, 0.41, -0.02), (0.37, 0.33, 0.36), None, 2.5),
-        ((0.46, 0.41, -0.02), (0.37, 0.33, 0.36), None, 2.5),
-        ((0.0, 0.49, 0.00), (0.43, 0.34, 0.40), None, 2.5),
+        ((-0.44, 0.34, -0.06), (0.37, 0.33, 0.36), None, 2.5),
+        ((0.48, 0.40, -0.06), (0.37, 0.33, 0.36), None, 2.5),
+        ((-0.08, 0.53, -0.02), (0.43, 0.34, 0.40), None, 2.5),
         # 하단 3봉우리 구름 쿠션
         ((-0.46, -0.34, -0.02), (0.36, 0.28, 0.38), None, 2.5),
         ((0.46, -0.34, -0.02), (0.36, 0.28, 0.38), None, 2.5),
         ((0.0, -0.32, 0.04), (0.44, 0.27, 0.42), None, 2.1),
         # 후면 입체 볼륨
-        ((0.0, 0.02, -0.26), (0.54, 0.36, 0.36), None, 2.0),
+        ((0.0, 0.02, -0.26), (0.60, 0.37, 0.42), None, 2.0),
     ]
-    cloud_clay = create_metaball_clay(
-        "Head",
-        "body",
-        cloud_elements,
-        mb_res=0.030,
-        voxel_size=0.025,
-        smooth_iters=9,
-        target_tris=1450,
-    )
+    # 각 방향에서 타원체들의 부드러운 합집합 표면을 찾아, 모서리 없이 봉우리가 이어지게 한다.
+    def cloud_surface(x, y, z, nx, ny, nz):
+        low, high = 0.0, 1.5
+        blend = 0.16
+        for _ in range(16):
+            radius = (low + high) * 0.5
+            distance = 2.0
+            for (cx, cy, cz), (rx, ry, rz), _, _ in cloud_elements:
+                dx, dy, dz = (nx*radius-cx)/rx, (ny*radius-cy)/ry, (nz*radius-cz)/rz
+                d = (math.sqrt(dx*dx + dy*dy + dz*dz) - 1.0) * min(rx, ry, rz)
+                h = max(blend - abs(distance - d), 0.0) / blend
+                distance = min(distance, d) - blend * h*h * 0.25
+            if distance < 0:
+                low = radius
+            else:
+                high = radius
+        return nx * radius, ny * radius, nz * radius
+
+    cloud_clay = create_sculpted_quad_mesh("Head", "body", (0, 0, 0), (1, 1, 1),
+                                            cubes_cuts=1, subsurf_levels=3, sculpt_fn=cloud_surface)
+    remesh_smooth_decimate(cloud_clay, voxel_size=None, smooth_iters=2, target_tris=1450)
     objects.append(cloud_clay)
 
     # 2) LeftArm / RightArm (일체형 클레이 천사 날개)
@@ -1365,7 +1380,6 @@ def build_fluffy_cloud():
 
     head_socket_y, head_radius_x = measure_head_crown_and_radius(cloud_clay, head_center_z=-0.01)
     cloud_dir = os.path.join(MODELS_ROOT, "Characters", "fluffy_cloud")
-    tris = export_obj(os.path.join(cloud_dir, "model.obj"), objects)
     rig_meta = {
         "coordinateSystem": "WPF_Y_UP_Z_FRONT",
         "unitScale": 1.0,
@@ -1382,8 +1396,7 @@ def build_fluffy_cloud():
         "leftArmPivot": {"x": -0.92, "y": 0.05, "z": -0.03},
         "rightArmPivot": {"x": 0.92, "y": 0.05, "z": -0.03},
     }
-    save_rig_metadata(os.path.join(cloud_dir, "rig.json"), rig_meta)
-    print(f"[fluffy_cloud] exported model.obj ({tris} tris across expression layers) & rig.json (crown={head_socket_y}, rx={head_radius_x})")
+    export_character(cloud_dir, objects, rig_meta)
 
 
 # ---------------------------------------------------------------------------
@@ -1397,9 +1410,9 @@ def build_mochi_spirit():
     # 1) Head: 아래가 넉넉하고 볼록 퍼지며 위는 앙증맞은 찹쌀떡 실루엣 + 뒤 꽁지 꼬리
     mochi_elements = [
         # 바닥에 말랑하게 퍼져 앉은 넓은 하단 베이스
-        ((0.0, -0.34, 0.02), (0.88, 0.46, 0.80), None, 2.2),
+        ((0.0, -0.34, 0.02), (0.92, 0.41, 0.82), None, 2.2),
         # 위쪽으로 둥글게 모이는 도톰한 떡 돔
-        ((0.0, 0.06, 0.00), (0.72, 0.48, 0.68), None, 2.0),
+        ((0.0, 0.06, 0.00), (0.75, 0.54, 0.70), None, 2.0),
         # 뒤쪽 앙증맞은 꽁지 꼬리
         ((0.0, -0.46, -0.78), (0.16, 0.15, 0.17), None, 2.0),
     ]
@@ -1418,7 +1431,7 @@ def build_mochi_spirit():
     # 2) LeftArm / RightArm (물방울처럼 통통하고 말랑한 클레이 미니 팔)
     for side, name in ((-1, "LeftArm"), (1, "RightArm")):
         arm_elements = [
-            ((side * 0.84, -0.25, 0.18), (0.135, 0.12, 0.13), None, 2.0),
+            ((side * 0.79, -0.24, 0.19), (0.17, 0.145, 0.15), None, 2.0),
             ((side * 1.02, -0.27, 0.22), (0.155, 0.12, 0.135), (0.0, -side * 0.15, side * 0.22), 2.1),
         ]
         arm = create_metaball_clay(
@@ -1436,7 +1449,7 @@ def build_mochi_spirit():
     expr_parts, blink_center = build_conformed_face_expressions(
         mochi_clay,
         eye_x=0.255,
-        eye_y=-0.020,
+        eye_y=0.012,
         eye_rx=0.104,
         eye_ry=0.118,
         eye_depth=0.052,
@@ -1451,7 +1464,6 @@ def build_mochi_spirit():
 
     head_socket_y, head_radius_x = measure_head_crown_and_radius(mochi_clay, head_center_z=0.0)
     mochi_dir = os.path.join(MODELS_ROOT, "Characters", "mochi_spirit")
-    tris = export_obj(os.path.join(mochi_dir, "model.obj"), objects)
     rig_meta = {
         "coordinateSystem": "WPF_Y_UP_Z_FRONT",
         "unitScale": 1.0,
@@ -1468,8 +1480,7 @@ def build_mochi_spirit():
         "leftArmPivot": {"x": -0.82, "y": -0.25, "z": 0.18},
         "rightArmPivot": {"x": 0.82, "y": -0.25, "z": 0.18},
     }
-    save_rig_metadata(os.path.join(mochi_dir, "rig.json"), rig_meta)
-    print(f"[mochi_spirit] exported model.obj ({tris} tris across expression layers) & rig.json (crown={head_socket_y}, rx={head_radius_x})")
+    export_character(mochi_dir, objects, rig_meta)
 
 
 # ---------------------------------------------------------------------------
@@ -1619,7 +1630,7 @@ def build_hachiware():
     # 1) Body: 포동포동한 아랫배와 짧은 두 발이 하나로 이어진 눈사람/찹쌀떡형 바디
     body_elements = [
         ((0.0, 0.02, 0.00), (0.48, 0.28, 0.44), None, 2.0),
-        ((0.0, -0.34, 0.01), (0.58, 0.42, 0.52), None, 2.15),
+        ((0.0, -0.34, 0.01), (0.52, 0.38, 0.48), None, 2.15),
         ((0.0, -0.60, 0.00), (0.54, 0.30, 0.48), None, 2.1),
         # 아래쪽으로 귀엽게 톡 튀어나온 짧은 두 발
         ((-0.26, -0.82, 0.06), (0.14, 0.15, 0.16), (0.0, 0.10, -0.08), 2.0),
@@ -1676,7 +1687,7 @@ def build_hachiware():
 
     # 4) Head (만두처럼 둥글고 통통한 두상 + 이마 양옆으로 갈라진 하늘색 8자 가르마 무늬 패치)
     head_elements = [
-        ((0.0, 0.34, 0.00), (0.69, 0.56, 0.63), None, 2.05),
+        ((0.0, 0.34, 0.00), (0.75, 0.58, 0.64), None, 2.05),
         ((-0.24, 0.22, 0.10), (0.45, 0.35, 0.44), None, 2.1),
         ((0.24, 0.22, 0.10), (0.45, 0.35, 0.44), None, 2.1),
     ]
@@ -1690,35 +1701,30 @@ def build_hachiware():
         target_tris=1200,
     )
 
-    # 하치와레 시그니처 하늘색 가르마 무늬 (좌/우 이마에서 정수리·뒤통수로 이어지는 V-갈래 캡)
-    cap_patches = []
-    for side in (-1, 1):
-        cap_dir = Vector((-side * 0.38, -0.58, -0.72)).normalized()
-        cap_origin = Vector((side * 0.31, 0.66, 0.26)) - cap_dir * 1.6
-        cap_patches.append(
-            create_conformed_clay_patch(
-                f"_HachiBlueCap_{side}",
-                "hachi_blue",
-                head_clay,
-                ray_origin_wpf=cap_origin,
-                ray_dir_wpf=cap_dir,
-                rx=0.41,
-                ry=0.35,
-                center_offset=0.015,
-                rim_offset=-0.011,
-                rings=5,
-                segs=24,
-                wrap_focus_depth=1.3,
-                shape_fn=lambda ux, vy, s=side: (
-                    ux * (0.94 + 0.18 * max(0.0, -vy)),
-                    vy - 0.18 * max(0.0, s * ux),
-                ),
-            )
-        )
+    # 머리 표면을 가르마 곡선을 따라 나누어 정수리·뒤통수까지 이어지는 색 경계를 만든다.
+    def hairline(x, depth):
+        front = min(1.0, max(0.0, (depth + 0.12) / 0.55))
+        crest = math.exp(-(abs(x) / 0.235) ** 1.55)
+        return 0.26 + front * (0.20 + 0.35 * crest)
+
+    head_clay.data.materials.append(ensure_material("hachi_blue"))
+    bm = bmesh.new()
+    bm.from_mesh(head_clay.data)
+    for v in bm.verts:
+        v.co.z -= hairline(v.co.x, -v.co.y)
+    bmesh.ops.bisect_plane(bm, geom=list(bm.verts) + list(bm.edges) + list(bm.faces),
+                           plane_co=(0, 0, 0), plane_no=(0, 0, 1), dist=1e-6)
+    for face in bm.faces:
+        face.material_index = int(face.calc_center_median().z > 0)
+    for v in bm.verts:
+        v.co.z += hairline(v.co.x, -v.co.y)
+    bm.to_mesh(head_clay.data)
+    bm.free()
+    head_clay.data.update()
 
     expr_parts, blink_center, extra_head_objs = build_chiikawa_style_face(
         head_clay,
-        eye_x=0.225,
+        eye_x=0.244,
         eye_y=0.275,
         eye_rx=0.090,
         eye_ry=0.100,
@@ -1731,7 +1737,7 @@ def build_hachiware():
         brow_style="tick",
         open_tongue_default=True,
     )
-    objects.append(join_part_group("Head", [head_clay] + cap_patches + extra_head_objs))
+    objects.append(join_part_group("Head", [head_clay] + extra_head_objs))
 
     # 5) LeftEar / RightEar (하늘색 쫑긋한 고양이 귀)
     for side, ear_name in ((-1, "LeftEar"), (1, "RightEar")):
@@ -1756,7 +1762,6 @@ def build_hachiware():
 
     head_socket_y, head_radius_x = measure_head_crown_and_radius(head_clay, head_center_z=0.0)
     out_dir = os.path.join(MODELS_ROOT, "Characters", "hachiware")
-    tris = export_obj(os.path.join(out_dir, "model.obj"), objects)
     rig_meta = {
         "coordinateSystem": "WPF_Y_UP_Z_FRONT",
         "unitScale": 1.0,
@@ -1778,8 +1783,7 @@ def build_hachiware():
         "rightArmPivot": {"x": 0.54, "y": -0.28, "z": 0.10},
         "tailPivot": {"x": tail_pivot[0], "y": tail_pivot[1], "z": tail_pivot[2]},
     }
-    save_rig_metadata(os.path.join(out_dir, "rig.json"), rig_meta)
-    print(f"[hachiware] exported model.obj ({tris} tris across expression layers) & rig.json (crown={head_socket_y}, rx={head_radius_x})")
+    export_character(out_dir, objects, rig_meta)
 
 
 # ---------------------------------------------------------------------------
@@ -1793,8 +1797,8 @@ def build_chiikawa():
     # 1) Body: 치이카와 특유의 아담하고 통통한 찹쌀떡 몸통 + 가운데로 모인 짧은 두 발
     body_elements = [
         ((0.0, 0.00, 0.00), (0.48, 0.27, 0.44), None, 2.0),
-        ((0.0, -0.35, 0.01), (0.57, 0.41, 0.51), None, 2.15),
-        ((0.0, -0.59, 0.00), (0.52, 0.29, 0.46), None, 2.1),
+        ((0.0, -0.35, 0.01), (0.49, 0.36, 0.46), None, 2.15),
+        ((0.0, -0.59, 0.00), (0.47, 0.26, 0.43), None, 2.1),
         ((-0.18, -0.82, 0.05), (0.135, 0.145, 0.155), (0.0, 0.06, -0.05), 2.0),
         ((0.18, -0.82, 0.05), (0.135, 0.145, 0.155), (0.0, -0.06, 0.05), 2.0),
     ]
@@ -1813,7 +1817,7 @@ def build_chiikawa():
     # 2) LeftArm / RightArm (짧고 앙증맞은 양옆 미니 팔)
     for side, name in ((-1, "LeftArm"), (1, "RightArm")):
         arm_elements = [
-            ((side * 0.53, -0.27, 0.10), (0.120, 0.110, 0.115), None, 2.0),
+            ((side * 0.49, -0.27, 0.10), (0.120, 0.110, 0.115), None, 2.0),
             ((side * 0.65, -0.31, 0.15), (0.115, 0.100, 0.110), (0.0, -side * 0.16, side * 0.22), 2.1),
         ]
         objects.append(
@@ -1844,7 +1848,7 @@ def build_chiikawa():
 
     # 4) Head (양볼이 말랑하게 부푼 둥근 만두형 머리)
     head_elements = [
-        ((0.0, 0.33, 0.00), (0.70, 0.55, 0.63), None, 2.05),
+        ((0.0, 0.33, 0.00), (0.75, 0.62, 0.66), None, 2.05),
         ((-0.26, 0.21, 0.10), (0.46, 0.35, 0.44), None, 2.1),
         ((0.26, 0.21, 0.10), (0.46, 0.35, 0.44), None, 2.1),
     ]
@@ -1861,7 +1865,7 @@ def build_chiikawa():
     expr_parts, blink_center, extra_head_objs = build_chiikawa_style_face(
         head_clay,
         eye_x=0.220,
-        eye_y=0.255,
+        eye_y=0.280,
         eye_rx=0.088,
         eye_ry=0.098,
         eye_depth=0.048,
@@ -1879,7 +1883,7 @@ def build_chiikawa():
     for side, ear_name in ((-1, "LeftEar"), (1, "RightEar")):
         ear_elements = [
             ((side * 0.42, 0.77, 0.01), (0.145, 0.135, 0.120), None, 2.0),
-            ((side * 0.46, 0.87, 0.01), (0.145, 0.145, 0.110), None, 2.1),
+            ((side * 0.46, 0.87, 0.01), (0.13, 0.13, 0.105), None, 2.1),
         ]
         outer_ear = create_metaball_clay(
             f"_{ear_name}_Outer",
@@ -1911,7 +1915,6 @@ def build_chiikawa():
 
     head_socket_y, head_radius_x = measure_head_crown_and_radius(head_clay, head_center_z=0.0)
     out_dir = os.path.join(MODELS_ROOT, "Characters", "chiikawa")
-    tris = export_obj(os.path.join(out_dir, "model.obj"), objects)
     rig_meta = {
         "coordinateSystem": "WPF_Y_UP_Z_FRONT",
         "unitScale": 1.0,
@@ -1933,8 +1936,7 @@ def build_chiikawa():
         "rightArmPivot": {"x": 0.53, "y": -0.27, "z": 0.10},
         "tailPivot": {"x": tail_pivot[0], "y": tail_pivot[1], "z": tail_pivot[2]},
     }
-    save_rig_metadata(os.path.join(out_dir, "rig.json"), rig_meta)
-    print(f"[chiikawa] exported model.obj ({tris} tris across expression layers) & rig.json (crown={head_socket_y}, rx={head_radius_x})")
+    export_character(out_dir, objects, rig_meta)
 
 
 # ---------------------------------------------------------------------------
@@ -1948,8 +1950,8 @@ def build_usagi():
     # 1) Body: 포동포동한 배와 아담한 두 발
     body_elements = [
         ((0.0, 0.01, 0.00), (0.48, 0.28, 0.44), None, 2.0),
-        ((0.0, -0.35, 0.01), (0.58, 0.42, 0.52), None, 2.15),
-        ((0.0, -0.60, 0.00), (0.54, 0.30, 0.48), None, 2.1),
+        ((0.0, -0.35, 0.01), (0.51, 0.38, 0.46), None, 2.15),
+        ((0.0, -0.60, 0.00), (0.48, 0.28, 0.43), None, 2.1),
         ((-0.25, -0.82, 0.06), (0.14, 0.15, 0.16), (0.0, 0.10, -0.08), 2.0),
         ((0.25, -0.82, 0.06), (0.14, 0.15, 0.16), (0.0, -0.10, 0.08), 2.0),
     ]
@@ -1999,7 +2001,7 @@ def build_usagi():
 
     # 4) Head (둥글고 통통한 우사기 두상)
     head_elements = [
-        ((0.0, 0.32, 0.00), (0.69, 0.54, 0.62), None, 2.05),
+        ((0.0, 0.32, 0.00), (0.73, 0.56, 0.63), None, 2.05),
         ((-0.25, 0.20, 0.10), (0.45, 0.34, 0.44), None, 2.1),
         ((0.25, 0.20, 0.10), (0.45, 0.34, 0.44), None, 2.1),
     ]
@@ -2015,18 +2017,18 @@ def build_usagi():
 
     expr_parts, blink_center, extra_head_objs = build_chiikawa_style_face(
         head_clay,
-        eye_x=0.220,
+        eye_x=0.239,
         eye_y=0.250,
         eye_rx=0.090,
         eye_ry=0.100,
         eye_depth=0.048,
-        mouth_y=0.130,
+        mouth_y=0.123,
         cheek_x=0.395,
         cheek_y=0.165,
         cheek_rx=0.125,
         cheek_ry=0.070,
         brow_style="high_arch",
-        open_tongue_default=False,
+        open_tongue_default=True,
     )
     objects.append(join_part_group("Head", [head_clay] + extra_head_objs))
 
@@ -2034,8 +2036,8 @@ def build_usagi():
     for side, ear_name in ((-1, "LeftEar"), (1, "RightEar")):
         ear_elements = [
             ((side * 0.145, 0.80, 0.00), (0.115, 0.16, 0.095), (0.0, 0.0, -side * 0.04), 2.0),
-            ((side * 0.160, 1.02, 0.00), (0.112, 0.20, 0.092), (0.0, 0.0, -side * 0.05), 2.1),
-            ((side * 0.172, 1.24, 0.00), (0.098, 0.16, 0.085), None, 2.0),
+            ((side * 0.18, 1.04, -0.025), (0.112, 0.20, 0.092), (0.0, 0.0, -side * 0.05), 2.1),
+            ((side * 0.22, 1.33, -0.07), (0.095, 0.185, 0.082), None, 2.0),
         ]
         outer_ear = create_metaball_clay(
             f"_{ear_name}_Outer",
@@ -2051,10 +2053,10 @@ def build_usagi():
             f"_{ear_name}_Inner",
             "accent",
             outer_ear,
-            ray_origin_wpf=Vector((side * 0.160, 1.04, 0.12)) - ear_in_dir * 1.2,
+            ray_origin_wpf=Vector((side * 0.18, 1.06, 0.12)) - ear_in_dir * 1.2,
             ray_dir_wpf=ear_in_dir,
             rx=0.058,
-            ry=0.220,
+            ry=0.245,
             center_offset=0.011,
             rim_offset=-0.008,
             rings=3,
@@ -2067,7 +2069,6 @@ def build_usagi():
 
     head_socket_y, head_radius_x = measure_head_crown_and_radius(head_clay, head_center_z=0.0)
     out_dir = os.path.join(MODELS_ROOT, "Characters", "usagi")
-    tris = export_obj(os.path.join(out_dir, "model.obj"), objects)
     rig_meta = {
         "coordinateSystem": "WPF_Y_UP_Z_FRONT",
         "unitScale": 1.0,
@@ -2089,8 +2090,7 @@ def build_usagi():
         "rightArmPivot": {"x": 0.54, "y": -0.28, "z": 0.10},
         "tailPivot": {"x": tail_pivot[0], "y": tail_pivot[1], "z": tail_pivot[2]},
     }
-    save_rig_metadata(os.path.join(out_dir, "rig.json"), rig_meta)
-    print(f"[usagi] exported model.obj ({tris} tris across expression layers) & rig.json (crown={head_socket_y}, rx={head_radius_x})")
+    export_character(out_dir, objects, rig_meta)
 
 
 # ---------------------------------------------------------------------------

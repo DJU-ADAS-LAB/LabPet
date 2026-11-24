@@ -14,7 +14,8 @@ public enum PetMotionClipKind
     PawDance = 4,
     Turn = 5,
     HappyJump = 6,
-    Reaction = 7
+    Reaction = 7,
+    Walk = 8
 }
 
 /// <summary>
@@ -22,6 +23,7 @@ public enum PetMotionClipKind
 /// </summary>
 internal struct PetPose
 {
+    public double StepWeight;
     public double BodyOffsetX;
     public double BodyOffsetY;
     public double BodyOffsetZ;
@@ -52,6 +54,7 @@ internal struct PetPose
         t = Math.Clamp(t, 0.0, 1.0);
         return new PetPose
         {
+            StepWeight = a.StepWeight + (b.StepWeight - a.StepWeight) * t,
             BodyOffsetX = a.BodyOffsetX + (b.BodyOffsetX - a.BodyOffsetX) * t,
             BodyOffsetY = a.BodyOffsetY + (b.BodyOffsetY - a.BodyOffsetY) * t,
             BodyOffsetZ = a.BodyOffsetZ + (b.BodyOffsetZ - a.BodyOffsetZ) * t,
@@ -133,6 +136,7 @@ internal sealed record SpeciesMotionProfile(
         TurnAmplitude: 18.0,
         DanceCycle:
         [
+            PetMotionClipKind.Walk,
             PetMotionClipKind.PawDance,
             PetMotionClipKind.HeadBob,
             PetMotionClipKind.Groove,
@@ -156,6 +160,7 @@ internal sealed record SpeciesMotionProfile(
         TurnAmplitude: 16.0,
         DanceCycle:
         [
+            PetMotionClipKind.Walk,
             PetMotionClipKind.Bounce,
             PetMotionClipKind.PawDance,
             PetMotionClipKind.Turn,
@@ -201,6 +206,7 @@ internal sealed record SpeciesMotionProfile(
         TurnAmplitude: 17.5,
         DanceCycle:
         [
+            PetMotionClipKind.Walk,
             PetMotionClipKind.Bounce,
             PetMotionClipKind.Groove,
             PetMotionClipKind.HeadBob,
@@ -208,12 +214,19 @@ internal sealed record SpeciesMotionProfile(
             PetMotionClipKind.Turn
         ]);
 
+    private static readonly SpeciesMotionProfile Shy = ChiikawaTrio with
+    { BounceAmplitude = 0.075, ArmSwingScale = 0.78, SwayAmplitude = 5.5, TurnAmplitude = 10 };
+    private static readonly SpeciesMotionProfile Rabbit = ChiikawaTrio with
+    { BounceAmplitude = 0.155, EarScale = 1.55, ArmSwingScale = 1.65, TurnAmplitude = 21 };
+
     public static SpeciesMotionProfile ForSpecies(string? speciesId) => speciesId switch
     {
         PetSpeciesIds.ChibiCat => Cat,
         PetSpeciesIds.FluffyPuppy => Puppy,
         PetSpeciesIds.FluffyCloud => Cloud,
-        PetSpeciesIds.Hachiware or PetSpeciesIds.Chiikawa or PetSpeciesIds.Usagi => ChiikawaTrio,
+        PetSpeciesIds.Hachiware => ChiikawaTrio,
+        PetSpeciesIds.Chiikawa => Shy,
+        PetSpeciesIds.Usagi => Rabbit,
         _ => Mochi
     };
 }
@@ -335,6 +348,17 @@ internal static class PetMotionClips
                 break;
             }
 
+            case PetMotionClipKind.Walk:
+                pose.StepWeight = 1;
+                pose.BodyOffsetX = sin1 * 0.055;
+                pose.BodyRoll = sin1 * 4;
+                pose.HeadRoll = -sin1 * 2;
+                pose.LeftArmPitch = sin1 * 16;
+                pose.RightArmPitch = -pose.LeftArmPitch;
+                pose.LeftPawZ = Math.Max(0, sin1) * 0.12;
+                pose.RightPawZ = Math.Max(0, -sin1) * 0.12;
+                break;
+
             case PetMotionClipKind.HeadBob:
             {
                 var nod = Math.Sin(dancePhase * 2.0);
@@ -401,12 +425,13 @@ internal static class PetMotionClips
 
             case PetMotionClipKind.HappyJump:
             {
-                var jumpPhase = (dancePhase * 0.7) % Math.PI;
-                var jumpArc = Math.Sin(jumpPhase);
-                pose.BodyOffsetY = Math.Pow(jumpArc, 0.85) * (0.14 + bass * 0.13 + beat * 0.08);
-                pose.BodyScaleY = jumpArc > 0.2
-                    ? 1.0 + jumpArc * 0.095 * profile.SquashFactor
-                    : 0.94; // 착지 직전 말랑 압축
+                var cycle = (dancePhase * 0.7 / Math.PI) % 1;
+                var flight = Math.Clamp((cycle - 0.19) / 0.60, 0, 1);
+                var jumpArc = Math.Sin(flight * Math.PI);
+                var crouch = cycle < 0.19 ? Math.Sin(cycle / 0.19 * Math.PI)
+                    : cycle > 0.79 ? Math.Sin((cycle - 0.79) / 0.21 * Math.PI) : 0;
+                pose.BodyOffsetY = jumpArc * (0.14 + bass * profile.BounceAmplitude + beat * 0.08) - crouch * 0.025;
+                pose.BodyScaleY = 1 + (jumpArc * 0.085 - crouch * 0.09) * profile.SquashFactor;
                 pose.BodyRoll = Math.Sin(dancePhase * 0.7) * 6.5;
                 pose.HeadPitch = -jumpArc * 7.0;
                 pose.HeadRoll = Math.Cos(dancePhase * 1.4) * 5.0;

@@ -11,7 +11,7 @@ using WpfMeshGeometry3D = System.Windows.Media.Media3D.MeshGeometry3D;
 namespace LabPet.Client.Rendering;
 
 /// <summary>
-/// Blender에서 내보낸 정적 .obj 메시 및 rig.json 메타데이터를 로드해 3D 펫 리그를 조립하는 팩토리.
+/// GLB 스킨과 소켓으로 리그를 조립하고 이전 OBJ 및 절차적 모델을 순서대로 시도한다.
 /// 외부 에셋이 없거나 손상·필수 파츠 누락 시 즉시 <see cref="ProceduralPetMeshFactory"/>로 폴백한다.
 /// - 불변 메시(.obj 서브메시)와 고정 재질은 Freeze() 후 다중 펫이 공유해 메모리 사용을 최소화한다.
 /// - 바디/포인트 색상 슬롯만 펫별 독립 브러시로 구성해 메시 재생성 없이 색상을 변경한다.
@@ -40,6 +40,7 @@ public sealed class BlenderAssetPetMeshFactory : IPetMeshFactory
     private static readonly Material FrozenHachiBlueMaterial = CreateFrozenClayMaterial(Color.FromRgb(109, 169, 204), null, 11, 28);
 
     private readonly ProceduralPetMeshFactory _fallbackFactory;
+    private readonly GlbCharacterLoader _glbLoader = new();
     private readonly ObjMeshLoader _objLoader = new();
     private readonly string _modelsRootDirectory;
     private readonly Dictionary<string, WeakReference<PetModelMetadata>> _metadataCache = new(StringComparer.OrdinalIgnoreCase);
@@ -89,7 +90,12 @@ public sealed class BlenderAssetPetMeshFactory : IPetMeshFactory
 
     public PetRigHandle BuildPetRig(PetAppearance appearance, PetRigEffects effects = PetRigEffects.All)
     {
-        if (!TryLoadCharacterAssets(appearance.SpeciesId, out var metadata, out var characterAsset) ||
+        var path = Path.Combine(_modelsRootDirectory, "Characters", Path.GetFileName(appearance.SpeciesId) ?? "", "model.glb");
+        var source = _glbLoader.Load(path);
+        var metadata = source?.Metadata;
+        var characterAsset = source?.Mesh;
+        var skin = source == null ? null : new PetSkinInstance(source);
+        if ((source == null && !TryLoadCharacterAssets(appearance.SpeciesId, out metadata, out characterAsset)) ||
             metadata is null ||
             characterAsset is null ||
             !HasRequiredCoreParts(characterAsset))
@@ -214,51 +220,62 @@ public sealed class BlenderAssetPetMeshFactory : IPetMeshFactory
         AxisAngleRotation3D? rightArmPitch = null;
         Model3DGroup? rightArmGroup = null;
 
-        // 선택된 표정에 해당하는 눈/입 파츠만 추려내어 미사용 표정 메시를 씬에서 제외한다.
-        var exprSuffix = NormalizeExpressionSuffix(appearance.ExpressionId);
-        var targetEyesName = ResolveExpressionPartName(characterAsset, "Eyes_", exprSuffix, "Eyes_Default", "Eyes");
-        var targetMouthName = ResolveExpressionPartName(characterAsset, "Mouth_", exprSuffix, "Mouth_Default", "Mouth");
-
-        var canBlink = !string.Equals(appearance.ExpressionId, "happy", StringComparison.OrdinalIgnoreCase) &&
-                       !string.Equals(appearance.ExpressionId, "sleepy", StringComparison.OrdinalIgnoreCase);
         var blinkCenter = metadata.EyeBlinkCenter;
-        var eyeBlinkScale = canBlink
-            ? new ScaleTransform3D(1, 1, 1, blinkCenter.X, blinkCenter.Y, blinkCenter.Z)
-            : null;
-        var eyeGroup = new Model3DGroup { Transform = eyeBlinkScale };
+        var blink = new ScaleTransform3D(1, 1, 1, blinkCenter.X, blinkCenter.Y, blinkCenter.Z);
+        var eyeGroup = new Model3DGroup();
+        var mouthGroup = new Model3DGroup();
+        headGroup.Children.Add(eyeGroup);
+        headGroup.Children.Add(mouthGroup);
 
+        int SelectExpression(string expression)
+        {
+            var suffix = NormalizeExpressionSuffix(expression);
+            var eyes = ResolveExpressionPartName(characterAsset, "Eyes_", suffix, "Eyes_Default", "Eyes");
+            var mouth = ResolveExpressionPartName(characterAsset, "Mouth_", suffix, "Mouth_Default", "Mouth");
+            var before = ExpressionTriangles();
+            eyeGroup.Children.Clear();
+            mouthGroup.Children.Clear();
+            eyeGroup.Transform = suffix is "Happy" or "Sleepy" ? null : blink;
+            foreach (var sub in characterAsset.SubMeshes)
+            {
+                if (sub.PartName == eyes || sub.PartName == mouth)
+                    ProceduralPetMeshFactory.AddGeometry(sub.PartName == eyes ? eyeGroup : mouthGroup,
+                        sub.Geometry, ResolveSlotMaterial(sub.MaterialSlot), null);
+            }
+            return ExpressionTriangles() - before;
+        }
+
+        int ExpressionTriangles() => eyeGroup.Children.Concat(mouthGroup.Children).Cast<GeometryModel3D>()
+            .Sum(m => ((WpfMeshGeometry3D)m.Geometry).TriangleIndices.Count / 3);
+
+        int AddPart(Model3DGroup group, ObjSubMesh part)
+        {
+            if (skin != null && source!.Surfaces.ContainsKey(part))
+            {
+                var model = new GeometryModel3D(part.Geometry, ResolveSlotMaterial(part.MaterialSlot));
+                model.BackMaterial = model.Material;
+                bodyGroup.Children.Add(model);
+                skin.Bind(part, model);
+                return part.TriangleCount;
+            }
+            return ProceduralPetMeshFactory.AddGeometry(group, part.Geometry, ResolveSlotMaterial(part.MaterialSlot), null);
+        }
+
+        triangleCount += SelectExpression(appearance.ExpressionId);
         foreach (var sub in characterAsset.SubMeshes)
         {
             var part = sub.PartName;
-
-            if (part.StartsWith("Eyes", StringComparison.OrdinalIgnoreCase))
-            {
-                if (targetEyesName is not null && string.Equals(part, targetEyesName, StringComparison.OrdinalIgnoreCase))
-                {
-                    triangleCount += ProceduralPetMeshFactory.AddGeometry(eyeGroup, sub.Geometry, ResolveSlotMaterial(sub.MaterialSlot), null);
-                }
-
-                continue;
-            }
-
-            if (part.StartsWith("Mouth", StringComparison.OrdinalIgnoreCase))
-            {
-                if (targetMouthName is not null && string.Equals(part, targetMouthName, StringComparison.OrdinalIgnoreCase))
-                {
-                    triangleCount += ProceduralPetMeshFactory.AddGeometry(headGroup, sub.Geometry, ResolveSlotMaterial(sub.MaterialSlot), null);
-                }
-
-                continue;
-            }
+            if (part.StartsWith("Eyes", StringComparison.OrdinalIgnoreCase) ||
+                part.StartsWith("Mouth", StringComparison.OrdinalIgnoreCase)) continue;
 
             if (string.Equals(part, "Body", StringComparison.OrdinalIgnoreCase))
             {
-                triangleCount += ProceduralPetMeshFactory.AddGeometry(bodyGroup, sub.Geometry, ResolveSlotMaterial(sub.MaterialSlot), null);
+                triangleCount += AddPart(bodyGroup, sub);
             }
             else if (string.Equals(part, "Head", StringComparison.OrdinalIgnoreCase) ||
                      string.Equals(part, "Cheeks", StringComparison.OrdinalIgnoreCase))
             {
-                triangleCount += ProceduralPetMeshFactory.AddGeometry(headGroup, sub.Geometry, ResolveSlotMaterial(sub.MaterialSlot), null);
+                triangleCount += AddPart(headGroup, sub);
             }
             else if (string.Equals(part, "LeftEar", StringComparison.OrdinalIgnoreCase))
             {
@@ -270,7 +287,7 @@ public sealed class BlenderAssetPetMeshFactory : IPetMeshFactory
                     headGroup.Children.Add(leftEarGroup);
                 }
 
-                triangleCount += ProceduralPetMeshFactory.AddGeometry(leftEarGroup, sub.Geometry, ResolveSlotMaterial(sub.MaterialSlot), null);
+                triangleCount += AddPart(leftEarGroup, sub);
             }
             else if (string.Equals(part, "RightEar", StringComparison.OrdinalIgnoreCase))
             {
@@ -282,7 +299,7 @@ public sealed class BlenderAssetPetMeshFactory : IPetMeshFactory
                     headGroup.Children.Add(rightEarGroup);
                 }
 
-                triangleCount += ProceduralPetMeshFactory.AddGeometry(rightEarGroup, sub.Geometry, ResolveSlotMaterial(sub.MaterialSlot), null);
+                triangleCount += AddPart(rightEarGroup, sub);
             }
             else if (string.Equals(part, "Tail", StringComparison.OrdinalIgnoreCase))
             {
@@ -294,7 +311,7 @@ public sealed class BlenderAssetPetMeshFactory : IPetMeshFactory
                     bodyGroup.Children.Add(tailGroup);
                 }
 
-                triangleCount += ProceduralPetMeshFactory.AddGeometry(tailGroup, sub.Geometry, ResolveSlotMaterial(sub.MaterialSlot), null);
+                triangleCount += AddPart(tailGroup, sub);
             }
             else if (string.Equals(part, "LeftPaw", StringComparison.OrdinalIgnoreCase))
             {
@@ -305,7 +322,7 @@ public sealed class BlenderAssetPetMeshFactory : IPetMeshFactory
                     bodyGroup.Children.Add(leftPawGroup);
                 }
 
-                triangleCount += ProceduralPetMeshFactory.AddGeometry(leftPawGroup, sub.Geometry, ResolveSlotMaterial(sub.MaterialSlot), null);
+                triangleCount += AddPart(leftPawGroup, sub);
             }
             else if (string.Equals(part, "RightPaw", StringComparison.OrdinalIgnoreCase))
             {
@@ -316,7 +333,7 @@ public sealed class BlenderAssetPetMeshFactory : IPetMeshFactory
                     bodyGroup.Children.Add(rightPawGroup);
                 }
 
-                triangleCount += ProceduralPetMeshFactory.AddGeometry(rightPawGroup, sub.Geometry, ResolveSlotMaterial(sub.MaterialSlot), null);
+                triangleCount += AddPart(rightPawGroup, sub);
             }
             else if (string.Equals(part, "LeftArm", StringComparison.OrdinalIgnoreCase))
             {
@@ -332,7 +349,7 @@ public sealed class BlenderAssetPetMeshFactory : IPetMeshFactory
                     headGroup.Children.Add(leftArmGroup);
                 }
 
-                triangleCount += ProceduralPetMeshFactory.AddGeometry(leftArmGroup, sub.Geometry, ResolveSlotMaterial(sub.MaterialSlot), null);
+                triangleCount += AddPart(leftArmGroup, sub);
             }
             else if (string.Equals(part, "RightArm", StringComparison.OrdinalIgnoreCase))
             {
@@ -348,19 +365,15 @@ public sealed class BlenderAssetPetMeshFactory : IPetMeshFactory
                     headGroup.Children.Add(rightArmGroup);
                 }
 
-                triangleCount += ProceduralPetMeshFactory.AddGeometry(rightArmGroup, sub.Geometry, ResolveSlotMaterial(sub.MaterialSlot), null);
+                triangleCount += AddPart(rightArmGroup, sub);
             }
             else
             {
                 // 미분류 정적 파츠는 몸체에 연결
-                triangleCount += ProceduralPetMeshFactory.AddGeometry(bodyGroup, sub.Geometry, ResolveSlotMaterial(sub.MaterialSlot), null);
+                triangleCount += AddPart(bodyGroup, sub);
             }
         }
 
-        if (eyeGroup.Children.Count > 0)
-        {
-            headGroup.Children.Add(eyeGroup);
-        }
 
         // 머리 소켓 3D 악세서리 (Blender OBJ 우선, 미존재 시 절차적 폴백)
         triangleCount += BuildHeadAccessoryFromAssetOrFallback(
@@ -372,7 +385,7 @@ public sealed class BlenderAssetPetMeshFactory : IPetMeshFactory
 
         bodyGroup.Children.Add(headGroup);
 
-        // 키보드 및 풀링 파티클 (Blender 음표/별 메시 우선 적용)
+        // 키보드 및 풀링 파티클 (단일 전면 미니 키보드 및 Blender 음표/별 메시 우선 적용)
         var (keyboardTriangles, typingKeyboardScale) = effects.HasFlag(PetRigEffects.TypingKeyboard)
             ? _fallbackFactory.BuildTypingKeyboard(rootGroup, accentColor, accentDiffuseBrush)
             : (0, null);
@@ -423,7 +436,10 @@ public sealed class BlenderAssetPetMeshFactory : IPetMeshFactory
             HeadYaw = headYaw,
             HeadPitch = headPitch,
             HeadRoll = headRoll,
-            EyeBlinkScale = eyeBlinkScale,
+            EyeBlinkScale = blink,
+            Skin = skin,
+            BodyTransform = bodyTransformGroup,
+            SelectExpression = SelectExpression,
             ShadowScale = shadowScale,
             TypingKeyboardScale = typingKeyboardScale,
             LeftEarRotation = leftEarRot,
