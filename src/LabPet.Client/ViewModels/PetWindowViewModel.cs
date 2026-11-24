@@ -462,11 +462,27 @@ public sealed partial class PetWindowViewModel : ObservableObject
         }
 
         var clamped = PetProfile.NormalizePetScale(parsed);
-        PetScale = clamped;
-        CurrentProfile.PetScale = clamped;
-        PetScaleChanged?.Invoke(this, clamped);
-        await _store.SaveProfileAsync(CurrentProfile);
+        await ApplyDisplaySettingsAsync(clamped, PetOpacity, persist: true);
         ShowBubble($"펫 크기 {Math.Round(clamped * 100)}%", 1600);
+    }
+
+    public async Task ApplyDisplaySettingsAsync(double scale, double opacity, bool persist = true)
+    {
+        var clampedScale = PetProfile.NormalizePetScale(scale);
+        var clampedOpacity = PetDisplayLayoutHelper.NormalizeOpacity(opacity);
+
+        PetScale = clampedScale;
+        PetOpacity = clampedOpacity;
+        CurrentProfile.PetScale = clampedScale;
+        CurrentProfile.PetOpacity = clampedOpacity;
+        PetScaleChanged?.Invoke(this, clampedScale);
+        PetOpacityChanged?.Invoke(this, clampedOpacity);
+
+        if (persist)
+        {
+            await _store.SaveProfileAsync(CurrentProfile);
+            ProfileUpdated?.Invoke(this, CurrentProfile);
+        }
     }
 
     [RelayCommand]

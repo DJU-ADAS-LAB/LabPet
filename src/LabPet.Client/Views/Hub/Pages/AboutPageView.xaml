@@ -1,0 +1,158 @@
+<UserControl x:Class="LabPet.Client.Views.Hub.Pages.AboutPageView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+    <ScrollViewer VerticalScrollBarVisibility="Auto" CanContentScroll="False">
+        <StackPanel>
+            <!-- 1. 애플리케이션 정보 카드 -->
+            <Border Style="{StaticResource HubCardStyle}" Margin="0,0,0,16">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+
+                    <Border Grid.Column="0"
+                            Width="56"
+                            Height="56"
+                            CornerRadius="16"
+                            Background="{StaticResource HubAccentSoftBrush}"
+                            BorderBrush="{StaticResource HubAccentBorderBrush}"
+                            BorderThickness="1"
+                            Margin="0,0,16,0"
+                            VerticalAlignment="Center">
+                        <Path Data="{StaticResource IconInfoGeometry}"
+                              Width="24"
+                              Height="24"
+                              Stretch="Uniform"
+                              Stroke="{StaticResource HubAccentTextBrush}"
+                              StrokeThickness="1.9"
+                              HorizontalAlignment="Center"
+                              VerticalAlignment="Center" />
+                    </Border>
+
+                    <StackPanel Grid.Column="1" VerticalAlignment="Center" Margin="0,0,16,0">
+                        <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                            <TextBlock Text="LabPet" FontSize="20" FontWeight="Bold" Foreground="{StaticResource HubTextPrimaryBrush}" />
+                            <Border Style="{StaticResource HubBadgeStyle}" Background="{StaticResource HubAccentSoftBrush}" Margin="10,0,0,0">
+                                <TextBlock Text="{Binding CurrentVersionDisplay}" FontSize="12" FontWeight="Bold" Foreground="{StaticResource HubAccentTextBrush}" />
+                            </Border>
+                        </StackPanel>
+                        <TextBlock Text="투명 바탕화면 3D 데스크톱 펫 · LAN P2P &amp; 원격 소셜 컴패니언"
+                                   Style="{StaticResource HubCaptionTextStyle}"
+                                   Margin="0,4,0,0" />
+                    </StackPanel>
+
+                    <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
+                        <Button Content="GitHub 저장소"
+                                Style="{StaticResource GameSecondaryButtonStyle}"
+                                Command="{Binding OpenRepositoryCommand}"
+                                Padding="14,9"
+                                Margin="0,0,8,0" />
+                        <Button Content="릴리스 노트"
+                                Style="{StaticResource GameSecondaryButtonStyle}"
+                                Command="{Binding OpenReleasesCommand}"
+                                Padding="14,9" />
+                    </StackPanel>
+                </Grid>
+            </Border>
+
+            <!-- 2. 업데이트 관리 카드 -->
+            <Border Style="{StaticResource HubCardStyle}" Margin="0,0,0,16">
+                <StackPanel>
+                    <DockPanel LastChildFill="False" Margin="0,0,0,10">
+                        <TextBlock DockPanel.Dock="Left" Text="자동 업데이트 (Velopack)" Style="{StaticResource HubSectionTitleStyle}" VerticalAlignment="Center" />
+                        <Border DockPanel.Dock="Right"
+                                Style="{StaticResource HubBadgeStyle}"
+                                Background="#FFECFDF5"
+                                Visibility="{Binding IsUpdateReady, Converter={StaticResource HubBoolToVis}}">
+                            <TextBlock Text="{Binding PendingVersionDisplay, StringFormat='준비됨: {0}'}"
+                                       FontSize="11.5"
+                                       FontWeight="Bold"
+                                       Foreground="#FF047857" />
+                        </Border>
+                    </DockPanel>
+
+                    <Border Style="{StaticResource HubSubtlePanelStyle}" Margin="0,0,0,12">
+                        <TextBlock Text="{Binding UpdateStatusText}"
+                                   FontSize="12.5"
+                                   FontWeight="SemiBold"
+                                   Foreground="{StaticResource HubTextPrimaryBrush}"
+                                   TextWrapping="Wrap" />
+                    </Border>
+
+                    <WrapPanel>
+                        <Button Command="{Binding CheckUpdatesCommand}"
+                                Padding="18,9"
+                                Margin="0,0,10,0">
+                            <Button.Style>
+                                <Style TargetType="Button" BasedOn="{StaticResource GamePrimaryButtonStyle}">
+                                    <Setter Property="Content" Value="업데이트 확인" />
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding IsCheckingUpdates}" Value="True">
+                                            <Setter Property="Content" Value="확인 중..." />
+                                            <Setter Property="IsEnabled" Value="False" />
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </Button.Style>
+                        </Button>
+
+                        <Button Content="새 버전 적용 및 재시작"
+                                Style="{StaticResource GameSecondaryButtonStyle}"
+                                Command="{Binding ApplyUpdateRestartCommand}"
+                                Visibility="{Binding IsUpdateReady, Converter={StaticResource HubBoolToVis}}"
+                                Padding="16,9" />
+                    </WrapPanel>
+
+                    <TextBlock Text="{Binding LinkFeedbackMessage}"
+                               FontSize="12"
+                               Foreground="#FFBE123C"
+                               Margin="0,8,0,0"
+                               Visibility="{Binding LinkFeedbackMessage, Converter={StaticResource HubNullToVis}}" />
+                </StackPanel>
+            </Border>
+
+            <!-- 3. 오픈소스 라이선스 정보 카드 -->
+            <Border Style="{StaticResource HubCardStyle}" Margin="0,0,0,4">
+                <StackPanel>
+                    <DockPanel LastChildFill="False" Margin="0,0,0,12">
+                        <TextBlock DockPanel.Dock="Left" Text="오픈소스 라이선스" Style="{StaticResource HubSectionTitleStyle}" />
+                        <TextBlock DockPanel.Dock="Right" Text=".NET 10 WPF 클라이언트 의존 패키지" FontSize="11.5" Foreground="{StaticResource HubTextMutedBrush}" VerticalAlignment="Center" />
+                    </DockPanel>
+
+                    <ItemsControl ItemsSource="{Binding OpenSourcePackages}">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                                <Border Background="{StaticResource HubSubtleFillBrush}"
+                                        CornerRadius="10"
+                                        Padding="12,9"
+                                        Margin="0,0,0,8">
+                                    <DockPanel LastChildFill="False">
+                                        <StackPanel DockPanel.Dock="Left" VerticalAlignment="Center">
+                                            <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                                <TextBlock Text="{Binding Name}" FontSize="13" FontWeight="Bold" Foreground="{StaticResource HubTextPrimaryBrush}" />
+                                                <TextBlock Text="{Binding Version, StringFormat='v{0}'}" FontSize="11.5" Foreground="{StaticResource HubTextSecondaryBrush}" Margin="8,0,0,0" VerticalAlignment="Center" />
+                                            </StackPanel>
+                                            <TextBlock Text="{Binding Purpose}" FontSize="11.5" Foreground="{StaticResource HubTextSecondaryBrush}" Margin="0,2,0,0" />
+                                        </StackPanel>
+                                        <Border DockPanel.Dock="Right"
+                                                Background="{StaticResource HubCardBgBrush}"
+                                                BorderBrush="{StaticResource HubDividerBrush}"
+                                                BorderThickness="1"
+                                                CornerRadius="7"
+                                                Padding="9,3"
+                                                VerticalAlignment="Center">
+                                            <TextBlock Text="{Binding License}" FontSize="11" FontWeight="SemiBold" Foreground="{StaticResource HubTextSecondaryBrush}" />
+                                        </Border>
+                                    </DockPanel>
+                                </Border>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                </StackPanel>
+            </Border>
+        </StackPanel>
+    </ScrollViewer>
+</UserControl>

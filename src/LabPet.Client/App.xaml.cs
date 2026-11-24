@@ -538,12 +538,18 @@ public partial class App : Application
         services.AddSingleton<IHubNavigationService>(sp => new HubNavigationService(() => sp.GetRequiredService<HubWindow>()));
         services.AddTransient<HubViewModel>();
         services.AddTransient<HomePageViewModel>();
+        services.AddTransient<SeasonalPageViewModel>();
+        services.AddTransient<SettingsPageViewModel>();
+        services.AddTransient<AboutPageViewModel>();
         services.AddTransient<HomePageView>();
         services.AddTransient<GrowthPageView>();
         services.AddTransient<PomodoroPageView>();
         services.AddTransient<GamesPageView>();
         services.AddTransient<FriendsPageView>();
         services.AddTransient<AppearancePageView>();
+        services.AddTransient<SeasonalPageView>();
+        services.AddTransient<SettingsPageView>();
+        services.AddTransient<AboutPageView>();
         services.AddTransient<Func<HubPage, System.Windows.Controls.UserControl>>(sp => page => page switch
         {
             HubPage.Home => sp.GetRequiredService<HomePageView>(),
@@ -552,7 +558,10 @@ public partial class App : Application
             HubPage.Growth => sp.GetRequiredService<GrowthPageView>(),
             HubPage.Pomodoro => sp.GetRequiredService<PomodoroPageView>(),
             HubPage.Games => sp.GetRequiredService<GamesPageView>(),
-            _ => CreatePlaceholderHubPage(page)
+            HubPage.Seasonal => sp.GetRequiredService<SeasonalPageView>(),
+            HubPage.Settings => sp.GetRequiredService<SettingsPageView>(),
+            HubPage.About => sp.GetRequiredService<AboutPageView>(),
+            _ => throw new ArgumentOutOfRangeException(nameof(page), page, null)
         });
         services.AddTransient<HubWindow>();
         services.AddTransient<OnboardingViewModel>();
@@ -560,14 +569,4 @@ public partial class App : Application
         services.AddTransient<SocialViewModel>();
         services.AddSingleton<PetWindow>();
     }
-
-    private static System.Windows.Controls.UserControl CreatePlaceholderHubPage(HubPage page)
-        => new()
-        {
-            Content = new System.Windows.Controls.TextBlock
-            {
-                Text = $"{page} 페이지 준비 중",
-                FontSize = 15
-            }
-        };
 }
