@@ -99,10 +99,10 @@
                             </Button.Style>
                         </Button>
 
-                        <Button Content="새 버전 적용 및 재시작"
+                        <Button Content="업데이트"
                                 Style="{StaticResource GameSecondaryButtonStyle}"
-                                Command="{Binding ApplyUpdateRestartCommand}"
-                                Visibility="{Binding IsUpdateReady, Converter={StaticResource HubBoolToVis}}"
+                                Command="{Binding InstallUpdateCommand}"
+                                Visibility="{Binding HasUpdateOffer, Converter={StaticResource HubBoolToVis}}"
                                 Padding="16,9" />
                     </WrapPanel>
 

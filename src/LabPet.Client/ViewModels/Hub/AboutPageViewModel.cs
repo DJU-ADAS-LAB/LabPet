@@ -1,6 +1,6 @@
 using System.ComponentModel;
 using System.Diagnostics;
-using System.Windows;
+using System.Windows.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using LabPet.Client.Updates;
@@ -22,9 +22,11 @@ public sealed record OpenSourcePackageInfo(
 /// </summary>
 public sealed partial class AboutPageViewModel : ObservableObject, IDisposable
 {
+    private const string DefaultUpdateStatus = "최신 업데이트를 확인하려면 아래 버튼을 눌러 주세요.";
     private readonly PetWindowViewModel _petVm;
     private readonly UpdateService _updateService;
     private readonly UpdateSourceOptions _updateOptions;
+    private readonly Dispatcher? _dispatcher = Dispatcher.FromThread(Thread.CurrentThread);
 
     private bool _isActive;
     private bool _disposed;
@@ -33,13 +35,19 @@ public sealed partial class AboutPageViewModel : ObservableObject, IDisposable
     private string _currentVersionDisplay = string.Empty;
 
     [ObservableProperty]
-    private string _updateStatusText = "최신 업데이트를 확인하려면 아래 버튼을 눌러 주세요.";
+    private string _updateStatusText = DefaultUpdateStatus;
 
     [ObservableProperty]
     private bool _isCheckingUpdates;
 
     [ObservableProperty]
     private bool _isUpdateReady;
+
+    [ObservableProperty]
+    private bool _hasUpdateOffer;
+
+    [ObservableProperty, NotifyCanExecuteChangedFor(nameof(InstallUpdateCommand))]
+    private bool _canInstallUpdate;
 
     [ObservableProperty]
     private string _pendingVersionDisplay = string.Empty;
@@ -83,8 +91,7 @@ public sealed partial class AboutPageViewModel : ObservableObject, IDisposable
         if (!_isActive)
         {
             _isActive = true;
-            _updateService.StatusMessage += OnUpdateStatusMessage;
-            _updateService.UpdateReady += OnUpdateReady;
+            _updateService.StateChanged += OnUpdateStateChanged;
         }
 
         SyncUpdateState();
@@ -98,8 +105,7 @@ public sealed partial class AboutPageViewModel : ObservableObject, IDisposable
         }
 
         _isActive = false;
-        _updateService.StatusMessage -= OnUpdateStatusMessage;
-        _updateService.UpdateReady -= OnUpdateReady;
+        _updateService.StateChanged -= OnUpdateStateChanged;
     }
 
     public void Dispose()
@@ -114,7 +120,7 @@ public sealed partial class AboutPageViewModel : ObservableObject, IDisposable
     }
 
     [RelayCommand]
-    public async Task CheckUpdatesAsync()
+    private async Task CheckUpdatesAsync()
     {
         if (IsCheckingUpdates || _disposed)
         {
@@ -125,16 +131,12 @@ public sealed partial class AboutPageViewModel : ObservableObject, IDisposable
         UpdateStatusText = "업데이트를 확인하는 중입니다...";
         try
         {
-            var downloaded = await _updateService.CheckAndDownloadUpdatesAsync(isManualCheck: true);
+            var message = _updateService.State.IsBusy ? null : await _updateService.CheckForUpdatesAsync();
             SyncUpdateState();
-            if (downloaded && !IsUpdateReady)
+            if (message is not null)
             {
-                IsUpdateReady = _updateService.IsUpdateReady;
+                UpdateStatusText = message;
             }
-        }
-        catch (Exception ex) when (ex is InvalidOperationException or System.Net.Http.HttpRequestException or TaskCanceledException)
-        {
-            UpdateStatusText = $"업데이트 확인 중 오류가 발생했습니다: {ex.Message}";
         }
         finally
         {
@@ -142,16 +144,8 @@ public sealed partial class AboutPageViewModel : ObservableObject, IDisposable
         }
     }
 
-    [RelayCommand]
-    private void ApplyUpdateRestart()
-    {
-        if (!_updateService.IsUpdateReady)
-        {
-            return;
-        }
-
-        _updateService.ApplyUpdatesAndRestart();
-    }
+    [RelayCommand(CanExecute = nameof(CanInstallUpdate))]
+    private Task InstallUpdateAsync() => _updateService.InstallUpdateAsync();
 
     [RelayCommand]
     private void OpenRepository() => TryOpenExternalUrl(RepositoryUrl);
@@ -196,58 +190,37 @@ public sealed partial class AboutPageViewModel : ObservableObject, IDisposable
                 ? rawVersion
                 : $"v{rawVersion}";
 
-        IsUpdateReady = _updateService.IsUpdateReady;
-        if (!string.IsNullOrWhiteSpace(_updateService.PendingVersion))
+        var state = _updateService.State;
+        var wasShowingOffer = HasUpdateOffer;
+        HasUpdateOffer = state.Version is not null;
+        IsUpdateReady = state.Phase == UpdatePhase.Ready;
+        CanInstallUpdate = state.CanInstall;
+        PendingVersionDisplay = state.Version is { } version ? $"v{version}" : string.Empty;
+        if (state.Message is { } message)
         {
-            var pending = _updateService.PendingVersion.Trim();
-            PendingVersionDisplay = pending.StartsWith("v", StringComparison.OrdinalIgnoreCase)
-                ? pending
-                : $"v{pending}";
-            UpdateStatusText = $"새 버전 {PendingVersionDisplay} 설치 준비 완료";
+            UpdateStatusText = message;
         }
-        else
+        else if (wasShowingOffer)
         {
-            PendingVersionDisplay = string.Empty;
+            UpdateStatusText = DefaultUpdateStatus;
         }
     }
 
-    private void OnUpdateStatusMessage(object? sender, string message)
+    private void OnUpdateStateChanged(object? sender, EventArgs e)
     {
-        DispatchToUi(() =>
-        {
-            if (!string.IsNullOrWhiteSpace(message))
-            {
-                UpdateStatusText = message;
-            }
-            SyncUpdateState();
-        });
-    }
-
-    private void OnUpdateReady(object? sender, string version)
-    {
-        DispatchToUi(() =>
+        if (_dispatcher is null || _dispatcher.CheckAccess())
         {
             SyncUpdateState();
-            UpdateStatusText = $"새 버전 {PendingVersionDisplay} 다운로드 완료 · 재시작하여 적용할 수 있습니다.";
-        });
-    }
-
-    private static void DispatchToUi(Action action)
-    {
-        if (Application.Current?.Dispatcher is { } dispatcher)
-        {
-            if (dispatcher.CheckAccess())
-            {
-                action();
-            }
-            else
-            {
-                dispatcher.BeginInvoke(action);
-            }
         }
-        else
+        else if (!_dispatcher.HasShutdownStarted)
         {
-            action();
+            _dispatcher.BeginInvoke(() =>
+            {
+                if (_isActive)
+                {
+                    SyncUpdateState();
+                }
+            });
         }
     }
 }

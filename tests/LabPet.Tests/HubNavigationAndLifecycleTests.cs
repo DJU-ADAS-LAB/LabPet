@@ -59,7 +59,6 @@ public sealed class HubNavigationAndLifecycleTests : IDisposable
         petVm.OpenPomodoroCommand.Execute(null);
         petVm.OpenGamesCommand.Execute(null);
         petVm.OpenSettingsCommand.Execute(null);
-        petVm.CheckUpdatesCommand.Execute(null);
 
         Assert.Equal(
         [
@@ -69,8 +68,7 @@ public sealed class HubNavigationAndLifecycleTests : IDisposable
             new NavigationRequest(HubPage.Growth),
             new NavigationRequest(HubPage.Pomodoro),
             new NavigationRequest(HubPage.Games),
-            new NavigationRequest(HubPage.Settings),
-            new NavigationRequest(HubPage.About, Action: HubNavigationAction.CheckUpdates)
+            new NavigationRequest(HubPage.Settings)
         ], received);
     }
 
@@ -120,11 +118,83 @@ public sealed class HubNavigationAndLifecycleTests : IDisposable
                 Assert.Contains(trayHeaders, h => h.Contains(required, StringComparison.Ordinal));
             }
 
-            var updateReadyItem = petMenu.Items.OfType<MenuItem>().First();
-            Assert.Equal(Visibility.Collapsed, updateReadyItem.Visibility);
-            petVm.NotifyUpdateReady("0.4.0");
+            Assert.Equal(Visibility.Collapsed, petMenu.Items.OfType<MenuItem>().First().Visibility);
+        });
+    }
+
+    [Fact]
+    public async Task UpdateMenu_DoesNotOpenHub_AndSharesInstallStateWithAbout()
+    {
+        await WpfTestHost.RunAsync(async () =>
+        {
+            var finishDownload = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var backend = new TestUpdateBackend { Download = ct => finishDownload.Task.WaitAsync(ct) };
+            await using var h = await CreateTestHarnessAsync("update", backend);
+            var pet = h.PetVm;
+            var menu = PetContextMenuFactory.Create(pet, includeStartupAutoRun: false);
+            var tray = PetContextMenuFactory.Create(pet, includeStartupAutoRun: true);
+            Assert.Single(menu.Items.OfType<MenuItem>(), item => item.Command == pet.CheckUpdatesCommand);
+            Assert.Single(tray.Items.OfType<MenuItem>(), item => item.Command == pet.CheckUpdatesCommand);
+            pet.HubNavigationRequested += (_, _) => throw new InvalidOperationException("업데이트 확인은 창을 열 수 없습니다.");
+
+            await pet.CheckUpdatesCommand.ExecuteAsync(null);
             await WpfTestHost.FlushAsync();
-            Assert.Equal(Visibility.Visible, updateReadyItem.Visibility);
+            Assert.False(h.Navigation.IsHubOpen);
+            Assert.True(pet.IsUpdateBubbleVisible);
+            Assert.Contains("v0.4.0", pet.UpdateBubbleText);
+            Assert.Equal(Visibility.Visible, menu.Items.OfType<MenuItem>().First().Visibility);
+            Assert.Equal(0, backend.Downloads);
+
+            pet.DismissUpdateBubbleCommand.Execute(null);
+            Assert.False(pet.IsUpdateBubbleVisible);
+
+            Assert.True(await h.Navigation.NavigateAsync(new NavigationRequest(HubPage.About)));
+            var host = Assert.IsType<ContentControl>(h.CurrentWindow!.FindName("PageHost"));
+            var view = Assert.IsType<AboutPageView>(host.Content);
+            var about = Assert.IsType<AboutPageViewModel>(view.DataContext);
+            Assert.True(about.HasUpdateOffer);
+            await about.CheckUpdatesCommand.ExecuteAsync(null);
+            Assert.False(pet.IsUpdateBubbleVisible);
+            Assert.Equal(0, backend.Downloads);
+
+            await pet.CheckUpdatesCommand.ExecuteAsync(null);
+            Assert.True(pet.IsUpdateBubbleVisible);
+            Assert.True(h.Navigation.IsHubOpen);
+
+            var install = about.InstallUpdateCommand.ExecuteAsync(null);
+            Assert.Contains("다운로드 중", about.UpdateStatusText);
+            Assert.Contains("다운로드 중", pet.UpdateBubbleText);
+            Assert.False(pet.InstallUpdateCommand.CanExecute(null));
+            Assert.False(about.InstallUpdateCommand.CanExecute(null));
+
+            finishDownload.SetResult();
+            await install;
+            await WpfTestHost.FlushAsync();
+            Assert.Contains("재시작", pet.UpdateBubbleText);
+            Assert.Contains("재시작", about.UpdateStatusText);
+            Assert.Equal(1, backend.Downloads);
+            Assert.Equal(1, backend.ApplyAttempts);
+        });
+    }
+
+    [Fact]
+    public async Task UpdateMenu_LatestAndPortableUseTextBubbleWithoutOpeningHub()
+    {
+        await WpfTestHost.RunAsync(async () =>
+        {
+            var backend = new TestUpdateBackend { Available = null };
+            await using var h = await CreateTestHarnessAsync("update_status", backend);
+            var pet = h.PetVm;
+
+            await pet.CheckUpdatesCommand.ExecuteAsync(null);
+            Assert.Contains(pet.BubbleLines, message => message.Text.Contains("최신 버전"));
+            Assert.False(pet.IsUpdateBubbleVisible);
+
+            backend.IsInstalled = false;
+            await pet.CheckUpdatesCommand.ExecuteAsync(null);
+            Assert.Contains(pet.BubbleLines, message => message.Text.Contains("포터블"));
+            Assert.False(h.Navigation.IsHubOpen);
+            Assert.Equal(0, backend.Downloads);
         });
     }
 
@@ -488,7 +558,7 @@ public sealed class HubNavigationAndLifecycleTests : IDisposable
         }
     }
 
-    private async Task<TestHarness> CreateTestHarnessAsync(string name)
+    private async Task<TestHarness> CreateTestHarnessAsync(string name, TestUpdateBackend? updateBackend = null)
     {
         var dir = Path.Combine(_tempDir, name);
         var store = new JsonAppDataStore(new StateMigrator(), dir);
@@ -507,7 +577,8 @@ public sealed class HubNavigationAndLifecycleTests : IDisposable
         var social = new SocialCoordinatorService(transport, store, progression);
         await social.StartAsync(profile);
 
-        var petVm = new PetWindowViewModel(store, social);
+        var updateService = updateBackend is null ? new UpdateService() : new UpdateService(updateBackend);
+        var petVm = new PetWindowViewModel(store, social, updates: updateService);
         petVm.ApplyProfile(profile);
 
         var pomodoro = new PomodoroTimerService();
@@ -518,7 +589,6 @@ public sealed class HubNavigationAndLifecycleTests : IDisposable
         var meshFactory = new ProceduralPetMeshFactory();
         var portraitRenderer = new PetPortraitRenderer(meshFactory);
         var christmasTree = new TerminalChristmasTreeService(store);
-        var updateService = new UpdateService(new UpdateSourceOptions());
         var stateStore = new HubWindowStateStore(store);
 
         var harness = new TestHarness(store, transport, social, petVm, pomodoro, analyzer, games, portraitRenderer, updateService);
@@ -592,7 +662,9 @@ public sealed class HubNavigationAndLifecycleTests : IDisposable
             Pomodoro.Reset();
             analyzer.Dispose();
             portraitRenderer.ClearCache();
-            updateService.Dispose();
+            PetVm.DisposeBubbles();
+            await PetVm.DisposeAsync();
+            await updateService.DisposeAsync();
             await Social.DisposeAsync();
             await transport.DisposeAsync();
         }

@@ -17,6 +17,7 @@ using LabPet.Client.Rendering;
 using LabPet.Client.Social;
 using LabPet.Client.Solo;
 using LabPet.Client.Storage;
+using LabPet.Client.Updates;
 using LabPet.Client.ViewModels;
 using LabPet.Client.Views;
 using LabPet.Client.Views.Games;
@@ -273,7 +274,9 @@ public sealed class GameUiUxAndInviteTests : IAsyncLifetime
     {
         await WpfTestHost.RunAsync(async () =>
         {
-            var petVm = new PetWindowViewModel(_hostStore, _hostSocial);
+            var updateBackend = new TestUpdateBackend();
+            await using var updates = new UpdateService(updateBackend);
+            await using var petVm = new PetWindowViewModel(_hostStore, _hostSocial, updates: updates);
             petVm.ApplyProfile(_hostProfile);
             using var games = new CoinGamesViewModel(_hostStore, new SoloProgressionService(), _hostSocial);
             games.BindProfile(_hostProfile);
@@ -318,6 +321,16 @@ public sealed class GameUiUxAndInviteTests : IAsyncLifetime
                 Assert.False(obstacle.IsEmpty);
                 Assert.True(Win32WindowHelper.TryGetWindowPhysicalBounds(card, out var relocated));
                 Assert.False(obstacle.IntersectsWith(relocated));
+
+                await petVm.CheckUpdatesCommand.ExecuteAsync(null);
+                await WpfTestHost.FlushAsync();
+                Assert.True(petVm.IsUpdateBubbleVisible);
+                Assert.Equal(0, updateBackend.Downloads);
+                obstacle = pet.GetInviteCardObstacle();
+                Assert.False(obstacle.IsEmpty);
+                Assert.True(Win32WindowHelper.TryGetWindowPhysicalBounds(card, out relocated));
+                Assert.False(obstacle.IntersectsWith(relocated));
+                petVm.DismissUpdateBubbleCommand.Execute(null);
 
                 hub.WindowState = WindowState.Minimized;
                 await WpfTestHost.FlushAsync();

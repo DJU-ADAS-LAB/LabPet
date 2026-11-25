@@ -1,11 +1,13 @@
 using System.Collections.ObjectModel;
 using System.Windows.Media;
+using System.Windows.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using LabPet.Client.Navigation;
 using LabPet.Client.Social;
 using LabPet.Client.Solo;
 using LabPet.Client.Storage;
+using LabPet.Client.Updates;
 using LabPet.Client.Views;
 using LabPet.Shared.Models;
 using LabPet.Shared.Transport;
@@ -126,11 +128,13 @@ public sealed partial class PetWindowViewModel : ObservableObject, IAsyncDisposa
     private readonly IAppDataStore _store;
     private readonly SocialCoordinatorService _social;
     private readonly PomodoroTimerService? _pomodoro;
+    private readonly UpdateService? _updates;
+    private readonly Dispatcher? _updateDispatcher;
     private readonly BubbleMessageStack _bubbleStack = new(MaxBubbleLines);
+    private string? _dismissedUpdateVersion;
 
     public event EventHandler<NavigationRequest>? HubNavigationRequested;
     public event EventHandler? LaunchChristmasTreeRequested;
-    public event EventHandler? ApplyUpdateRestartRequested;
     public event EventHandler<bool>? StartupAutoRunToggled;
     public event EventHandler? ResetPositionRequested;
     public event EventHandler? ExitRequested;
@@ -166,11 +170,13 @@ public sealed partial class PetWindowViewModel : ObservableObject, IAsyncDisposa
         PomodoroOverlayCenter, PomodoroOverlayCenter, PomodoroOverlayRadius, 25.0 / PomodoroTimerService.MaximumFocusMinutes);
     [ObservableProperty] private Brush _pomodoroOverlayArcBrush = PomodoroOverlayFocusBrush;
     [ObservableProperty] private string _pomodoroOverlayTooltip = "뽀모도로 타이머 열기 (설정 25분)";
-    [ObservableProperty] private bool _isUpdateReady;
+    [ObservableProperty] private bool _hasUpdateOffer;
+    [ObservableProperty, NotifyCanExecuteChangedFor(nameof(InstallUpdateCommand))]
+    private bool _canInstallUpdate;
     [ObservableProperty, NotifyPropertyChangedFor(nameof(HasAnyBubble))]
     private bool _isUpdateBubbleVisible;
     [ObservableProperty] private string _updateBubbleText = string.Empty;
-    [ObservableProperty] private string _updateReadyMenuHeader = "새 버전 준비됨 · 재시작하여 적용";
+    [ObservableProperty] private string _updateMenuHeader = string.Empty;
     [ObservableProperty, NotifyPropertyChangedFor(nameof(HasAnyBubble))]
     private bool _isBubbleVisible;
 
@@ -252,11 +258,19 @@ public sealed partial class PetWindowViewModel : ObservableObject, IAsyncDisposa
         IAppDataStore store,
         SocialCoordinatorService social,
         SnowballInteractionService? snowballs = null,
-        PomodoroTimerService? pomodoro = null)
+        PomodoroTimerService? pomodoro = null,
+        UpdateService? updates = null)
     {
         _store = store;
         _snowballs = snowballs;
         _pomodoro = pomodoro;
+        _updates = updates;
+        if (_updates is not null)
+        {
+            _updateDispatcher = Dispatcher.FromThread(Thread.CurrentThread);
+            _updates.StateChanged += OnUpdateStateChanged;
+            SyncUpdateState();
+        }
         _shutdownProfileSaves = new Lazy<Task>(ShutdownProfileSavesAsync);
         _social = social;
         _bubbleStack.Changed += (_, _) => IsBubbleVisible = _bubbleStack.HasItems;
@@ -414,6 +428,11 @@ public sealed partial class PetWindowViewModel : ObservableObject, IAsyncDisposa
 
     private async Task ShutdownProfileSavesAsync()
     {
+        if (_updates is not null)
+        {
+            _updates.StateChanged -= OnUpdateStateChanged;
+        }
+
         if (_pomodoro is not null)
         {
             _pomodoro.Tick -= OnPomodoroTick;
@@ -599,16 +618,42 @@ public sealed partial class PetWindowViewModel : ObservableObject, IAsyncDisposa
         }
     }
 
-    public void NotifyUpdateReady(string versionText)
+    private void OnUpdateStateChanged(object? sender, EventArgs e)
     {
-        IsUpdateReady = true;
-        UpdateReadyMenuHeader = $"새 버전 v{versionText} 준비됨 · 재시작하여 적용";
-        UpdateBubbleText = $"새 버전 v{versionText} 업데이트할까요?";
-        IsUpdateBubbleVisible = true;
+        if (_updateDispatcher is null || _updateDispatcher.CheckAccess())
+        {
+            SyncUpdateState();
+        }
+        else if (!_updateDispatcher.HasShutdownStarted)
+        {
+            _updateDispatcher.BeginInvoke(() => SyncUpdateState());
+        }
+    }
+
+    private void SyncUpdateState()
+    {
+        if (_updates is null)
+        {
+            return;
+        }
+
+        var state = _updates.State;
+        var version = state.Version;
+        CanInstallUpdate = state.CanInstall;
+        HasUpdateOffer = state.CanInstall;
+        UpdateMenuHeader = state.Phase == UpdatePhase.Ready
+            ? $"새 버전 v{version} 준비됨 · 재시작하여 적용"
+            : $"새 버전 v{version} 업데이트";
+        UpdateBubbleText = state.Message ?? string.Empty;
+        IsUpdateBubbleVisible = version is not null && version != _dismissedUpdateVersion;
     }
 
     [RelayCommand]
-    private void DismissUpdateBubble() => IsUpdateBubbleVisible = false;
+    private void DismissUpdateBubble()
+    {
+        _dismissedUpdateVersion = _updates?.State.Version;
+        IsUpdateBubbleVisible = false;
+    }
 
     public async Task ApplyDisplaySettingsAsync(double scale, double opacity, bool persist = true)
     {
@@ -824,11 +869,24 @@ public sealed partial class PetWindowViewModel : ObservableObject, IAsyncDisposa
     }
 
     [RelayCommand]
-    private void CheckUpdates()
-        => HubNavigationRequested?.Invoke(this, new NavigationRequest(HubPage.About, Action: HubNavigationAction.CheckUpdates));
+    private async Task CheckUpdatesAsync()
+    {
+        if (_updates is null)
+        {
+            return;
+        }
 
-    [RelayCommand]
-    private void ApplyUpdateAndRestart() => ApplyUpdateRestartRequested?.Invoke(this, EventArgs.Empty);
+        _dismissedUpdateVersion = null;
+        var message = _updates.State.IsBusy ? null : await _updates.CheckForUpdatesAsync();
+        SyncUpdateState();
+        if (message is not null)
+        {
+            ShowBubble(message, 3600);
+        }
+    }
+
+    [RelayCommand(CanExecute = nameof(CanInstallUpdate))]
+    private Task InstallUpdateAsync() => _updates?.InstallUpdateAsync() ?? Task.CompletedTask;
 
     [RelayCommand]
     private void OpenHub()

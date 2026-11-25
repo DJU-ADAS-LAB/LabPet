@@ -6,6 +6,5 @@ namespace LabPet.Client.Navigation;
 public enum HubNavigationAction
 {
     None = 0,
-    CheckUpdates = 1,
     StartPomodoroFocus = 2
 }

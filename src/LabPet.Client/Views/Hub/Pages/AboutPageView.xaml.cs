@@ -24,11 +24,6 @@ public partial class AboutPageView : UserControl, IHubPageLifecycle, IDisposable
         }
 
         _viewModel.Activate();
-
-        if (request.Action == HubNavigationAction.CheckUpdates)
-        {
-            Dispatcher.BeginInvoke(() => _ = _viewModel.CheckUpdatesAsync());
-        }
     }
 
     public void OnDeactivated()

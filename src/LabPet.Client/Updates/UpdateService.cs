@@ -1,37 +1,65 @@
+using System.Diagnostics;
 using Velopack;
 
 namespace LabPet.Client.Updates;
 
-/// <summary>
-/// Velopack 기반 백그라운드 차분 자동 업데이트 서비스.
-/// 앱 시작 시, 5분 주기, LAN 피어 신버전 감지 시, 또는 사용자 수동 확인 시 업데이트를 내려받고 재시작 적용을 제공한다.
-/// </summary>
+internal enum UpdatePhase
+{
+    None,
+    Available,
+    Downloading,
+    Ready,
+    Applying
+}
+
+internal sealed record UpdateState(UpdatePhase Phase = UpdatePhase.None, string? Version = null, string? Error = null)
+{
+    public bool IsBusy => Phase is UpdatePhase.Downloading or UpdatePhase.Applying;
+    public bool CanInstall => Phase is UpdatePhase.Available or UpdatePhase.Ready;
+
+    public string? Message => Error ?? (Version is null ? null : Phase switch
+    {
+        UpdatePhase.Available => $"새 버전 v{Version}이 있습니다. 업데이트할까요?",
+        UpdatePhase.Downloading => $"새 버전 v{Version} 다운로드 중...",
+        UpdatePhase.Ready => $"새 버전 v{Version} 다운로드 완료. 업데이트할까요?",
+        UpdatePhase.Applying => $"새 버전 v{Version} 적용을 위해 재시작합니다.",
+        _ => null
+    });
+}
+
+/// <summary>업데이트 확인과 다운로드·적용을 직렬화하고 두 화면의 상태를 공유한다.</summary>
 public sealed class UpdateService : IDisposable, IAsyncDisposable
 {
     private static readonly TimeSpan PeriodicCheckInterval = TimeSpan.FromMinutes(5);
     private static readonly TimeSpan PeerHintCooldown = TimeSpan.FromMinutes(2);
 
-    private readonly UpdateSourceOptions _options;
+    private readonly Lazy<IUpdateBackend> _backend;
     private readonly object _lifecycle = new();
-    private readonly AsyncOperationLifetime _checks = new();
+    private readonly AsyncOperationLifetime _operations = new();
     private readonly CancellationTokenSource _stopCts = new();
     private readonly Lazy<Task> _shutdown;
-    private readonly SemaphoreSlim _checkLock = new(1, 1);
+    private readonly SemaphoreSlim _updateLock = new(1, 1);
 
-    private UpdateManager? _manager;
-    private UpdateInfo? _pendingUpdate;
+    private volatile UpdateState _state = new();
+    private UpdateInfo? _availableUpdate;
+    private VelopackAsset? _downloadedUpdate;
     private Task? _periodicCheck;
     private DateTimeOffset _lastPeerHintCheckUtc = DateTimeOffset.MinValue;
 
-    public bool IsUpdateReady => _pendingUpdate is not null;
-    public string? PendingVersion => _pendingUpdate?.TargetFullRelease.Version.ToString();
-
-    public event EventHandler<string>? UpdateReady;
-    public event EventHandler<string>? StatusMessage;
+    internal UpdateState State => _state;
+    internal event EventHandler? StateChanged;
+    internal event EventHandler? RestartRequested;
 
     public UpdateService(UpdateSourceOptions? options = null)
+        : this(() => new VelopackBackend(new UpdateManager((options ?? new UpdateSourceOptions()).CreateUpdateSource())))
     {
-        _options = options ?? new UpdateSourceOptions();
+    }
+
+    internal UpdateService(IUpdateBackend backend) : this(() => backend) { }
+
+    private UpdateService(Func<IUpdateBackend> createBackend)
+    {
+        _backend = new Lazy<IUpdateBackend>(createBackend, LazyThreadSafetyMode.None);
         _shutdown = new Lazy<Task>(ShutdownAsync);
     }
 
@@ -39,11 +67,10 @@ public sealed class UpdateService : IDisposable, IAsyncDisposable
     {
         lock (_lifecycle)
         {
-            if (_periodicCheck is not null || _stopCts.IsCancellationRequested)
+            if (_periodicCheck is null && !_stopCts.IsCancellationRequested)
             {
-                return;
+                _periodicCheck = RunPeriodicChecksAsync(silentAutoApplyOnStartup, _stopCts.Token);
             }
-            _periodicCheck = RunPeriodicChecksAsync(silentAutoApplyOnStartup, _stopCts.Token);
         }
     }
 
@@ -51,154 +78,201 @@ public sealed class UpdateService : IDisposable, IAsyncDisposable
     {
         try
         {
-            // Windows 부팅 직후 Wi-Fi/LAN 연결 안정화를 위해 8초 대기 후 첫 확인
+            // Windows 부팅 직후 Wi-Fi/LAN 연결 안정화 대기
             await Task.Delay(TimeSpan.FromSeconds(8), ct).ConfigureAwait(false);
-            var updated = await CheckAndDownloadUpdatesAsync(
-                isManualCheck: false,
-                silentAutoApply: silentAutoApplyOnStartup,
-                ct).ConfigureAwait(false);
+            await CheckAsync(silentAutoApplyOnStartup, ct).ConfigureAwait(false);
 
-            // 부팅 직후 네트워크가 아직 안 붙었을 수 있으므로 1회 재시도 (20초 후)
-            if (silentAutoApplyOnStartup && !updated && !IsUpdateReady)
+            if (silentAutoApplyOnStartup && State.Phase is UpdatePhase.None or UpdatePhase.Available)
             {
                 await Task.Delay(TimeSpan.FromSeconds(20), ct).ConfigureAwait(false);
-                await CheckAndDownloadUpdatesAsync(
-                    isManualCheck: false,
-                    silentAutoApply: true,
-                    ct).ConfigureAwait(false);
+                await CheckAsync(silentAutoApply: true, ct).ConfigureAwait(false);
             }
 
             using var timer = new PeriodicTimer(PeriodicCheckInterval);
             while (await timer.WaitForNextTickAsync(ct).ConfigureAwait(false))
             {
-                await CheckAndDownloadUpdatesAsync(isManualCheck: false, silentAutoApply: false, ct).ConfigureAwait(false);
+                await CheckAsync(silentAutoApply: false, ct).ConfigureAwait(false);
             }
         }
-        catch (OperationCanceledException)
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
             // 정상 종료
         }
     }
 
-    /// <summary>
-    /// LAN 피어에서 더 높은 앱 버전이 관측되었을 때 5분 주기를 기다리지 않고 즉시 업데이트 확인을 트리거한다.
-    /// </summary>
     public void TriggerImmediateCheckFromPeerHint()
     {
-        if (IsUpdateReady)
+        lock (_lifecycle)
+        {
+            var now = DateTimeOffset.UtcNow;
+            if (State.Phase is UpdatePhase.Ready or UpdatePhase.Applying ||
+                now - _lastPeerHintCheckUtc < PeerHintCooldown)
+            {
+                return;
+            }
+            _lastPeerHintCheckUtc = now;
+        }
+
+        _ = CheckAsync(silentAutoApply: false);
+    }
+
+    internal Task<string?> CheckForUpdatesAsync() => CheckAsync(silentAutoApply: false);
+
+    internal Task<string?> CheckAsync(bool silentAutoApply, CancellationToken cancellationToken = default)
+        => RunExclusiveAsync(async token =>
+        {
+            if (State.Phase == UpdatePhase.Applying)
+            {
+                return null;
+            }
+
+            try
+            {
+                var backend = _backend.Value;
+                if (!backend.IsInstalled)
+                {
+                    return "개발/포터블 실행 환경입니다. 설치 버전에서 업데이트할 수 있습니다.";
+                }
+
+                _downloadedUpdate ??= backend.PendingUpdate;
+                if (_downloadedUpdate is not null)
+                {
+                    if (silentAutoApply)
+                    {
+                        await DownloadAndApplyAsync(silent: true, token).ConfigureAwait(false);
+                    }
+                    else
+                    {
+                        SetState(new(UpdatePhase.Ready, _downloadedUpdate.Version.ToString()));
+                    }
+                    return null;
+                }
+
+                _availableUpdate = await backend.CheckForUpdatesAsync().ConfigureAwait(false);
+                token.ThrowIfCancellationRequested();
+                if (_availableUpdate is null)
+                {
+                    SetState(new());
+                    return "현재 최신 버전의 LabPet을 사용 중입니다.";
+                }
+
+                if (silentAutoApply)
+                {
+                    await DownloadAndApplyAsync(silent: true, token).ConfigureAwait(false);
+                }
+                else
+                {
+                    SetState(new(UpdatePhase.Available, _availableUpdate.TargetFullRelease.Version.ToString()));
+                }
+                return null;
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException || !token.IsCancellationRequested)
+            {
+                Trace.TraceWarning("업데이트 확인 실패: {0}", ex);
+                return $"업데이트 확인 실패: {ex.Message}";
+            }
+        }, cancellationToken);
+
+    internal Task InstallUpdateAsync()
+    {
+        var expected = State;
+        if (!expected.CanInstall)
+        {
+            return Task.CompletedTask;
+        }
+
+        return RunExclusiveAsync(async token =>
+        {
+            // 확인 중 버전이 바뀌거나 다른 화면에서 먼저 실행했다면 기존 클릭을 재사용하지 않는다.
+            if (ReferenceEquals(State, expected))
+            {
+                await DownloadAndApplyAsync(silent: false, token).ConfigureAwait(false);
+            }
+            return null;
+        });
+    }
+
+    private async Task DownloadAndApplyAsync(bool silent, CancellationToken token)
+    {
+        var release = _downloadedUpdate ?? _availableUpdate?.TargetFullRelease;
+        if (release is null)
         {
             return;
         }
 
-        var now = DateTimeOffset.UtcNow;
-        if (now - _lastPeerHintCheckUtc < PeerHintCooldown)
+        var version = release.Version.ToString();
+        try
         {
+            if (_downloadedUpdate is null && _availableUpdate is not null)
+            {
+                SetState(new(UpdatePhase.Downloading, silent ? null : version));
+                await _backend.Value.DownloadUpdatesAsync(_availableUpdate, token).ConfigureAwait(false);
+                _downloadedUpdate = release;
+            }
+
+            token.ThrowIfCancellationRequested();
+            SetState(new(UpdatePhase.Applying, silent ? null : version));
+            _backend.Value.ScheduleApplyAndRestart(release, silent);
+        }
+        catch (OperationCanceledException) when (token.IsCancellationRequested)
+        {
+            SetState(new(_downloadedUpdate is null ? UpdatePhase.Available : UpdatePhase.Ready, version));
+            throw;
+        }
+        catch (Exception ex)
+        {
+            Trace.TraceWarning("업데이트 다운로드 또는 적용 실패: {0}", ex);
+            if (_downloadedUpdate is null)
+            {
+                SetState(new(UpdatePhase.Available, version, $"다운로드 실패: {ex.Message}"));
+            }
+            else
+            {
+                SetState(new(UpdatePhase.Ready, version, $"업데이트 적용 실패: {ex.Message}"));
+            }
             return;
         }
 
-        _lastPeerHintCheckUtc = now;
-        _ = RunPeerHintCheckAsync();
+        RestartRequested?.Invoke(this, EventArgs.Empty);
     }
 
-    private async Task RunPeerHintCheckAsync()
+    private void SetState(UpdateState state)
     {
-        try { await CheckAndDownloadUpdatesAsync(isManualCheck: false).ConfigureAwait(false); }
-        catch (OperationCanceledException) { }
+        if (state != _state)
+        {
+            _state = state;
+            StateChanged?.Invoke(this, EventArgs.Empty);
+        }
     }
 
-    public Task<bool> CheckAndDownloadUpdatesAsync(bool isManualCheck, CancellationToken cancellationToken = default)
-        => CheckAndDownloadUpdatesAsync(isManualCheck, silentAutoApply: false, cancellationToken);
-
-    private async Task<bool> CheckAndDownloadUpdatesAsync(
-        bool isManualCheck,
-        bool silentAutoApply,
-        CancellationToken cancellationToken)
+    private async Task<string?> RunExclusiveAsync(
+        Func<CancellationToken, Task<string?>> run,
+        CancellationToken cancellationToken = default)
     {
-        using var operation = _checks.TryBegin();
+        using var operation = _operations.TryBegin();
         if (operation is null)
         {
-            return false;
+            return null;
         }
 
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _stopCts.Token);
         var token = linked.Token;
-        await _checkLock.WaitAsync(token).ConfigureAwait(false);
         try
         {
-            _manager ??= new UpdateManager(_options.CreateUpdateSource());
-
-            if (!_manager.IsInstalled)
+            await _updateLock.WaitAsync(token).ConfigureAwait(false);
+            try
             {
-                if (isManualCheck)
-                {
-                    StatusMessage?.Invoke(this, "개발/포터블 실행 환경입니다. Velopack 설치 버전에서 자동 업데이트가 동작합니다.");
-                }
-
-                return false;
+                return await run(token).ConfigureAwait(false);
             }
-
-            // 이미 다운로드된 업데이트가 있으면 수동 확인 시 즉시 적용 팝업 재요청
-            if (_pendingUpdate is not null)
+            finally
             {
-                var readyVersion = _pendingUpdate.TargetFullRelease.Version.ToString();
-                if (isManualCheck)
-                {
-                    UpdateReady?.Invoke(this, readyVersion);
-                }
-
-                return true;
+                _updateLock.Release();
             }
-
-            var updateInfo = await _manager.CheckForUpdatesAsync().ConfigureAwait(false);
-            token.ThrowIfCancellationRequested();
-            if (updateInfo is null)
-            {
-                if (isManualCheck)
-                {
-                    StatusMessage?.Invoke(this, "현재 최신 버전의 LabPet을 사용 중입니다.");
-                }
-
-                return false;
-            }
-
-            await _manager.DownloadUpdatesAsync(updateInfo, cancelToken: token).ConfigureAwait(false);
-            _pendingUpdate = updateInfo;
-
-            // Windows 시작 자동 실행(--autostart) 시에는 팝업 없이 백그라운드 다운로드 후 즉시 재시작 적용
-            if (silentAutoApply)
-            {
-                _manager.ApplyUpdatesAndRestart(updateInfo);
-                return true;
-            }
-
-            var versionStr = updateInfo.TargetFullRelease.Version.ToString();
-            UpdateReady?.Invoke(this, versionStr);
-            return true;
         }
-        catch (Exception ex) when (ex is not OperationCanceledException)
+        catch (OperationCanceledException) when (token.IsCancellationRequested)
         {
-            if (isManualCheck)
-            {
-                StatusMessage?.Invoke(this, $"업데이트 확인 실패: {ex.Message}");
-            }
-
-            return false;
+            return null;
         }
-        finally
-        {
-            _checkLock.Release();
-        }
-    }
-
-    /// <summary>준비된 차분 업데이트를 적용하고 앱을 재시작한다.</summary>
-    public void ApplyUpdatesAndRestart()
-    {
-        if (_manager is null || _pendingUpdate is null)
-        {
-            return;
-        }
-
-        _manager.ApplyUpdatesAndRestart(_pendingUpdate);
     }
 
     public void Dispose() => _shutdown.Value.GetAwaiter().GetResult();
@@ -207,7 +281,7 @@ public sealed class UpdateService : IDisposable, IAsyncDisposable
 
     private async Task ShutdownAsync()
     {
-        var drain = _checks.DrainAsync();
+        var drain = _operations.DrainAsync();
         Task? periodic;
         lock (_lifecycle)
         {
@@ -220,8 +294,29 @@ public sealed class UpdateService : IDisposable, IAsyncDisposable
         }
         finally
         {
-            _checkLock.Dispose();
+            _updateLock.Dispose();
             _stopCts.Dispose();
         }
+    }
+
+    internal interface IUpdateBackend
+    {
+        bool IsInstalled { get; }
+        VelopackAsset? PendingUpdate { get; }
+        Task<UpdateInfo?> CheckForUpdatesAsync();
+        Task DownloadUpdatesAsync(UpdateInfo update, CancellationToken ct);
+        void ScheduleApplyAndRestart(VelopackAsset update, bool silent);
+    }
+
+    private sealed class VelopackBackend(UpdateManager manager) : IUpdateBackend
+    {
+        public bool IsInstalled => manager.IsInstalled;
+        public VelopackAsset? PendingUpdate => manager.UpdatePendingRestart;
+        public Task<UpdateInfo?> CheckForUpdatesAsync() => manager.CheckForUpdatesAsync();
+        public Task DownloadUpdatesAsync(UpdateInfo update, CancellationToken ct)
+            => manager.DownloadUpdatesAsync(update, cancelToken: ct);
+
+        public void ScheduleApplyAndRestart(VelopackAsset update, bool silent)
+            => manager.WaitExitThenApplyUpdates(update, silent: silent, restart: true, restartArgs: []);
     }
 }

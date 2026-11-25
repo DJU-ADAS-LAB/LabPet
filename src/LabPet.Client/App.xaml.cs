@@ -142,10 +142,13 @@ public partial class App : Application
                 ? (enabled ? "Windows 시작 시 자동 실행 등록됨" : "Windows 자동 실행 해제됨")
                 : "시작 프로그램 설정을 변경하지 못했습니다.", 2400);
         };
-        petVm.ApplyUpdateRestartRequested += (_, _) => updateService.ApplyUpdatesAndRestart();
-
-        updateService.UpdateReady += (_, version) => Dispatcher.BeginInvoke(() => petVm.NotifyUpdateReady(version));
-        updateService.StatusMessage += (_, msg) => Dispatcher.BeginInvoke(() => petVm.ShowBubble(msg, 3600));
+        updateService.RestartRequested += (_, _) =>
+        {
+            if (!Dispatcher.HasShutdownStarted)
+            {
+                Dispatcher.BeginInvoke(() => Shutdown());
+            }
+        };
         updateService.StartPeriodicChecks(silentAutoApplyOnStartup: isWindowsAutoStart);
 
         // LAN 피어 중 더 높은 앱 버전이 감지되면 5분 주기를 기다리지 않고 즉시 업데이트 확인

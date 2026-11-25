@@ -26,22 +26,22 @@ internal static class PetContextMenuFactory
             DataContext = viewModel
         };
 
-        var updateReadyItem = new MenuItem
+        var updateItem = new MenuItem
         {
-            Command = viewModel.ApplyUpdateAndRestartCommand,
+            Command = viewModel.InstallUpdateCommand,
             FontWeight = FontWeights.Bold,
             Foreground = UpdateReadyForeground
         };
-        updateReadyItem.SetBinding(MenuItem.HeaderProperty, new Binding(nameof(PetWindowViewModel.UpdateReadyMenuHeader))
+        updateItem.SetBinding(MenuItem.HeaderProperty, new Binding(nameof(PetWindowViewModel.UpdateMenuHeader))
         {
             Source = viewModel
         });
-        updateReadyItem.SetBinding(UIElement.VisibilityProperty, new Binding(nameof(PetWindowViewModel.IsUpdateReady))
+        updateItem.SetBinding(UIElement.VisibilityProperty, new Binding(nameof(PetWindowViewModel.HasUpdateOffer))
         {
             Source = viewModel,
             Converter = BoolToVisibility
         });
-        menu.Items.Add(updateReadyItem);
+        menu.Items.Add(updateItem);
 
         menu.Items.Add(new MenuItem { Header = "🏠  LabPet 열기", Command = viewModel.OpenHubCommand });
         menu.Items.Add(new MenuItem { Header = "🎨  외형 · 이름 변경", Command = viewModel.OpenCustomizationCommand });
