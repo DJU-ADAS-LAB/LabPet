@@ -24,6 +24,7 @@ public sealed class PeerSnapshot
     public int Level { get; set; } = 1;
     public bool IsMusicActive { get; set; }
     public bool IsSleeping { get; set; }
+    public bool IsFocusing { get; set; }
     public PeerTransportKind TransportKind { get; set; } = PeerTransportKind.Lan;
     public string IpAddress { get; set; } = string.Empty;
     public int TcpPort { get; set; } = ProtocolConstants.TcpControlPort;
@@ -48,7 +49,8 @@ public sealed record LocalPresenceState(
     bool IsMusicActive,
     string AppVersion,
     bool IsSleeping = false,
-    string FriendCode = "");
+    string FriendCode = "",
+    bool IsFocusing = false);
 
 /// <summary>
 /// 노래 따라하기(30Hz)용 경량 오디오 대역 프레임 데이터.

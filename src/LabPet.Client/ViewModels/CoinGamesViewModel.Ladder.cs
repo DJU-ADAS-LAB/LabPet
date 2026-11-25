@@ -7,6 +7,7 @@ using CommunityToolkit.Mvvm.Input;
 using LabPet.Client.Games;
 using LabPet.Shared.Models;
 using LabPet.Shared.Protocol;
+using LabPet.Shared.Transport;
 
 namespace LabPet.Client.ViewModels;
 
@@ -257,7 +258,10 @@ public sealed partial class CoinGamesViewModel
         var maxPossible = _ladderRoom.Members.Count + _ladderRoom.PendingInviteCount;
         if (maxPossible < LabLadderEngine.MinParticipants)
         {
-            await AbortLadderRoomAsHostAsync("최소 참가 인원(2명)을 충족하지 못해 사다리방을 취소했습니다.");
+            await AbortLadderRoomAsHostAsync(
+                reason == "pomodoro_focus"
+                    ? FriendOperationErrorCodes.PomodoroFocusMessage
+                    : "최소 참가 인원(2명)을 충족하지 못해 사다리방을 취소했습니다.");
             return;
         }
 
@@ -290,6 +294,13 @@ public sealed partial class CoinGamesViewModel
             return;
         }
 
+        if (_social.IsLocalFocusing)
+        {
+            LadderStatusText = FriendOperationErrorCodes.PomodoroFocusMessage;
+            GameNotification?.Invoke(this, FriendOperationErrorCodes.PomodoroFocusMessage);
+            return;
+        }
+
         if (IsAnyGameBusy || HasIncomingInvite)
         {
             LadderStatusText = DescribeInviteReason("busy");
@@ -319,6 +330,13 @@ public sealed partial class CoinGamesViewModel
         if (invitees.Count == 0)
         {
             LadderStatusText = "초대할 친구를 1명 이상 선택해 주세요.";
+            return;
+        }
+
+        if (invitees.Any(choice => _social.IsPeerFocusing(choice.Friend.PetId)))
+        {
+            LadderStatusText = FriendOperationErrorCodes.PomodoroFocusMessage;
+            GameNotification?.Invoke(this, FriendOperationErrorCodes.PomodoroFocusMessage);
             return;
         }
 
@@ -1298,7 +1316,9 @@ public sealed partial class CoinGamesViewModel
 
         var refunded = _ladderPaidCoins;
         _ladderPaidCoins = 0;
-        var finalMessage = refunded > 0 && !statusMessage.Contains("반환", StringComparison.Ordinal)
+        var finalMessage = refunded > 0
+            && !statusMessage.Contains("반환", StringComparison.Ordinal)
+            && !string.Equals(statusMessage, FriendOperationErrorCodes.PomodoroFocusMessage, StringComparison.Ordinal)
             ? $"{statusMessage} (참가 {refunded} 코인 반환)"
             : statusMessage;
 
@@ -2013,6 +2033,13 @@ public sealed partial class CoinGamesViewModel
         if (_lastLadderResults.Count == 0)
         {
             LadderStatusText = "먼저 사다리를 실행해 주세요.";
+            return;
+        }
+
+        if (_social.IsLocalFocusing)
+        {
+            LadderStatusText = FriendOperationErrorCodes.PomodoroFocusMessage;
+            GameNotification?.Invoke(this, FriendOperationErrorCodes.PomodoroFocusMessage);
             return;
         }
 

@@ -185,6 +185,17 @@
                                                        FontSize="13.5"
                                                        Foreground="{StaticResource HubTextPrimaryBrush}"
                                                        TextTrimming="CharacterEllipsis" />
+                                            <Border Background="#FFFFF7ED"
+                                                    BorderBrush="#FFFDBA74"
+                                                    BorderThickness="1"
+                                                    CornerRadius="6"
+                                                    Padding="5,1"
+                                                    Margin="6,0,0,0"
+                                                    VerticalAlignment="Center"
+                                                    ToolTip="뽀모도로 타이머로 집중 중!"
+                                                    Visibility="{Binding ShowsFocusBadge, Converter={StaticResource HubBoolToVis}}">
+                                                <TextBlock Text="✏️" FontSize="10.5" />
+                                            </Border>
                                             <Border Background="#FFEEF2FF"
                                                     BorderBrush="#FFC7D2FE"
                                                     BorderThickness="1"
@@ -192,7 +203,7 @@
                                                     Padding="5,1"
                                                     Margin="6,0,0,0"
                                                     VerticalAlignment="Center"
-                                                    Visibility="{Binding ShowsSleepPose, Converter={StaticResource HubBoolToVis}}">
+                                                    Visibility="{Binding ShowsSleepBadge, Converter={StaticResource HubBoolToVis}}">
                                                 <views:MiniSleepZzzIndicator />
                                             </Border>
                                         </StackPanel>
@@ -284,6 +295,9 @@
                                 <Button Content="{Binding SelectedFriend.VisitButtonText, FallbackValue='내 바탕화면에 데려오기'}"
                                         Command="{Binding ToggleVisitDesktopCommand}"
                                         CommandParameter="{Binding SelectedFriend}"
+                                        IsEnabled="{Binding SelectedFriend.CanToggleVisit, FallbackValue=False}"
+                                        ToolTip="{Binding SelectedFriend.VisitTooltip}"
+                                        ToolTipService.ShowOnDisabled="True"
                                         Visibility="{Binding HasSelectedFriend, Converter={StaticResource HubBoolToVis}}"
                                         HorizontalAlignment="Right"
                                         VerticalAlignment="Bottom"
@@ -299,9 +313,15 @@
                                     Content="전송"
                                     Style="{StaticResource GamePrimaryButtonStyle}"
                                     Command="{Binding SendBubbleMessageCommand}"
+                                    IsEnabled="{Binding SelectedFriend.CanInteract, FallbackValue=False}"
+                                    ToolTip="{Binding SelectedFriend.InteractionTooltip}"
+                                    ToolTipService.ShowOnDisabled="True"
                                     Width="80"
                                     Margin="8,0,0,0" />
                             <TextBox Text="{Binding MessageText, UpdateSourceTrigger=PropertyChanged}"
+                                     IsEnabled="{Binding SelectedFriend.CanInteract, FallbackValue=False}"
+                                     ToolTip="{Binding SelectedFriend.InteractionTooltip}"
+                                     ToolTipService.ShowOnDisabled="True"
                                      MaxLength="100"
                                      Height="36" />
                         </DockPanel>
@@ -316,11 +336,11 @@
                                 <ColumnDefinition Width="Auto" />
                                 <ColumnDefinition Width="Auto" />
                             </Grid.ColumnDefinitions>
-                            <Button Grid.Column="0" Content="♥" Command="{Binding SendQuickReactionCommand}" CommandParameter="♥" Height="34" Margin="0,0,4,0" Padding="0" />
-                            <Button Grid.Column="1" Content="👏" Command="{Binding SendQuickReactionCommand}" CommandParameter="👏" Height="34" Margin="0,0,4,0" Padding="0" />
-                            <Button Grid.Column="2" Content="🎵" Command="{Binding SendQuickReactionCommand}" CommandParameter="🎵" Height="34" Margin="0,0,4,0" Padding="0" />
-                            <Button Grid.Column="3" Content="🔥" Command="{Binding SendQuickReactionCommand}" CommandParameter="🔥" Height="34" Margin="0,0,4,0" Padding="0" />
-                            <Button Grid.Column="4" Content="인사하기 보내기" Command="{Binding SendPetInteractionCommand}" Height="34" Margin="0,0,4,0" />
+                            <Button Grid.Column="0" Content="♥" Command="{Binding SendQuickReactionCommand}" CommandParameter="♥" IsEnabled="{Binding SelectedFriend.CanInteract, FallbackValue=False}" ToolTip="{Binding SelectedFriend.InteractionTooltip}" ToolTipService.ShowOnDisabled="True" Height="34" Margin="0,0,4,0" Padding="0" />
+                            <Button Grid.Column="1" Content="👏" Command="{Binding SendQuickReactionCommand}" CommandParameter="👏" IsEnabled="{Binding SelectedFriend.CanInteract, FallbackValue=False}" ToolTip="{Binding SelectedFriend.InteractionTooltip}" ToolTipService.ShowOnDisabled="True" Height="34" Margin="0,0,4,0" Padding="0" />
+                            <Button Grid.Column="2" Content="🎵" Command="{Binding SendQuickReactionCommand}" CommandParameter="🎵" IsEnabled="{Binding SelectedFriend.CanInteract, FallbackValue=False}" ToolTip="{Binding SelectedFriend.InteractionTooltip}" ToolTipService.ShowOnDisabled="True" Height="34" Margin="0,0,4,0" Padding="0" />
+                            <Button Grid.Column="3" Content="🔥" Command="{Binding SendQuickReactionCommand}" CommandParameter="🔥" IsEnabled="{Binding SelectedFriend.CanInteract, FallbackValue=False}" ToolTip="{Binding SelectedFriend.InteractionTooltip}" ToolTipService.ShowOnDisabled="True" Height="34" Margin="0,0,4,0" Padding="0" />
+                            <Button Grid.Column="4" Content="인사하기 보내기" Command="{Binding SendPetInteractionCommand}" IsEnabled="{Binding SelectedFriend.CanInteract, FallbackValue=False}" ToolTip="{Binding SelectedFriend.InteractionTooltip}" ToolTipService.ShowOnDisabled="True" Height="34" Margin="0,0,4,0" />
                             <Button x:Name="SnowballQuickReactionButton" Grid.Column="5" Width="38" Height="34" Padding="0"
                                     Content="{Binding SelectedFriend.Snowball.Icon, FallbackValue=❄}"
                                     ToolTip="{Binding SelectedFriend.Snowball.Tooltip, FallbackValue=눈던지기}"
@@ -336,6 +356,8 @@
                                 Command="{Binding ToggleMusicFollowCommand}"
                                 CommandParameter="{Binding SelectedFriend}"
                                 IsEnabled="{Binding SelectedFriend.CanFollowMusic, FallbackValue=False}"
+                                ToolTip="{Binding SelectedFriend.InteractionTooltip}"
+                                ToolTipService.ShowOnDisabled="True"
                                 Height="38"
                                 Margin="0,0,0,10" />
                         <CheckBox Style="{StaticResource HubToggleSwitchStyle}"
@@ -419,6 +441,8 @@
                                             Command="{Binding DataContext.SendFriendRequestCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"
                                             CommandParameter="{Binding}"
                                             IsEnabled="{Binding CanSendFriendRequest}"
+                                            ToolTip="{Binding FriendRequestTooltip}"
+                                            ToolTipService.ShowOnDisabled="True"
                                             Padding="14,7"
                                             VerticalAlignment="Center" />
                                 </DockPanel>

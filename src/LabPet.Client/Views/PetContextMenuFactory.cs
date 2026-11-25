@@ -2,6 +2,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Data;
 using System.Windows.Media;
+using System.Windows.Shapes;
 using LabPet.Client.ViewModels;
 
 namespace LabPet.Client.Views;
@@ -14,6 +15,7 @@ internal static class PetContextMenuFactory
     private static readonly BooleanToVisibilityConverter BoolToVisibility = new();
     private static readonly Brush UpdateReadyForeground = CreateFrozenBrush("#FFFF5D8F");
     private static readonly Brush VersionSubtextForeground = CreateFrozenBrush("#FF9CA3AF");
+    private static readonly Brush FeatureBadgeDotBrush = CreateFrozenBrush("#FFEF4444");
 
     public static ContextMenu Create(PetWindowViewModel viewModel, bool includeStartupAutoRun)
     {
@@ -45,24 +47,50 @@ internal static class PetContextMenuFactory
         menu.Items.Add(new MenuItem { Header = "🎨  외형 · 이름 변경", Command = viewModel.OpenCustomizationCommand });
         menu.Items.Add(new MenuItem { Header = "💬  친구", Command = viewModel.OpenSocialCommand });
         menu.Items.Add(new MenuItem { Header = "📈  성장", Command = viewModel.OpenGrowthCommand });
-        menu.Items.Add(new MenuItem { Header = "⏱  뽀모도로", Command = viewModel.OpenPomodoroCommand });
+        var pomodoroHeader = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            VerticalAlignment = VerticalAlignment.Center
+        };
+        pomodoroHeader.Children.Add(new TextBlock
+        {
+            Text = "⏱  뽀모도로",
+            VerticalAlignment = VerticalAlignment.Center
+        });
+        var pomodoroBadgeDot = new Ellipse
+        {
+            Name = "PomodoroMenuRedDot",
+            Width = 6,
+            Height = 6,
+            Fill = FeatureBadgeDotBrush,
+            Margin = new Thickness(6, 0, 0, 0),
+            VerticalAlignment = VerticalAlignment.Center
+        };
+        pomodoroBadgeDot.SetBinding(UIElement.VisibilityProperty, new Binding(nameof(PetWindowViewModel.ShowPomodoroFeatureBadge))
+        {
+            Source = viewModel,
+            Converter = BoolToVisibility
+        });
+        pomodoroHeader.Children.Add(pomodoroBadgeDot);
+        menu.Items.Add(new MenuItem { Header = pomodoroHeader, Command = viewModel.OpenPomodoroCommand });
         menu.Items.Add(new MenuItem { Header = "🎮  코인 게임", Command = viewModel.OpenGamesCommand });
 
         menu.Items.Add(new Separator());
 
         menu.Items.Add(new MenuItem { Header = "🎄  크리스마스 트리", Command = viewModel.LaunchChristmasTreeCommand });
 
-        var clickThroughItem = new MenuItem
-        {
-            Header = "🎯  클릭 투과 집중 모드",
-            IsCheckable = true
-        };
-        clickThroughItem.SetBinding(MenuItem.IsCheckedProperty, new Binding(nameof(PetWindowViewModel.IsClickThroughEnabled))
-        {
-            Source = viewModel,
-            Mode = BindingMode.TwoWay
-        });
-        menu.Items.Add(clickThroughItem);
+        // 클릭 투과 및 집중 모드 우클릭 메뉴 항목 제거 (관련 코드 주석 처리)
+        // var clickThroughItem = new MenuItem
+        // {
+        //     Header = "🎯  클릭 투과 집중 모드",
+        //     IsCheckable = true
+        // };
+        // clickThroughItem.SetBinding(MenuItem.IsCheckedProperty, new Binding(nameof(PetWindowViewModel.IsClickThroughEnabled))
+        // {
+        //     Source = viewModel,
+        //     Mode = BindingMode.TwoWay
+        // });
+        // menu.Items.Add(clickThroughItem);
 
         if (includeStartupAutoRun)
         {

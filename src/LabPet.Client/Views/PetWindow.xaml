@@ -84,6 +84,7 @@
                     <MultiDataTrigger.Conditions>
                         <Condition Binding="{Binding IsMusicActive}" Value="True" />
                         <Condition Binding="{Binding IsFollowingMusic}" Value="False" />
+                        <Condition Binding="{Binding CanFollowMusic}" Value="True" />
                     </MultiDataTrigger.Conditions>
                     <Setter Property="Background" Value="#FFECFDF5" />
                     <Setter Property="BorderBrush" Value="#FF6EE7B7" />
@@ -93,6 +94,7 @@
                     <MultiDataTrigger.Conditions>
                         <Condition Binding="{Binding IsMusicActive}" Value="True" />
                         <Condition Binding="{Binding IsFollowingMusic}" Value="False" />
+                        <Condition Binding="{Binding CanFollowMusic}" Value="True" />
                         <Condition Binding="{Binding IsMouseOver, RelativeSource={RelativeSource Self}}" Value="True" />
                     </MultiDataTrigger.Conditions>
                     <Setter Property="Background" Value="#FFD1FAE5" />
@@ -406,6 +408,62 @@
                                 Padding="7,2"
                                 FontSize="10.5"
                                 Height="20" />
+                        <!-- 열기 버튼 왼쪽 뽀모도로 원형 진행 인디케이터 (클릭 시 뽀모도로 창 열기 + 최초 1회 빨간 점) -->
+                        <Button x:Name="PomodoroOverlayIndicatorButton"
+                                DockPanel.Dock="Right"
+                                Command="{Binding OpenPomodoroCommand}"
+                                ToolTip="{Binding PomodoroOverlayTooltip}"
+                                AutomationProperties.Name="뽀모도로 타이머"
+                                Width="22"
+                                Height="22"
+                                Padding="0"
+                                Margin="0,0,6,0"
+                                Cursor="Hand"
+                                Focusable="False"
+                                VerticalAlignment="Center">
+                            <Button.Template>
+                                <ControlTemplate TargetType="Button">
+                                    <Grid x:Name="Root" Background="Transparent" Width="22" Height="22">
+                                        <Border x:Name="HoverBg"
+                                                CornerRadius="11"
+                                                Background="Transparent" />
+                                        <Canvas Width="20" Height="20" HorizontalAlignment="Center" VerticalAlignment="Center" IsHitTestVisible="False">
+                                            <Ellipse Width="15.6"
+                                                     Height="15.6"
+                                                     Canvas.Left="2.2"
+                                                     Canvas.Top="2.2"
+                                                     Stroke="#FFE5EAF2"
+                                                     StrokeThickness="2.6" />
+                                            <Path x:Name="PomodoroOverlayArcPath"
+                                                  Data="{Binding PomodoroOverlayArcGeometry}"
+                                                  Stroke="{Binding PomodoroOverlayArcBrush}"
+                                                  StrokeThickness="2.6"
+                                                  StrokeStartLineCap="Round"
+                                                  StrokeEndLineCap="Round" />
+                                        </Canvas>
+                                        <Ellipse x:Name="PomodoroOverlayRedDot"
+                                                 Width="6"
+                                                 Height="6"
+                                                 Fill="#FFEF4444"
+                                                 Stroke="White"
+                                                 StrokeThickness="1"
+                                                 HorizontalAlignment="Right"
+                                                 VerticalAlignment="Top"
+                                                 Margin="0,0,0,0"
+                                                 IsHitTestVisible="False"
+                                                 Visibility="{Binding ShowPomodoroFeatureBadge, Converter={StaticResource BoolToVis}}" />
+                                    </Grid>
+                                    <ControlTemplate.Triggers>
+                                        <Trigger Property="IsMouseOver" Value="True">
+                                            <Setter TargetName="HoverBg" Property="Background" Value="#FFFFEEF4" />
+                                        </Trigger>
+                                        <Trigger Property="IsPressed" Value="True">
+                                            <Setter TargetName="Root" Property="Opacity" Value="0.82" />
+                                        </Trigger>
+                                    </ControlTemplate.Triggers>
+                                </ControlTemplate>
+                            </Button.Template>
+                        </Button>
                     </DockPanel>
 
                     <!-- 온라인 친구 목록은 고정 높이를 넘으면 스크롤한다. -->
@@ -432,7 +490,7 @@
                                                     <ColumnDefinition Width="*" />
                                                 </Grid.ColumnDefinitions>
 
-                                                <!-- 깨어 있으면 상태 점, 수면 중이면 zzz를 표시한다. -->
+                                                <!-- 표시 우선순위: 1) 집중 중(✏️) > 2) 수면(zzz) > 3) 온라인 상태 점 -->
                                                 <Grid Grid.Column="0"
                                                       Width="{x:Static views:MiniSleepZzzIndicator.SlotWidth}"
                                                       Height="{x:Static views:MiniSleepZzzIndicator.SlotHeight}"
@@ -441,23 +499,18 @@
                                                       Background="Transparent"
                                                       ToolTip="{Binding StatusTooltip}"
                                                       AutomationProperties.Name="{Binding StatusTooltip}">
+                                                    <TextBlock Text="✏️"
+                                                               FontSize="11"
+                                                               HorizontalAlignment="Center"
+                                                               VerticalAlignment="Center"
+                                                               Visibility="{Binding ShowsFocusIndicator, Converter={StaticResource BoolToVis}}" />
                                                     <Ellipse Width="6"
                                                              Height="6"
                                                              Fill="{Binding StatusDotBrush}"
                                                              HorizontalAlignment="Center"
-                                                             VerticalAlignment="Center">
-                                                        <Ellipse.Style>
-                                                            <Style TargetType="Ellipse">
-                                                                <Setter Property="Visibility" Value="Visible" />
-                                                                <Style.Triggers>
-                                                                    <DataTrigger Binding="{Binding IsSleeping}" Value="True">
-                                                                        <Setter Property="Visibility" Value="Collapsed" />
-                                                                    </DataTrigger>
-                                                                </Style.Triggers>
-                                                            </Style>
-                                                        </Ellipse.Style>
-                                                    </Ellipse>
-                                                    <views:MiniSleepZzzIndicator Visibility="{Binding IsSleeping, Converter={StaticResource BoolToVis}}"
+                                                             VerticalAlignment="Center"
+                                                             Visibility="{Binding ShowsOnlineDot, Converter={StaticResource BoolToVis}}" />
+                                                    <views:MiniSleepZzzIndicator Visibility="{Binding ShowsSleepIndicator, Converter={StaticResource BoolToVis}}"
                                                                                  HorizontalAlignment="Center"
                                                                                  VerticalAlignment="Center" />
                                                 </Grid>
@@ -477,13 +530,17 @@
                                                         Orientation="Horizontal"
                                                         VerticalAlignment="Center">
                                                 <Button Content="💬"
-                                                        ToolTip="빠른 메시지"
+                                                        ToolTip="{Binding MessageTooltip}"
+                                                        ToolTipService.ShowOnDisabled="True"
+                                                        IsEnabled="{Binding CanInteract}"
                                                         Style="{StaticResource MiniActionIconButton}"
                                                         Command="{Binding DataContext.OpenQuickMessageCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
                                                         CommandParameter="{Binding}"
                                                         Margin="0,0,3,0" />
                                                 <Button Content="👋"
-                                                        ToolTip="인사하기"
+                                                        ToolTip="{Binding PetTooltip}"
+                                                        ToolTipService.ShowOnDisabled="True"
+                                                        IsEnabled="{Binding CanInteract}"
                                                         Style="{StaticResource MiniActionIconButton}"
                                                         Command="{Binding DataContext.QuickPetFriendCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
                                                         CommandParameter="{Binding}"
@@ -497,13 +554,16 @@
                                                         Margin="0,0,3,0" />
                                                 <Button Content="{Binding MusicButtonIcon}"
                                                         ToolTip="{Binding MusicTooltip}"
+                                                        ToolTipService.ShowOnDisabled="True"
                                                         Style="{StaticResource MusicFollowMiniButton}"
                                                         IsEnabled="{Binding CanFollowMusic}"
                                                         Command="{Binding DataContext.QuickToggleMusicFollowCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
                                                         CommandParameter="{Binding}"
                                                         Margin="0,0,3,0" />
                                                 <Button Content="🏠"
-                                                        ToolTip="내 바탕화면에 데려오기 / 돌려보내기"
+                                                        ToolTip="{Binding VisitTooltip}"
+                                                        ToolTipService.ShowOnDisabled="True"
+                                                        IsEnabled="{Binding CanToggleVisit}"
                                                         Style="{StaticResource MiniActionIconButton}"
                                                         Command="{Binding DataContext.QuickToggleVisitFriendCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
                                                         CommandParameter="{Binding}" />

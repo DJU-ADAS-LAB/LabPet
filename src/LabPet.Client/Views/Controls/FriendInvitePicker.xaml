@@ -129,6 +129,8 @@
                         <Button Command="{Binding DataContext.ToggleCandidateCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"
                                 CommandParameter="{Binding}"
                                 IsEnabled="{Binding DataContext.CanInteract, RelativeSource={RelativeSource AncestorType=UserControl}}"
+                                ToolTip="{Binding CardTooltip}"
+                                ToolTipService.ShowOnDisabled="True"
                                 Cursor="Hand"
                                 Margin="0,0,8,8"
                                 FocusVisualStyle="{x:Null}">
@@ -241,6 +243,9 @@
                                             <Setter TargetName="CardBorder" Property="Background" Value="#FFF8FAFD" />
                                             <Setter TargetName="CardBorder" Property="BorderBrush" Value="#FFB8C2D6" />
                                         </MultiDataTrigger>
+                                        <DataTrigger Binding="{Binding IsFocusing}" Value="True">
+                                            <Setter TargetName="CardBorder" Property="Opacity" Value="0.58" />
+                                        </DataTrigger>
                                         <Trigger Property="IsEnabled" Value="False">
                                             <Setter TargetName="CardBorder" Property="Opacity" Value="0.65" />
                                         </Trigger>

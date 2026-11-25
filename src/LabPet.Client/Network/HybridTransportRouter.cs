@@ -254,11 +254,17 @@ public sealed class HybridTransportRouter : ISocialTransport
         return lanResult;
     }
 
-    public Task<bool> SendBubbleMessageAsync(FriendEntry friend, string message, CancellationToken cancellationToken = default)
-        => SendRoutedAsync(friend, t => t.SendBubbleMessageAsync(friend, message, cancellationToken));
+    public async Task<bool> SendBubbleMessageAsync(FriendEntry friend, string message, CancellationToken cancellationToken = default)
+        => (await SendBubbleMessageDetailedAsync(friend, message, cancellationToken).ConfigureAwait(false)).Succeeded;
 
-    public Task<bool> SendQuickReactionAsync(FriendEntry friend, string reactionId, CancellationToken cancellationToken = default)
-        => SendRoutedAsync(friend, t => t.SendQuickReactionAsync(friend, reactionId, cancellationToken));
+    public Task<TransportSendResult> SendBubbleMessageDetailedAsync(FriendEntry friend, string message, CancellationToken cancellationToken = default)
+        => SendRoutedDetailedAsync(friend, t => t.SendBubbleMessageDetailedAsync(friend, message, cancellationToken));
+
+    public async Task<bool> SendQuickReactionAsync(FriendEntry friend, string reactionId, CancellationToken cancellationToken = default)
+        => (await SendQuickReactionDetailedAsync(friend, reactionId, cancellationToken).ConfigureAwait(false)).Succeeded;
+
+    public Task<TransportSendResult> SendQuickReactionDetailedAsync(FriendEntry friend, string reactionId, CancellationToken cancellationToken = default)
+        => SendRoutedDetailedAsync(friend, t => t.SendQuickReactionDetailedAsync(friend, reactionId, cancellationToken));
 
     public SnowballPeerStatus GetSnowballPeerStatus(string petId)
     {
@@ -270,13 +276,19 @@ public sealed class HybridTransportRouter : ISocialTransport
             ? SnowballPeerStatus.Unsupported : SnowballPeerStatus.Offline;
     }
 
-    public Task<bool> SendSnowballAsync(FriendEntry friend, Guid eventId, CancellationToken cancellationToken = default)
-        => SendRoutedAsync(friend, transport => transport.SendSnowballAsync(friend, eventId, cancellationToken));
+    public async Task<bool> SendSnowballAsync(FriendEntry friend, Guid eventId, CancellationToken cancellationToken = default)
+        => (await SendSnowballDetailedAsync(friend, eventId, cancellationToken).ConfigureAwait(false)).Succeeded;
 
-    public Task<bool> SendPetInteractionAsync(FriendEntry friend, string interactionType, CancellationToken cancellationToken = default)
+    public Task<TransportSendResult> SendSnowballDetailedAsync(FriendEntry friend, Guid eventId, CancellationToken cancellationToken = default)
+        => SendRoutedDetailedAsync(friend, transport => transport.SendSnowballDetailedAsync(friend, eventId, cancellationToken));
+
+    public async Task<bool> SendPetInteractionAsync(FriendEntry friend, string interactionType, CancellationToken cancellationToken = default)
+        => (await SendPetInteractionDetailedAsync(friend, interactionType, cancellationToken).ConfigureAwait(false)).Succeeded;
+
+    public Task<TransportSendResult> SendPetInteractionDetailedAsync(FriendEntry friend, string interactionType, CancellationToken cancellationToken = default)
         => interactionType == PetInteractionPayload.PetType && TryAcceptPetInteraction(_petSentAt, friend.PetId)
-            ? SendRoutedAsync(friend, t => t.SendPetInteractionAsync(friend, interactionType, cancellationToken))
-            : Task.FromResult(false);
+            ? SendRoutedDetailedAsync(friend, t => t.SendPetInteractionDetailedAsync(friend, interactionType, cancellationToken))
+            : Task.FromResult(TransportSendResult.Fail());
 
     [System.Reflection.Obfuscation(Exclude = false)]
     private static bool TryAcceptPetInteraction(ConcurrentDictionary<string, long> timestamps, string petId)
@@ -297,47 +309,80 @@ public sealed class HybridTransportRouter : ISocialTransport
         }
     }
 
-    public Task<bool> SendGameEventAsync(FriendEntry friend, GameEventPayload payload, CancellationToken cancellationToken = default)
-        => SendRoutedAsync(friend, t => t.SendGameEventAsync(friend, payload, cancellationToken));
+    public async Task<bool> SendGameEventAsync(FriendEntry friend, GameEventPayload payload, CancellationToken cancellationToken = default)
+        => (await SendGameEventDetailedAsync(friend, payload, cancellationToken).ConfigureAwait(false)).Succeeded;
+
+    public Task<TransportSendResult> SendGameEventDetailedAsync(FriendEntry friend, GameEventPayload payload, CancellationToken cancellationToken = default)
+        => SendRoutedDetailedAsync(friend, t => t.SendGameEventDetailedAsync(friend, payload, cancellationToken));
 
     public async Task<bool> SetMusicFollowAsync(FriendEntry hostFriend, bool enable, CancellationToken cancellationToken = default)
+        => (await SetMusicFollowDetailedAsync(hostFriend, enable, cancellationToken).ConfigureAwait(false)).Succeeded;
+
+    public async Task<TransportSendResult> SetMusicFollowDetailedAsync(FriendEntry hostFriend, bool enable, CancellationToken cancellationToken = default)
     {
         if (!enable)
         {
             if (_musicFollowRoutes.TryRemove(hostFriend.PetId, out var activeRoute))
             {
                 return activeRoute == RouteKind.Lan
-                    ? await _lan.SetMusicFollowAsync(hostFriend, false, cancellationToken).ConfigureAwait(false)
-                    : await _gcp.SetMusicFollowAsync(hostFriend, false, cancellationToken).ConfigureAwait(false);
+                    ? await _lan.SetMusicFollowDetailedAsync(hostFriend, false, cancellationToken).ConfigureAwait(false)
+                    : await _gcp.SetMusicFollowDetailedAsync(hostFriend, false, cancellationToken).ConfigureAwait(false);
             }
 
-            var lanOff = await _lan.SetMusicFollowAsync(hostFriend, false, cancellationToken).ConfigureAwait(false);
-            var gcpOff = _gcp.IsRemoteConnected && await _gcp.SetMusicFollowAsync(hostFriend, false, cancellationToken).ConfigureAwait(false);
-            return lanOff || gcpOff;
+            var lanOff = await _lan.SetMusicFollowDetailedAsync(hostFriend, false, cancellationToken).ConfigureAwait(false);
+            if (lanOff.Succeeded)
+            {
+                return lanOff;
+            }
+
+            return _gcp.IsRemoteConnected
+                ? await _gcp.SetMusicFollowDetailedAsync(hostFriend, false, cancellationToken).ConfigureAwait(false)
+                : lanOff;
         }
 
         if (IsLanPeerOnline(hostFriend.PetId))
         {
-            if (await _lan.SetMusicFollowAsync(hostFriend, true, cancellationToken).ConfigureAwait(false))
+            var lanResult = await _lan.SetMusicFollowDetailedAsync(hostFriend, true, cancellationToken).ConfigureAwait(false);
+            if (lanResult.Succeeded)
             {
                 _musicFollowRoutes[hostFriend.PetId] = RouteKind.Lan;
-                return true;
+                return lanResult;
+            }
+
+            if (lanResult.IsPomodoroFocusBlocked)
+            {
+                return lanResult;
             }
         }
 
-        if (_gcp.IsRemoteConnected && await _gcp.SetMusicFollowAsync(hostFriend, true, cancellationToken).ConfigureAwait(false))
+        if (_gcp.IsRemoteConnected)
         {
-            _musicFollowRoutes[hostFriend.PetId] = RouteKind.Gcp;
-            return true;
+            var gcpResult = await _gcp.SetMusicFollowDetailedAsync(hostFriend, true, cancellationToken).ConfigureAwait(false);
+            if (gcpResult.Succeeded)
+            {
+                _musicFollowRoutes[hostFriend.PetId] = RouteKind.Gcp;
+                return gcpResult;
+            }
+
+            if (gcpResult.IsPomodoroFocusBlocked)
+            {
+                return gcpResult;
+            }
         }
 
-        if (!IsLanPeerOnline(hostFriend.PetId) && await _lan.SetMusicFollowAsync(hostFriend, true, cancellationToken).ConfigureAwait(false))
+        if (!IsLanPeerOnline(hostFriend.PetId))
         {
-            _musicFollowRoutes[hostFriend.PetId] = RouteKind.Lan;
-            return true;
+            var fallbackLan = await _lan.SetMusicFollowDetailedAsync(hostFriend, true, cancellationToken).ConfigureAwait(false);
+            if (fallbackLan.Succeeded)
+            {
+                _musicFollowRoutes[hostFriend.PetId] = RouteKind.Lan;
+                return fallbackLan;
+            }
+
+            return fallbackLan;
         }
 
-        return false;
+        return TransportSendResult.Fail();
     }
 
     public async ValueTask PublishMusicFrameAsync(MusicFrameData frame, CancellationToken cancellationToken = default)
@@ -355,13 +400,14 @@ public sealed class HybridTransportRouter : ISocialTransport
         await _gcp.DisposeAsync().ConfigureAwait(false);
     }
 
-    private async Task<bool> SendRoutedAsync(FriendEntry friend, Func<ISocialTransport, Task<bool>> sendFunc)
+    private async Task<TransportSendResult> SendRoutedDetailedAsync(FriendEntry friend, Func<ISocialTransport, Task<TransportSendResult>> sendFunc)
     {
         if (IsLanPeerOnline(friend.PetId))
         {
-            if (await sendFunc(_lan).ConfigureAwait(false))
+            var lanResult = await sendFunc(_lan).ConfigureAwait(false);
+            if (lanResult.Succeeded || lanResult.IsPomodoroFocusBlocked)
             {
-                return true;
+                return lanResult;
             }
 
             if (_gcp.IsRemoteConnected)
@@ -369,14 +415,15 @@ public sealed class HybridTransportRouter : ISocialTransport
                 return await sendFunc(_gcp).ConfigureAwait(false);
             }
 
-            return false;
+            return lanResult;
         }
 
         if (_gcp.IsRemoteConnected)
         {
-            if (await sendFunc(_gcp).ConfigureAwait(false))
+            var gcpResult = await sendFunc(_gcp).ConfigureAwait(false);
+            if (gcpResult.Succeeded || gcpResult.IsPomodoroFocusBlocked)
             {
-                return true;
+                return gcpResult;
             }
         }
 

@@ -4,6 +4,7 @@ using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using LabPet.Client.Social;
 using LabPet.Shared.Models;
+using LabPet.Shared.Transport;
 
 namespace LabPet.Client.ViewModels;
 
@@ -35,8 +36,11 @@ public sealed partial class FriendInviteCandidateCard : ObservableObject
     public bool IsOnline { get; }
     public bool IsSleeping { get; }
     public bool IsMusicActive { get; }
+    public bool IsFocusing { get; }
+    public bool CanSelect => IsOnline && !IsFocusing;
+    public string? CardTooltip => IsFocusing ? FriendOperationErrorCodes.PomodoroFocusMessage : null;
     public string StatusText { get; }
-    public string StatusDotHex => !IsOnline ? "#FF9CA3AF" : IsSleeping ? "#FF6366F1" : "#FF16A34A";
+    public string StatusDotHex => !IsOnline ? "#FF9CA3AF" : IsFocusing ? "#FFF59E0B" : IsSleeping ? "#FF6366F1" : "#FF16A34A";
     public ImageSource? Portrait { get; }
 
     [ObservableProperty] private bool _isSelected;
@@ -53,16 +57,19 @@ public sealed partial class FriendInviteCandidateCard : ObservableObject
         IsOnline = isOnline;
         IsSleeping = livePeer?.IsSleeping ?? false;
         IsMusicActive = livePeer?.IsMusicActive ?? false;
+        IsFocusing = livePeer?.IsFocusing ?? false;
         StatusText = !isOnline
             ? "오프라인"
-            : (IsSleeping, IsMusicActive) switch
-            {
-                (true, true) => "온라인 · zzz · 🎵",
-                (true, false) => "온라인 · zzz",
-                (false, true) => "온라인 · 🎵",
-                (false, false) => "온라인"
-            };
-        _isSelected = isSelected;
+            : IsFocusing
+                ? "✏️ 집중 중"
+                : (IsSleeping, IsMusicActive) switch
+                {
+                    (true, true) => "온라인 · zzz · 🎵",
+                    (true, false) => "온라인 · zzz",
+                    (false, true) => "온라인 · 🎵",
+                    (false, false) => "온라인"
+                };
+        _isSelected = isSelected && CanSelect;
     }
 }
 
@@ -139,7 +146,9 @@ public sealed partial class FriendInvitePickerViewModel : ObservableObject
             .Where(c => c.Entry is not null && !string.IsNullOrWhiteSpace(c.Entry.PetId))
             .ToList();
 
-        var availableIds = new HashSet<string>(inputs.Select(c => c.Entry.PetId), StringComparer.OrdinalIgnoreCase);
+        var availableIds = new HashSet<string>(
+            inputs.Where(c => c.IsOnline && c.LivePeer?.IsFocusing != true).Select(c => c.Entry.PetId),
+            StringComparer.OrdinalIgnoreCase);
         var selectionRemoved = _selectedPetIds.RemoveWhere(id => !availableIds.Contains(id)) > 0;
 
         _allCards.Clear();
@@ -253,7 +262,7 @@ public sealed partial class FriendInvitePickerViewModel : ObservableObject
     [RelayCommand]
     private void ToggleCandidate(FriendInviteCandidateCard? card)
     {
-        if (card is null || IsSelectionLocked)
+        if (card is null || IsSelectionLocked || !card.CanSelect)
         {
             return;
         }
@@ -302,6 +311,11 @@ public sealed partial class FriendInvitePickerViewModel : ObservableObject
         var changed = false;
         foreach (var card in FilteredCandidates)
         {
+            if (!card.CanSelect)
+            {
+                continue;
+            }
+
             if (_selectedPetIds.Count >= MaxSelectable)
             {
                 break;

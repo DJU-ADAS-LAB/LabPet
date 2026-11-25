@@ -114,19 +114,7 @@
                             Value="{Binding PetOpacity}"
                             TickFrequency="0.05"
                             IsSnapToTickEnabled="True"
-                            Margin="0,2,0,14" />
-
-                    <Border Height="1" Background="{StaticResource HubHairlineBrush}" Margin="0,0,0,14" />
-
-                    <CheckBox Style="{StaticResource HubToggleSwitchStyle}"
-                              IsChecked="{Binding IsClickThroughEnabled}">
-                        <StackPanel>
-                            <TextBlock Text="클릭 투과 집중 모드" FontSize="13.5" FontWeight="SemiBold" Foreground="{StaticResource HubTextPrimaryBrush}" />
-                            <TextBlock Text="켜면 펫 위를 클릭해도 아래 창으로 통과합니다. 해제하려면 트레이 메뉴나 이 스위치를 사용하세요."
-                                       Style="{StaticResource HubCaptionTextStyle}"
-                                       Margin="0,2,0,0" />
-                        </StackPanel>
-                    </CheckBox>
+                            Margin="0,2,0,4" />
                 </StackPanel>
             </Border>
 

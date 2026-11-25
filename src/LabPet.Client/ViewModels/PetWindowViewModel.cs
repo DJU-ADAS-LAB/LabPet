@@ -4,6 +4,7 @@ using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using LabPet.Client.Navigation;
 using LabPet.Client.Social;
+using LabPet.Client.Solo;
 using LabPet.Client.Storage;
 using LabPet.Client.Views;
 using LabPet.Shared.Models;
@@ -22,14 +23,62 @@ public sealed partial class QuickOverlayEntry : ObservableObject
     [ObservableProperty] private string _displayTitle = string.Empty;
     [ObservableProperty, NotifyPropertyChangedFor(nameof(CanFollowMusic), nameof(MusicTooltip), nameof(MusicButtonIcon))]
     private bool _isMusicActive;
-    [ObservableProperty, NotifyPropertyChangedFor(nameof(StatusTooltip))]
+    [ObservableProperty, NotifyPropertyChangedFor(nameof(ShowsFocusIndicator), nameof(ShowsSleepIndicator), nameof(ShowsOnlineDot), nameof(StatusTooltip))]
     private bool _isSleeping;
+    [ObservableProperty, NotifyPropertyChangedFor(
+        nameof(ShowsFocusIndicator),
+        nameof(ShowsSleepIndicator),
+        nameof(ShowsOnlineDot),
+        nameof(StatusTooltip),
+        nameof(IsInteractionBlocked),
+        nameof(CanInteract),
+        nameof(CanFollowMusic),
+        nameof(CanToggleVisit),
+        nameof(MessageTooltip),
+        nameof(PetTooltip),
+        nameof(MusicTooltip),
+        nameof(VisitTooltip))]
+    private bool _isFocusing;
+    [ObservableProperty, NotifyPropertyChangedFor(
+        nameof(IsInteractionBlocked),
+        nameof(CanInteract),
+        nameof(CanFollowMusic),
+        nameof(CanToggleVisit),
+        nameof(MessageTooltip),
+        nameof(PetTooltip),
+        nameof(MusicTooltip),
+        nameof(VisitTooltip))]
+    private bool _isLocalFocusing;
     [ObservableProperty, NotifyPropertyChangedFor(nameof(CanFollowMusic), nameof(MusicTooltip), nameof(MusicButtonIcon))]
     private bool _isFollowingMusic;
+    [ObservableProperty, NotifyPropertyChangedFor(nameof(CanToggleVisit), nameof(VisitTooltip))]
+    private bool _isVisitingDesktop;
     [ObservableProperty] private bool _isComposingMessage;
-    public bool CanFollowMusic => IsFollowingMusic || IsMusicActive;
+
+    // 상태 표시 우선순위: 1) 집중 중(✏️) > 2) 수면(zzz) > 3) 온라인 점
+    public bool ShowsFocusIndicator => IsFocusing;
+    public bool ShowsSleepIndicator => !IsFocusing && IsSleeping;
+    public bool ShowsOnlineDot => !IsFocusing && !IsSleeping;
+
+    public bool IsInteractionBlocked => IsFocusing || IsLocalFocusing;
+    public bool CanInteract => !IsInteractionBlocked;
+    public bool CanFollowMusic => IsFollowingMusic || (!IsInteractionBlocked && IsMusicActive);
+    public bool CanToggleVisit => IsVisitingDesktop || !IsInteractionBlocked;
     public Brush StatusDotBrush => OnlineDotBrush;
-    public string StatusTooltip => IsSleeping ? "자는 중" : "온라인";
+    public string StatusTooltip => IsFocusing
+        ? FriendOperationErrorCodes.PomodoroFocusMessage
+        : IsSleeping ? "자는 중" : "온라인";
+    public string MessageTooltip => IsInteractionBlocked
+        ? FriendOperationErrorCodes.PomodoroFocusMessage
+        : "빠른 메시지";
+    public string PetTooltip => IsInteractionBlocked
+        ? FriendOperationErrorCodes.PomodoroFocusMessage
+        : "인사하기";
+    public string VisitTooltip => IsVisitingDesktop
+        ? "바탕화면에서 돌려보내기"
+        : IsInteractionBlocked
+            ? FriendOperationErrorCodes.PomodoroFocusMessage
+            : "내 바탕화면에 데려오기 / 돌려보내기";
     public FriendEntry? Friend { get; set; }
     public SnowballAction? Snowball { get; init; }
     public PeerSnapshot? Peer { get; set; }
@@ -38,7 +87,9 @@ public sealed partial class QuickOverlayEntry : ObservableObject
 
     public string MusicTooltip => IsFollowingMusic
         ? "노래 따라하기 중지"
-        : IsMusicActive ? "노래 따라하기 시작" : "음악 재생 중이 아님";
+        : IsInteractionBlocked
+            ? FriendOperationErrorCodes.PomodoroFocusMessage
+            : IsMusicActive ? "노래 따라하기 시작" : "음악 재생 중이 아님";
 
     private static Brush CreateFrozenBrush(string hex)
     {
@@ -67,8 +118,14 @@ public sealed class FriendMessageBubble(string text, string senderName, ImageSou
 /// </summary>
 public sealed partial class PetWindowViewModel : ObservableObject, IAsyncDisposable
 {
+    private static readonly Brush PomodoroOverlayFocusBrush = CreateFrozenBrush("#FFFF5D8F");
+    private static readonly Brush PomodoroOverlayBreakBrush = CreateFrozenBrush("#FF10B981");
+    private const double PomodoroOverlayCenter = 10.0;
+    private const double PomodoroOverlayRadius = 7.8;
+
     private readonly IAppDataStore _store;
     private readonly SocialCoordinatorService _social;
+    private readonly PomodoroTimerService? _pomodoro;
     private readonly BubbleMessageStack _bubbleStack = new(MaxBubbleLines);
 
     public event EventHandler<NavigationRequest>? HubNavigationRequested;
@@ -77,7 +134,8 @@ public sealed partial class PetWindowViewModel : ObservableObject, IAsyncDisposa
     public event EventHandler<bool>? StartupAutoRunToggled;
     public event EventHandler? ResetPositionRequested;
     public event EventHandler? ExitRequested;
-    public event EventHandler<bool>? ClickThroughChanged;
+    // 클릭 투과 집중 모드 UI 제거에 따라 관련 이벤트 주석 처리
+    // public event EventHandler<bool>? ClickThroughChanged;
     public event EventHandler<PetProfile>? ProfileUpdated;
     public event EventHandler<PetProfile>? ProfileProgressUpdated;
     public event EventHandler<double>? PetScaleChanged;
@@ -99,8 +157,15 @@ public sealed partial class PetWindowViewModel : ObservableObject, IAsyncDisposa
 
     [ObservableProperty] private string _petName = "모찌";
     [ObservableProperty] private bool _isSleeping;
-    [ObservableProperty] private bool _isClickThroughEnabled;
+    // 클릭 투과 집중 모드 UI 제거에 따라 관련 상태 주석 처리
+    // [ObservableProperty] private bool _isClickThroughEnabled;
     [ObservableProperty] private bool _isStartupAutoRunEnabled;
+    [ObservableProperty] private bool _showPomodoroFeatureBadge = true;
+    [ObservableProperty] private double _pomodoroOverlayProgressRatio = 25.0 / PomodoroTimerService.MaximumFocusMinutes;
+    [ObservableProperty] private Geometry _pomodoroOverlayArcGeometry = PomodoroCircularDialMath.BuildArcGeometry(
+        PomodoroOverlayCenter, PomodoroOverlayCenter, PomodoroOverlayRadius, 25.0 / PomodoroTimerService.MaximumFocusMinutes);
+    [ObservableProperty] private Brush _pomodoroOverlayArcBrush = PomodoroOverlayFocusBrush;
+    [ObservableProperty] private string _pomodoroOverlayTooltip = "뽀모도로 타이머 열기 (설정 25분)";
     [ObservableProperty] private bool _isUpdateReady;
     [ObservableProperty, NotifyPropertyChangedFor(nameof(HasAnyBubble))]
     private bool _isUpdateBubbleVisible;
@@ -183,13 +248,79 @@ public sealed partial class PetWindowViewModel : ObservableObject, IAsyncDisposa
 
     private readonly SnowballInteractionService? _snowballs;
 
-    public PetWindowViewModel(IAppDataStore store, SocialCoordinatorService social, SnowballInteractionService? snowballs = null)
+    public PetWindowViewModel(
+        IAppDataStore store,
+        SocialCoordinatorService social,
+        SnowballInteractionService? snowballs = null,
+        PomodoroTimerService? pomodoro = null)
     {
         _store = store;
         _snowballs = snowballs;
+        _pomodoro = pomodoro;
         _shutdownProfileSaves = new Lazy<Task>(ShutdownProfileSavesAsync);
         _social = social;
         _bubbleStack.Changed += (_, _) => IsBubbleVisible = _bubbleStack.HasItems;
+        if (_pomodoro is not null)
+        {
+            _pomodoro.Tick += OnPomodoroTick;
+            _pomodoro.FocusStateChanged += OnPomodoroFocusStateChanged;
+            RefreshPomodoroOverlayState();
+        }
+    }
+
+    private void OnPomodoroTick(object? sender, EventArgs e) => RefreshPomodoroOverlayState();
+    private void OnPomodoroFocusStateChanged(object? sender, bool isFocusing) => RefreshPomodoroOverlayState();
+
+    public void RefreshPomodoroOverlayState()
+    {
+        if (_pomodoro is null)
+        {
+            return;
+        }
+
+        var ratio = PomodoroCircularDialMath.ComputeDisplayProgressRatio(_pomodoro);
+        PomodoroOverlayProgressRatio = ratio;
+        PomodoroOverlayArcBrush = _pomodoro.CurrentPhase == PomodoroPhase.Break
+            ? PomodoroOverlayBreakBrush
+            : PomodoroOverlayFocusBrush;
+        PomodoroOverlayArcGeometry = PomodoroCircularDialMath.BuildArcGeometry(
+            PomodoroOverlayCenter, PomodoroOverlayCenter, PomodoroOverlayRadius, ratio);
+
+        var rem = _pomodoro.Remaining;
+        var timeText = $"{(int)rem.TotalMinutes:00}:{rem.Seconds:00}";
+        PomodoroOverlayTooltip = !_pomodoro.IsDurationLocked
+            ? $"뽀모도로 타이머 열기 (설정 {_pomodoro.FocusMinutes}분)"
+            : _pomodoro.CurrentPhase == PomodoroPhase.Focus
+                ? (_pomodoro.IsRunning
+                    ? $"뽀모도로 집중 중 · {timeText} 남음 (클릭하여 열기)"
+                    : $"뽀모도로 일시정지 · {timeText} 남음 (클릭하여 열기)")
+                : (_pomodoro.IsRunning
+                    ? $"뽀모도로 휴식 중 · {timeText} 남음 (클릭하여 열기)"
+                    : $"뽀모도로 휴식 대기 · {timeText} (클릭하여 열기)");
+    }
+
+    public void MarkPomodoroFeatureBadgeSeen()
+    {
+        if (CurrentProfile.HasSeenPomodoroFeatureBadge)
+        {
+            if (ShowPomodoroFeatureBadge)
+            {
+                ShowPomodoroFeatureBadge = false;
+            }
+
+            return;
+        }
+
+        CurrentProfile.HasSeenPomodoroFeatureBadge = true;
+        ShowPomodoroFeatureBadge = false;
+        _ = SaveProfileTrackedAsync();
+    }
+
+    private static Brush CreateFrozenBrush(string hex)
+    {
+        var brush = new SolidColorBrush((Color)ColorConverter.ConvertFromString(hex));
+        brush.Freeze();
+        return brush;
     }
 
     public void ApplyProfile(PetProfile profile)
@@ -209,8 +340,9 @@ public sealed partial class PetWindowViewModel : ObservableObject, IAsyncDisposa
             _suppressSliderSideEffects = false;
         }
 
-        var label = SocialCoordinatorService.FormatDisplayName(profile.OwnerName, profile.PetName);
-        TrayTooltip = $"{label} · Lv.{profile.SoloProgress.Level}";
+        TrayTooltip = $"{profile.PetName} · Lv.{profile.SoloProgress.Level}";
+        ShowPomodoroFeatureBadge = !profile.HasSeenPomodoroFeatureBadge;
+        RefreshPomodoroOverlayState();
         ProfileUpdated?.Invoke(this, profile);
         PetScaleChanged?.Invoke(this, PetScale);
         PetOpacityChanged?.Invoke(this, PetOpacity);
@@ -282,6 +414,12 @@ public sealed partial class PetWindowViewModel : ObservableObject, IAsyncDisposa
 
     private async Task ShutdownProfileSavesAsync()
     {
+        if (_pomodoro is not null)
+        {
+            _pomodoro.Tick -= OnPomodoroTick;
+            _pomodoro.FocusStateChanged -= OnPomodoroFocusStateChanged;
+        }
+
         Task drain;
         PetProfile? unsavedProfile;
         lock (_appearanceSaveLock)
@@ -314,6 +452,7 @@ public sealed partial class PetWindowViewModel : ObservableObject, IAsyncDisposa
         var peers = _social.DiscoveredPeers;
         var friends = _social.Friends;
         var followingId = _social.FollowingHostPetId;
+        var isLocalFocusing = _social.IsLocalFocusing;
 
         var items = new List<QuickOverlayEntry>();
 
@@ -333,7 +472,10 @@ public sealed partial class PetWindowViewModel : ObservableObject, IAsyncDisposa
                     string.IsNullOrWhiteSpace(live.PetName) ? f.PetName : live.PetName),
                 IsMusicActive = live.IsMusicActive,
                 IsSleeping = live.IsSleeping,
+                IsFocusing = live.IsFocusing,
+                IsLocalFocusing = isLocalFocusing,
                 IsFollowingMusic = string.Equals(followingId, f.PetId, StringComparison.OrdinalIgnoreCase),
+                IsVisitingDesktop = IsVisitorActive(f.PetId),
                 Friend = f,
                 Snowball = _snowballs?.ForFriend(f),
                 Peer = live
@@ -354,7 +496,10 @@ public sealed partial class PetWindowViewModel : ObservableObject, IAsyncDisposa
             existing.DisplayTitle = item.DisplayTitle;
             existing.IsMusicActive = item.IsMusicActive;
             existing.IsSleeping = item.IsSleeping;
+            existing.IsFocusing = item.IsFocusing;
+            existing.IsLocalFocusing = item.IsLocalFocusing;
             existing.IsFollowingMusic = item.IsFollowingMusic;
+            existing.IsVisitingDesktop = item.IsVisitingDesktop;
             existing.Friend = item.Friend;
             existing.Peer = item.Peer;
             var oldIndex = QuickOverlayEntries.IndexOf(existing);
@@ -369,8 +514,9 @@ public sealed partial class PetWindowViewModel : ObservableObject, IAsyncDisposa
             QuickOverlayEntries.RemoveAt(QuickOverlayEntries.Count - 1);
         }
 
-        // 연결이 끊기거나 목록에서 사라진 친구는 빠른 메시지 입력을 닫는다.
-        if (QuickMessageTarget is { } target && !QuickOverlayEntries.Contains(target))
+        // 연결이 끊기거나 집중 모드로 차단된 친구는 빠른 메시지 입력을 닫는다.
+        if (QuickMessageTarget is { } target
+            && (!QuickOverlayEntries.Contains(target) || target.IsInteractionBlocked))
         {
             QuickMessageTarget = null;
         }
@@ -401,11 +547,12 @@ public sealed partial class PetWindowViewModel : ObservableObject, IAsyncDisposa
 
     public void DisposeBubbles() => _bubbleStack.Dispose();
 
-    partial void OnIsClickThroughEnabledChanged(bool value)
-    {
-        ClickThroughChanged?.Invoke(this, value);
-        ShowBubble(value ? "클릭 투과 집중 모드 ON (트레이에서 해제)" : "클릭 투과 집중 모드 OFF", 2400);
-    }
+    // 클릭 투과 집중 모드 UI 제거에 따라 관련 핸들러 주석 처리
+    // partial void OnIsClickThroughEnabledChanged(bool value)
+    // {
+    //     ClickThroughChanged?.Invoke(this, value);
+    //     ShowBubble(value ? "클릭 투과 집중 모드 ON (트레이에서 해제)" : "클릭 투과 집중 모드 OFF", 2400);
+    // }
 
     partial void OnPendingFriendRequestChanged(PendingFriendRequest? value)
     {
@@ -490,6 +637,13 @@ public sealed partial class PetWindowViewModel : ObservableObject, IAsyncDisposa
             return;
         }
 
+        if (entry.IsInteractionBlocked || _social.IsInteractionBlocked(entry.Friend.PetId))
+        {
+            QuickMessageTarget = null;
+            ShowBubble(FriendOperationErrorCodes.PomodoroFocusMessage, 2400);
+            return;
+        }
+
         QuickMessageTarget = string.Equals(QuickMessageTarget?.PetId, entry.PetId, StringComparison.OrdinalIgnoreCase)
             ? null
             : entry;
@@ -503,6 +657,13 @@ public sealed partial class PetWindowViewModel : ObservableObject, IAsyncDisposa
             return;
         }
 
+        if (_social.IsInteractionBlocked(friend.PetId))
+        {
+            QuickMessageTarget = null;
+            ShowBubble(FriendOperationErrorCodes.PomodoroFocusMessage, 2400);
+            return;
+        }
+
         var trimmed = (QuickMessageText ?? string.Empty).Trim();
         if (trimmed.Length == 0)
         {
@@ -510,8 +671,8 @@ public sealed partial class PetWindowViewModel : ObservableObject, IAsyncDisposa
         }
 
         var revision = _quickMessageDraftRevision;
-        var ok = await _social.SendBubbleMessageAsync(friend, trimmed);
-        if (ok)
+        var result = await _social.SendBubbleMessageDetailedAsync(friend, trimmed);
+        if (result.Succeeded)
         {
             if (revision == _quickMessageDraftRevision)
             {
@@ -520,7 +681,11 @@ public sealed partial class PetWindowViewModel : ObservableObject, IAsyncDisposa
         }
         else
         {
-            ShowBubble("메시지 전송 실패", 2200);
+            ShowBubble(
+                result.IsPomodoroFocusBlocked
+                    ? FriendOperationErrorCodes.PomodoroFocusMessage
+                    : "메시지 전송 실패",
+                2200);
         }
     }
 
@@ -532,7 +697,12 @@ public sealed partial class PetWindowViewModel : ObservableObject, IAsyncDisposa
             return;
         }
 
-        if (await _social.SendPetInteractionAsync(friend) == PetInteractionSendResult.Unavailable)
+        var result = await _social.SendPetInteractionAsync(friend);
+        if (result == PetInteractionSendResult.PomodoroFocusBlocked)
+        {
+            ShowBubble(FriendOperationErrorCodes.PomodoroFocusMessage, 2400);
+        }
+        else if (result == PetInteractionSendResult.Unavailable)
         {
             ShowBubble("인사하기 전송 실패", 2000);
         }
@@ -541,19 +711,34 @@ public sealed partial class PetWindowViewModel : ObservableObject, IAsyncDisposa
     [RelayCommand]
     private async Task QuickToggleMusicFollowAsync(QuickOverlayEntry? entry)
     {
-        if (entry?.Friend is null || !entry.CanFollowMusic)
+        if (entry?.Friend is null)
         {
             return;
         }
 
-        var ok = await _social.ToggleMusicFollowAsync(entry.Friend);
-        if (ok)
+        if (!entry.IsFollowingMusic && (entry.IsInteractionBlocked || _social.IsInteractionBlocked(entry.Friend.PetId)))
+        {
+            ShowBubble(FriendOperationErrorCodes.PomodoroFocusMessage, 2400);
+            return;
+        }
+
+        if (!entry.CanFollowMusic)
+        {
+            return;
+        }
+
+        var result = await _social.ToggleMusicFollowDetailedAsync(entry.Friend);
+        if (result.Succeeded)
         {
             RefreshQuickOverlayEntries();
         }
         else
         {
-            ShowBubble("노래 따라하기 요청 실패", 2000);
+            ShowBubble(
+                result.IsPomodoroFocusBlocked
+                    ? FriendOperationErrorCodes.PomodoroFocusMessage
+                    : "노래 따라하기 요청 실패",
+                2000);
         }
     }
 
@@ -562,6 +747,12 @@ public sealed partial class PetWindowViewModel : ObservableObject, IAsyncDisposa
     {
         if (entry?.Friend is null)
         {
+            return;
+        }
+
+        if (!IsVisitorActive(entry.Friend.PetId) && (entry.IsInteractionBlocked || _social.IsInteractionBlocked(entry.Friend.PetId)))
+        {
+            ShowBubble(FriendOperationErrorCodes.PomodoroFocusMessage, 2400);
             return;
         }
 
@@ -653,7 +844,10 @@ public sealed partial class PetWindowViewModel : ObservableObject, IAsyncDisposa
 
     [RelayCommand]
     private void OpenPomodoro()
-        => HubNavigationRequested?.Invoke(this, new NavigationRequest(HubPage.Pomodoro));
+    {
+        MarkPomodoroFeatureBadgeSeen();
+        HubNavigationRequested?.Invoke(this, new NavigationRequest(HubPage.Pomodoro));
+    }
 
     [RelayCommand]
     private void OpenGames()
@@ -746,13 +940,13 @@ public sealed partial class PetWindowViewModel : ObservableObject, IAsyncDisposa
     public async Task SaveCurrentProfileAsync()
     {
         await SaveProfileTrackedAsync();
-        var label = SocialCoordinatorService.FormatDisplayName(CurrentProfile.OwnerName, CurrentProfile.PetName);
-        TrayTooltip = $"{label} · Lv.{CurrentProfile.SoloProgress.Level}";
+        TrayTooltip = $"{CurrentProfile.PetName} · Lv.{CurrentProfile.SoloProgress.Level}";
         ProfileProgressUpdated?.Invoke(this, CurrentProfile);
     }
 
-    [RelayCommand]
-    private void ToggleClickThrough() => IsClickThroughEnabled = !IsClickThroughEnabled;
+    // 클릭 투과 집중 모드 UI 제거에 따라 관련 커맨드 주석 처리
+    // [RelayCommand]
+    // private void ToggleClickThrough() => IsClickThroughEnabled = !IsClickThroughEnabled;
 
     [RelayCommand]
     private void OpenCustomization()

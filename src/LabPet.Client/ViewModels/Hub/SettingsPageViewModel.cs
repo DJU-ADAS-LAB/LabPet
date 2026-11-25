@@ -36,8 +36,9 @@ public sealed partial class SettingsPageViewModel : ObservableObject, IDisposabl
     [ObservableProperty]
     private double _petOpacity = 1.0;
 
-    [ObservableProperty]
-    private bool _isClickThroughEnabled;
+    // 클릭 투과 집중 모드 UI 제거에 따라 관련 상태 주석 처리
+    // [ObservableProperty]
+    // private bool _isClickThroughEnabled;
 
     [ObservableProperty]
     private string _dataDirectoryPath = string.Empty;
@@ -153,18 +154,19 @@ public sealed partial class SettingsPageViewModel : ObservableObject, IDisposabl
         ApplyLiveDisplayAndScheduleSave();
     }
 
-    partial void OnIsClickThroughEnabledChanged(bool value)
-    {
-        if (_isSyncingFromPet)
-        {
-            return;
-        }
-
-        _petVm.IsClickThroughEnabled = value;
-        GeneralStatusMessage = value
-            ? "클릭 투과 집중 모드가 켜졌습니다. (트레이 또는 이 화면에서 해제 가능)"
-            : "클릭 투과 집중 모드를 해제했습니다.";
-    }
+    // 클릭 투과 집중 모드 UI 제거에 따라 관련 핸들러 주석 처리
+    // partial void OnIsClickThroughEnabledChanged(bool value)
+    // {
+    //     if (_isSyncingFromPet)
+    //     {
+    //         return;
+    //     }
+    //
+    //     _petVm.IsClickThroughEnabled = value;
+    //     GeneralStatusMessage = value
+    //         ? "클릭 투과 집중 모드가 켜졌습니다. (트레이 또는 이 화면에서 해제 가능)"
+    //         : "클릭 투과 집중 모드를 해제했습니다.";
+    // }
 
     [RelayCommand]
     private async Task ApplyScalePresetAsync(string? scaleText)
@@ -271,7 +273,7 @@ public sealed partial class SettingsPageViewModel : ObservableObject, IDisposabl
             IsStartupAutoRunEnabled = _petVm.IsStartupAutoRunEnabled;
             PetScale = PetProfile.NormalizePetScale(_petVm.PetScale);
             PetOpacity = PetDisplayLayoutHelper.NormalizeOpacity(_petVm.PetOpacity);
-            IsClickThroughEnabled = _petVm.IsClickThroughEnabled;
+            // IsClickThroughEnabled = _petVm.IsClickThroughEnabled;
             OnPropertyChanged(nameof(PetScalePercentText));
             OnPropertyChanged(nameof(PetOpacityPercentText));
         }
@@ -285,8 +287,8 @@ public sealed partial class SettingsPageViewModel : ObservableObject, IDisposabl
     {
         if (e.PropertyName is nameof(PetWindowViewModel.IsStartupAutoRunEnabled)
             or nameof(PetWindowViewModel.PetScale)
-            or nameof(PetWindowViewModel.PetOpacity)
-            or nameof(PetWindowViewModel.IsClickThroughEnabled))
+            or nameof(PetWindowViewModel.PetOpacity))
+            // or nameof(PetWindowViewModel.IsClickThroughEnabled))
         {
             SyncFromPetVm();
         }

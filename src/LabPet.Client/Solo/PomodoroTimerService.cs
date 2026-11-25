@@ -35,37 +35,57 @@ public sealed class PomodoroTimerService
     }
 
     private int _activeSessionFocusMinutes = 25;
+    private bool _isFocusSessionActive;
 
     public int LastCompletedFocusMinutes { get; private set; } = 25;
 
     public event EventHandler<int>? FocusCompletedWithDuration;
+    public event EventHandler<bool>? FocusStateChanged;
+
+    public const int MinimumFocusMinutes = 1;
+    public const int MaximumFocusMinutes = 60;
+    public bool IsDurationLocked { get; private set; }
+    public bool IsFocusActive => _isFocusSessionActive;
 
     public void ConfigureDurations(int focusMinutes, int breakMinutes = 5)
     {
-        FocusMinutes = Math.Clamp(focusMinutes, 1, 120);
+        _timer.Dispatcher.VerifyAccess();
+        if (IsRunning || IsDurationLocked) return;
+        FocusMinutes = Math.Clamp(focusMinutes, MinimumFocusMinutes, MaximumFocusMinutes);
         BreakMinutes = Math.Clamp(breakMinutes, 1, 30);
-        if (!IsRunning)
-        {
-            CurrentPhase = PomodoroPhase.Focus;
-            _activeSessionFocusMinutes = FocusMinutes;
-            Remaining = TimeSpan.FromMinutes(FocusMinutes);
-            Tick?.Invoke(this, EventArgs.Empty);
-        }
+        CurrentPhase = PomodoroPhase.Focus;
+        _activeSessionFocusMinutes = FocusMinutes;
+        Remaining = TimeSpan.FromMinutes(FocusMinutes);
+        Tick?.Invoke(this, EventArgs.Empty);
     }
 
     public void StartOrPause()
     {
+        _timer.Dispatcher.VerifyAccess();
+        var wasFocusActive = _isFocusSessionActive;
         if (IsRunning)
         {
             _timer.Stop();
         }
         else
         {
-            if (CurrentPhase == PomodoroPhase.Focus && Remaining >= TimeSpan.FromMinutes(FocusMinutes))
+            if (CurrentPhase == PomodoroPhase.Focus)
             {
-                _activeSessionFocusMinutes = FocusMinutes;
+                if (!IsDurationLocked)
+                {
+                    _activeSessionFocusMinutes = FocusMinutes;
+                }
+
+                _isFocusSessionActive = true;
             }
+
+            IsDurationLocked = true;
             _timer.Start();
+        }
+
+        if (wasFocusActive != _isFocusSessionActive)
+        {
+            FocusStateChanged?.Invoke(this, _isFocusSessionActive);
         }
 
         Tick?.Invoke(this, EventArgs.Empty);
@@ -73,11 +93,27 @@ public sealed class PomodoroTimerService
 
     public void Reset()
     {
+        _timer.Dispatcher.VerifyAccess();
+        var wasFocusActive = _isFocusSessionActive;
         _timer.Stop();
+        IsDurationLocked = false;
+        _isFocusSessionActive = false;
         CurrentPhase = PomodoroPhase.Focus;
         _activeSessionFocusMinutes = FocusMinutes;
         Remaining = TimeSpan.FromMinutes(FocusMinutes);
+        if (wasFocusActive)
+        {
+            FocusStateChanged?.Invoke(this, false);
+        }
+
         Tick?.Invoke(this, EventArgs.Empty);
+    }
+
+    internal void CompleteCurrentPhaseForTest()
+    {
+        _timer.Dispatcher.VerifyAccess();
+        Remaining = TimeSpan.FromSeconds(1);
+        OnTimerTick(this, EventArgs.Empty);
     }
 
     private void OnTimerTick(object? sender, EventArgs e)
@@ -92,10 +128,17 @@ public sealed class PomodoroTimerService
         _timer.Stop();
         if (CurrentPhase == PomodoroPhase.Focus)
         {
-            var completedFocusMinutes = Math.Clamp(_activeSessionFocusMinutes, 1, 120);
+            var wasFocusActive = _isFocusSessionActive;
+            var completedFocusMinutes = Math.Clamp(_activeSessionFocusMinutes, MinimumFocusMinutes, MaximumFocusMinutes);
             LastCompletedFocusMinutes = completedFocusMinutes;
+            _isFocusSessionActive = false;
             CurrentPhase = PomodoroPhase.Break;
             Remaining = TimeSpan.FromMinutes(BreakMinutes);
+            if (wasFocusActive)
+            {
+                FocusStateChanged?.Invoke(this, false);
+            }
+
             FocusCompletedWithDuration?.Invoke(this, completedFocusMinutes);
             FocusCompleted?.Invoke(this, EventArgs.Empty);
         }

@@ -48,6 +48,8 @@ public static class FriendOperationErrorCodes
     public const string InvalidOrExpiredChallenge = "INVALID_OR_EXPIRED_CHALLENGE";
     public const string LocalStorageFailed = "LOCAL_STORAGE_FAILED";
     public const string Cancelled = "CANCELLED";
+    public const string PomodoroFocusBlocked = "POMODORO_FOCUS";
+    public const string PomodoroFocusMessage = "뽀모도로 타이머로 집중 중!";
 
     public static bool IsTransient(string? code) => code switch
     {
@@ -110,4 +112,15 @@ public sealed record FriendOperationResult(
         string? requestId = null,
         string? detail = null)
         => new(false, stage, errorCode, isTransient, route, requestId, null, detail);
+}
+
+/// <summary>
+/// 일반 제어 패킷(메시지·반응·인사·눈덩이·노래 따라하기·게임 이벤트)의 전송 결과와 거절 오류 코드.
+/// </summary>
+public readonly record struct TransportSendResult(bool Succeeded, string? ErrorCode = null)
+{
+    public static TransportSendResult Ok => new(true);
+    public bool IsPomodoroFocusBlocked => string.Equals(ErrorCode, FriendOperationErrorCodes.PomodoroFocusBlocked, StringComparison.Ordinal);
+
+    public static TransportSendResult Fail(string? errorCode = null) => new(false, errorCode);
 }

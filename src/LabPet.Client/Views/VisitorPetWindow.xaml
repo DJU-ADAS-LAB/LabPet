@@ -194,11 +194,11 @@
             </Viewport3D.CacheMode>
             <Viewport3D.ContextMenu>
                 <ContextMenu Opened="VisitorContextMenu_Opened">
-                    <MenuItem Header="👋  인사하기 보내기" Click="PetFriendMenu_Click" />
+                    <MenuItem x:Name="PetFriendMenuItem" Header="👋  인사하기 보내기" ToolTipService.ShowOnDisabled="True" Click="PetFriendMenu_Click" />
                     <MenuItem x:Name="SnowballMenuItem" Header="{Binding MenuText, FallbackValue='❄  눈던지기'}"
                               ToolTip="{Binding Tooltip, FallbackValue=눈던지기}" ToolTipService.ShowOnDisabled="True"
                               AutomationProperties.Name="눈던지기" Command="{Binding Command}" />
-                    <MenuItem x:Name="MusicFollowMenuItem" Header="🎵  노래 따라하기" Click="ToggleMusicFollowMenu_Click" />
+                    <MenuItem x:Name="MusicFollowMenuItem" Header="🎵  노래 따라하기" ToolTipService.ShowOnDisabled="True" Click="ToggleMusicFollowMenu_Click" />
                     <Separator />
                     <MenuItem Header="✕  친구 돌려보내기" Click="DismissMenu_Click" />
                 </ContextMenu>

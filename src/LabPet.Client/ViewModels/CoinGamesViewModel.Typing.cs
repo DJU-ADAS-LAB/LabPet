@@ -2,6 +2,7 @@ using CommunityToolkit.Mvvm.Input;
 using LabPet.Client.Games;
 using LabPet.Shared.Models;
 using LabPet.Shared.Protocol;
+using LabPet.Shared.Transport;
 
 namespace LabPet.Client.ViewModels;
 
@@ -26,6 +27,13 @@ public sealed partial class CoinGamesViewModel
             return;
         }
 
+        if (_social.IsLocalFocusing)
+        {
+            TypingStatusText = FriendOperationErrorCodes.PomodoroFocusMessage;
+            GameNotification?.Invoke(this, FriendOperationErrorCodes.PomodoroFocusMessage);
+            return;
+        }
+
         if (IsAnyGameBusy || HasIncomingInvite)
         {
             TypingStatusText = DescribeInviteReason("busy");
@@ -35,6 +43,13 @@ public sealed partial class CoinGamesViewModel
         if (SelectedTypingFriend is null)
         {
             TypingStatusText = _typingInviteTargetId is null ? "대결할 온라인 친구를 먼저 선택해 주세요." : DescribeInviteReason("offline");
+            return;
+        }
+
+        if (_social.IsPeerFocusing(SelectedTypingFriend.Friend.PetId))
+        {
+            TypingStatusText = FriendOperationErrorCodes.PomodoroFocusMessage;
+            GameNotification?.Invoke(this, FriendOperationErrorCodes.PomodoroFocusMessage);
             return;
         }
 

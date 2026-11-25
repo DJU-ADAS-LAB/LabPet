@@ -87,6 +87,11 @@ public sealed partial class LanP2pTransport
             return FriendOperationResult.Fail(FriendOperationStage.Validation, FriendOperationErrorCodes.ProtocolMismatch, false, PeerTransportKind.Lan, detail: "상대방 또는 내 앱 버전이 호환되지 않습니다.");
         }
 
+        if (_localPresence.IsFocusing)
+        {
+            return FriendOperationResult.Fail(FriendOperationStage.Validation, FriendOperationErrorCodes.PomodoroFocusBlocked, false, PeerTransportKind.Lan, detail: FriendOperationErrorCodes.PomodoroFocusMessage);
+        }
+
         if (string.IsNullOrWhiteSpace(target.IpAddress) || string.IsNullOrWhiteSpace(target.PetId) || !IsValidPort(target.TcpPort))
         {
             return FriendOperationResult.Fail(FriendOperationStage.Validation, FriendOperationErrorCodes.InvalidRequest, false, PeerTransportKind.Lan, detail: "대상 피어 주소가 올바르지 않습니다.");

@@ -45,7 +45,8 @@ public enum PetInteractionSendResult
 {
     Unavailable,
     Sent,
-    Cooldown
+    Cooldown,
+    PomodoroFocusBlocked
 }
 
 /// <summary>
@@ -74,7 +75,9 @@ public sealed class SocialCoordinatorService : IAsyncDisposable
     private volatile PetProfile _localProfile = new();
     private volatile FriendEntry[] _friends = [];
     private uint _musicFrameSequence;
+    private bool _lastLocalMusicActive;
     private bool _isLocalSleeping;
+    private volatile bool _isLocalFocusing;
     private long _nextPetInteractionTicks;
     private Task _lastRemoteAcceptPersistTask = Task.CompletedTask;
 
@@ -88,7 +91,15 @@ public sealed class SocialCoordinatorService : IAsyncDisposable
     public bool PreferLocalMusicWhenActive { get; set; } = true;
 
     public bool IsLocalSleeping => _isLocalSleeping;
+    public bool IsLocalFocusing => _isLocalFocusing;
     public bool IsRemoteConnected => _transport.IsRemoteConnected;
+
+    public bool IsPeerFocusing(string? petId)
+        => !string.IsNullOrWhiteSpace(petId)
+           && DiscoveredPeers.Any(p => string.Equals(p.PetId, petId, StringComparison.OrdinalIgnoreCase) && p.IsFocusing);
+
+    public bool IsInteractionBlocked(string? targetPetId)
+        => _isLocalFocusing || IsPeerFocusing(targetPetId);
     public string ConnectionSummary => _transport.ConnectionSummary;
     public string? LastTransportErrorMessage { get; private set; }
     public string? FollowingHostPetId => _followingHostPetId;
@@ -170,10 +181,18 @@ public sealed class SocialCoordinatorService : IAsyncDisposable
         return !string.IsNullOrEmpty(owner) ? owner : (string.IsNullOrEmpty(pet) ? "이름 없음" : pet);
     }
 
-    public async Task UpdateLocalPresenceAsync(
+    public Task UpdateLocalPresenceAsync(
         PetProfile profile,
         bool isMusicActive,
         bool? isSleeping = null,
+        CancellationToken cancellationToken = default)
+        => UpdateLocalPresenceAsync(profile, isMusicActive, isSleeping, isFocusing: null, cancellationToken);
+
+    public async Task UpdateLocalPresenceAsync(
+        PetProfile profile,
+        bool isMusicActive,
+        bool? isSleeping,
+        bool? isFocusing,
         CancellationToken cancellationToken = default)
     {
         using var operation = _operations.TryBegin();
@@ -183,9 +202,22 @@ public sealed class SocialCoordinatorService : IAsyncDisposable
         }
 
         _localProfile = profile;
+        _lastLocalMusicActive = isMusicActive;
         if (isSleeping is { } sleepState)
         {
             _isLocalSleeping = sleepState;
+        }
+
+        var focusChanged = false;
+        if (isFocusing is { } focusState)
+        {
+            focusChanged = _isLocalFocusing != focusState;
+            _isLocalFocusing = focusState;
+        }
+
+        if (_isLocalFocusing)
+        {
+            await StopFollowingMusicInternalAsync(notify: false, cancellationToken).ConfigureAwait(false);
         }
 
         var version = typeof(SocialCoordinatorService).Assembly.GetName().Version?.ToString(3) ?? "0.1.0";
@@ -198,13 +230,53 @@ public sealed class SocialCoordinatorService : IAsyncDisposable
                 isMusicActive,
                 version,
                 _isLocalSleeping,
-                profile.FriendCode),
+                profile.FriendCode,
+                _isLocalFocusing),
             cancellationToken).ConfigureAwait(false);
+
+        if (focusChanged)
+        {
+            StateChanged?.Invoke(this, EventArgs.Empty);
+        }
+    }
+
+    public Task SetLocalFocusStateAsync(bool isFocusing, CancellationToken cancellationToken = default)
+        => UpdateLocalPresenceAsync(_localProfile, _lastLocalMusicActive, _isLocalSleeping, isFocusing, cancellationToken);
+
+    private async Task StopFollowingMusicInternalAsync(bool notify, CancellationToken cancellationToken = default)
+    {
+        string? previousHostId;
+        lock (_musicLock)
+        {
+            previousHostId = _followingHostPetId;
+            _followingHostPetId = null;
+        }
+
+        if (previousHostId is null)
+        {
+            return;
+        }
+
+        var hostFriend = FindFriend(previousHostId);
+        if (hostFriend is not null)
+        {
+            await _transport.SetMusicFollowAsync(hostFriend, enable: false, cancellationToken).ConfigureAwait(false);
+        }
+
+        if (notify)
+        {
+            SocialNotification?.Invoke(this, FriendOperationErrorCodes.PomodoroFocusMessage);
+        }
     }
 
     /// <summary>호스트로서 구독 중인 친구들에게만 30Hz 경량 오디오 프레임을 전송한다.</summary>
     public ValueTask PublishHostMusicFrameAsync(float bass, float mid, float treble, bool isBeat)
     {
+        if (_isLocalFocusing)
+        {
+            return ValueTask.CompletedTask;
+        }
+
         var seq = Interlocked.Increment(ref _musicFrameSequence);
         return _transport.PublishMusicFrameAsync(new MusicFrameData(bass, mid, treble, isBeat, seq));
     }
@@ -216,6 +288,11 @@ public sealed class SocialCoordinatorService : IAsyncDisposable
     /// </summary>
     public bool TryGetFollowedMusicFrame(bool isLocalMusicActive, out MusicFrameData frame)
     {
+        if (_isLocalFocusing)
+        {
+            frame = default;
+            return false;
+        }
         string? timedOutHost = null;
         lock (_musicLock)
         {
@@ -312,6 +389,16 @@ public sealed class SocialCoordinatorService : IAsyncDisposable
             return FriendOperationResult.Fail(FriendOperationStage.Validation, FriendOperationErrorCodes.ProtocolMismatch, false, peer.TransportKind);
         }
 
+        if (_isLocalFocusing || peer.IsFocusing)
+        {
+            return FriendOperationResult.Fail(
+                FriendOperationStage.Validation,
+                FriendOperationErrorCodes.PomodoroFocusBlocked,
+                false,
+                peer.TransportKind,
+                detail: FriendOperationErrorCodes.PomodoroFocusMessage);
+        }
+
         lock (_friendStateLock)
         {
             if (FindSharedFriend(peer.PetId) is not null)
@@ -399,10 +486,24 @@ public sealed class SocialCoordinatorService : IAsyncDisposable
     }
 
     public async Task<bool> SendGameEventAsync(FriendEntry friend, GameEventPayload payload)
+        => (await SendGameEventDetailedAsync(friend, payload).ConfigureAwait(false)).Succeeded;
+
+    public async Task<TransportSendResult> SendGameEventDetailedAsync(FriendEntry friend, GameEventPayload payload)
     {
         using var operation = _operations.TryBegin();
-        return operation is not null && await _transport.SendGameEventAsync(
-            FindFriend(friend.PetId) ?? friend, payload).ConfigureAwait(false);
+        if (operation is null)
+        {
+            return TransportSendResult.Fail();
+        }
+
+        var isCleanupAction = payload?.Action is "cancel" or "decline";
+        if (!isCleanupAction && IsInteractionBlocked(friend.PetId))
+        {
+            return TransportSendResult.Fail(FriendOperationErrorCodes.PomodoroFocusBlocked);
+        }
+
+        return await _transport.SendGameEventDetailedAsync(
+            FindFriend(friend.PetId) ?? friend, payload!).ConfigureAwait(false);
     }
 
     public string GetFriendDisplayName(string petId) => FindFriendName(petId);
@@ -658,46 +759,69 @@ public sealed class SocialCoordinatorService : IAsyncDisposable
                 => "이미 처리 완료된 친구 신청입니다.",
             FriendOperationErrorCodes.PairingRequestRejected
                 => $"{routePrefix}상대방이 현재 친구 신청을 받을 수 없습니다.",
+            FriendOperationErrorCodes.PomodoroFocusBlocked
+                => FriendOperationErrorCodes.PomodoroFocusMessage,
             _ => $"{routePrefix}{action}에 실패했습니다. ({result.ErrorCode ?? "UNKNOWN"})"
         };
     }
 
     public async Task<bool> SendBubbleMessageAsync(FriendEntry friend, string text)
+        => (await SendBubbleMessageDetailedAsync(friend, text).ConfigureAwait(false)).Succeeded;
+
+    public async Task<TransportSendResult> SendBubbleMessageDetailedAsync(FriendEntry friend, string text)
     {
         using var operation = _operations.TryBegin();
         if (operation is null)
         {
-            return false;
+            return TransportSendResult.Fail();
         }
 
-        var ok = await _transport.SendBubbleMessageAsync(FindFriend(friend.PetId) ?? friend, text).ConfigureAwait(false);
-        if (ok)
+        if (IsInteractionBlocked(friend.PetId))
+        {
+            return TransportSendResult.Fail(FriendOperationErrorCodes.PomodoroFocusBlocked);
+        }
+
+        var result = await _transport.SendBubbleMessageDetailedAsync(FindFriend(friend.PetId) ?? friend, text).ConfigureAwait(false);
+        if (result.Succeeded)
         {
             await RewardSocialBonusAsync(friend.PetId, SocialRewardKind.FriendMessage).ConfigureAwait(false);
         }
 
-        return ok;
+        return result;
     }
 
     public async Task<bool> SendQuickReactionAsync(FriendEntry friend, string reactionId)
+        => (await SendQuickReactionDetailedAsync(friend, reactionId).ConfigureAwait(false)).Succeeded;
+
+    public async Task<TransportSendResult> SendQuickReactionDetailedAsync(FriendEntry friend, string reactionId)
     {
         using var operation = _operations.TryBegin();
         if (operation is null)
         {
-            return false;
+            return TransportSendResult.Fail();
         }
 
-        var ok = await _transport.SendQuickReactionAsync(FindFriend(friend.PetId) ?? friend, reactionId).ConfigureAwait(false);
-        if (ok)
+        if (IsInteractionBlocked(friend.PetId))
+        {
+            return TransportSendResult.Fail(FriendOperationErrorCodes.PomodoroFocusBlocked);
+        }
+
+        var result = await _transport.SendQuickReactionDetailedAsync(FindFriend(friend.PetId) ?? friend, reactionId).ConfigureAwait(false);
+        if (result.Succeeded)
         {
             await RewardSocialBonusAsync(friend.PetId, SocialRewardKind.QuickReaction).ConfigureAwait(false);
         }
 
-        return ok;
+        return result;
     }
 
     internal bool TryReservePetInteraction()
     {
+        if (_isLocalFocusing)
+        {
+            return false;
+        }
+
         var next = Volatile.Read(ref _nextPetInteractionTicks);
         var now = _clock.Elapsed.Ticks;
         return now >= next
@@ -712,15 +836,23 @@ public sealed class SocialCoordinatorService : IAsyncDisposable
             return PetInteractionSendResult.Unavailable;
         }
 
+        if (IsInteractionBlocked(friend.PetId))
+        {
+            return PetInteractionSendResult.PomodoroFocusBlocked;
+        }
+
         if (!TryReservePetInteraction())
         {
             return PetInteractionSendResult.Cooldown;
         }
 
         var target = FindFriend(friend.PetId) ?? friend;
-        if (!await _transport.SendPetInteractionAsync(target, "pet").ConfigureAwait(false))
+        var result = await _transport.SendPetInteractionDetailedAsync(target, "pet").ConfigureAwait(false);
+        if (!result.Succeeded)
         {
-            return PetInteractionSendResult.Unavailable;
+            return result.IsPomodoroFocusBlocked
+                ? PetInteractionSendResult.PomodoroFocusBlocked
+                : PetInteractionSendResult.Unavailable;
         }
 
         await RewardSocialBonusAsync(target.PetId, SocialRewardKind.FriendGreeting).ConfigureAwait(false);
@@ -730,11 +862,14 @@ public sealed class SocialCoordinatorService : IAsyncDisposable
     }
 
     public async Task<bool> ToggleMusicFollowAsync(FriendEntry hostFriend)
+        => (await ToggleMusicFollowDetailedAsync(hostFriend).ConfigureAwait(false)).Succeeded;
+
+    public async Task<TransportSendResult> ToggleMusicFollowDetailedAsync(FriendEntry hostFriend)
     {
         using var operation = _operations.TryBegin();
         if (operation is null)
         {
-            return false;
+            return TransportSendResult.Fail();
         }
 
         hostFriend = FindFriend(hostFriend.PetId) ?? hostFriend;
@@ -750,7 +885,12 @@ public sealed class SocialCoordinatorService : IAsyncDisposable
 
             SocialNotification?.Invoke(this, $"{hostFriend.PetName} 노래 따라하기를 종료했어요.");
             StateChanged?.Invoke(this, EventArgs.Empty);
-            return true;
+            return TransportSendResult.Ok;
+        }
+
+        if (IsInteractionBlocked(hostFriend.PetId))
+        {
+            return TransportSendResult.Fail(FriendOperationErrorCodes.PomodoroFocusBlocked);
         }
 
         // 기존 팔로우 호스트가 있으면 먼저 해제
@@ -763,8 +903,8 @@ public sealed class SocialCoordinatorService : IAsyncDisposable
             }
         }
 
-        var ok = await _transport.SetMusicFollowAsync(hostFriend, enable: true).ConfigureAwait(false);
-        if (ok)
+        var result = await _transport.SetMusicFollowDetailedAsync(hostFriend, enable: true).ConfigureAwait(false);
+        if (result.Succeeded)
         {
             var nowTicks = _clock.ElapsedTicks;
             lock (_musicLock)
@@ -778,7 +918,7 @@ public sealed class SocialCoordinatorService : IAsyncDisposable
             StateChanged?.Invoke(this, EventArgs.Empty);
         }
 
-        return ok;
+        return result;
     }
 
     private void OnTransportError(object? sender, TransportErrorEventArgs e)
@@ -832,6 +972,11 @@ public sealed class SocialCoordinatorService : IAsyncDisposable
 
     private void OnGameEventReceived(object? sender, GameEventReceivedEventArgs e)
     {
+        if (_isLocalFocusing)
+        {
+            return;
+        }
+
         GameEventReceived?.Invoke(this, e);
     }
 
@@ -851,11 +996,39 @@ public sealed class SocialCoordinatorService : IAsyncDisposable
             }
         }
 
+        // 노래 따라하기 중인 호스트가 집중 모드에 진입하면 자동으로 팔로우를 해제한다.
+        string? focusingHostId = null;
+        lock (_musicLock)
+        {
+            if (_followingHostPetId is { } hostId
+                && peers.Any(p => string.Equals(p.PetId, hostId, StringComparison.OrdinalIgnoreCase) && p.IsFocusing))
+            {
+                focusingHostId = hostId;
+                _followingHostPetId = null;
+            }
+        }
+
+        if (focusingHostId is not null)
+        {
+            var hostFriend = FindFriend(focusingHostId);
+            if (hostFriend is not null)
+            {
+                _ = ObserveIncomingAsync(() => _transport.SetMusicFollowAsync(hostFriend, enable: false));
+            }
+
+            SocialNotification?.Invoke(this, FriendOperationErrorCodes.PomodoroFocusMessage);
+        }
+
         StateChanged?.Invoke(this, EventArgs.Empty);
     }
 
     private void OnFriendRequestReceived(object? sender, FriendRequestReceivedEventArgs e)
     {
+        if (_isLocalFocusing)
+        {
+            return;
+        }
+
         FriendRequestArrived?.Invoke(this, new PendingFriendRequest(
             e.RequestId,
             e.RequesterPetId,
@@ -937,8 +1110,19 @@ public sealed class SocialCoordinatorService : IAsyncDisposable
     }
 
     private void OnBubbleMessageReceived(object? sender, BubbleMessageReceivedEventArgs e)
-        => _ = ObserveIncomingAsync(async () =>
+    {
+        if (_isLocalFocusing)
         {
+            return;
+        }
+
+        _ = ObserveIncomingAsync(async () =>
+        {
+            if (_isLocalFocusing)
+            {
+                return;
+            }
+
             var name = await RewardSocialBonusAsync(e.SenderPetId, SocialRewardKind.FriendMessage).ConfigureAwait(false);
             var peer = DiscoveredPeers.FirstOrDefault(peer =>
                 string.Equals(peer.PetId, e.SenderPetId, StringComparison.OrdinalIgnoreCase));
@@ -947,20 +1131,45 @@ public sealed class SocialCoordinatorService : IAsyncDisposable
             FriendMessageReceived?.Invoke(this, new ReceivedFriendMessage(e.SenderPetId, name, e.Text, appearance, e.MessageId));
             PetReactionTriggered?.Invoke(this, EventArgs.Empty);
         });
+    }
 
     private void OnQuickReactionReceived(object? sender, QuickReactionReceivedEventArgs e)
-        => _ = ObserveIncomingAsync(async () =>
+    {
+        if (_isLocalFocusing)
         {
+            return;
+        }
+
+        _ = ObserveIncomingAsync(async () =>
+        {
+            if (_isLocalFocusing)
+            {
+                return;
+            }
+
             var name = await RewardSocialBonusAsync(e.SenderPetId, SocialRewardKind.QuickReaction).ConfigureAwait(false);
             FriendStatusNotification?.Invoke(this, new FriendStatusNotice(e.SenderPetId, $"{name}의 반응: {e.ReactionId}", 2600));
         });
+    }
 
     private void OnPetInteractionReceived(object? sender, PetInteractionReceivedEventArgs e)
-        => _ = ObserveIncomingAsync(async () =>
+    {
+        if (_isLocalFocusing)
         {
+            return;
+        }
+
+        _ = ObserveIncomingAsync(async () =>
+        {
+            if (_isLocalFocusing)
+            {
+                return;
+            }
+
             var name = await RewardSocialBonusAsync(e.SenderPetId, SocialRewardKind.FriendGreeting).ConfigureAwait(false);
             FriendStatusNotification?.Invoke(this, new FriendStatusNotice(e.SenderPetId, $"{name}(이)가 인사했어요!", 2600));
         });
+    }
 
     private async Task ObserveIncomingAsync(Func<Task> run)
     {
@@ -982,6 +1191,11 @@ public sealed class SocialCoordinatorService : IAsyncDisposable
 
     private void OnMusicFrameReceived(object? sender, MusicFrameReceivedEventArgs e)
     {
+        if (_isLocalFocusing)
+        {
+            return;
+        }
+
         lock (_musicLock)
         {
             if (!string.Equals(_followingHostPetId, e.HostPetId, StringComparison.OrdinalIgnoreCase))

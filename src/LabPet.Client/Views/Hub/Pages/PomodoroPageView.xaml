@@ -3,68 +3,177 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
 
     <Grid>
-        <Border Style="{StaticResource HubCardStyle}" Padding="28">
-            <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" MinWidth="460">
-                <Grid Width="216" Height="216" HorizontalAlignment="Center" Margin="0,0,0,20">
-                    <Ellipse Stroke="{StaticResource HubSubtleFillBrush}" StrokeThickness="10" />
-                    <Ellipse Stroke="{StaticResource HubAccentBrush}"
-                             StrokeThickness="10"
-                             StrokeStartLineCap="Round"
-                             StrokeEndLineCap="Round"
-                             StrokeDashArray="56.55 56.55"
-                             StrokeDashOffset="{Binding PomodoroRingDashOffset}"
-                             RenderTransformOrigin="0.5,0.5">
-                        <Ellipse.RenderTransform>
-                            <RotateTransform Angle="-90" />
-                        </Ellipse.RenderTransform>
-                    </Ellipse>
-                    <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center">
-                        <Border Background="{StaticResource HubAccentSoftBrush}" CornerRadius="9" Padding="11,4" HorizontalAlignment="Center">
-                            <TextBlock Text="{Binding PomodoroPhaseText}" FontSize="11.5" FontWeight="Bold" Foreground="{StaticResource HubAccentTextBrush}" />
-                        </Border>
-                        <TextBlock Text="{Binding PomodoroTimeText}"
-                                   HorizontalAlignment="Center"
-                                   FontSize="48"
-                                   FontWeight="Bold"
-                                   Foreground="{StaticResource HubTextPrimaryBrush}"
-                                   Margin="0,6,0,0" />
+        <Border Style="{StaticResource HubCardStyle}" Padding="22,18">
+            <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" MinWidth="440" MaxWidth="480">
+                    <!-- 원형 슬라이더 겸 타이머 UI (1~60분 1분 단위 드래그 설정) -->
+                    <Grid x:Name="CircularDialHost"
+                          Width="200"
+                          Height="200"
+                          HorizontalAlignment="Center"
+                          Margin="0,0,0,14"
+                          Background="Transparent"
+                          MouseLeftButtonDown="CircularDialHost_MouseLeftButtonDown"
+                          MouseMove="CircularDialHost_MouseMove"
+                          MouseLeftButtonUp="CircularDialHost_MouseLeftButtonUp"
+                          LostMouseCapture="CircularDialHost_LostMouseCapture">
+                        <Grid.Style>
+                            <Style TargetType="Grid">
+                                <Setter Property="Cursor" Value="Arrow" />
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding CanConfigurePomodoro}" Value="True">
+                                        <Setter Property="Cursor" Value="Hand" />
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </Grid.Style>
+
+                        <Canvas Width="200" Height="200" IsHitTestVisible="False">
+                            <!-- 원형 트랙 -->
+                            <Ellipse Width="172"
+                                     Height="172"
+                                     Canvas.Left="14"
+                                     Canvas.Top="14"
+                                     Stroke="{StaticResource HubSubtleFillBrush}"
+                                     StrokeThickness="11" />
+                            <!-- 색으로 채워지는 원형 슬라이더/진행 호 -->
+                            <Path x:Name="CircularDialArcPath"
+                                  Data="{Binding PomodoroDialArcGeometry}"
+                                  Stroke="{Binding PomodoroDialArcBrush}"
+                                  StrokeThickness="11"
+                                  StrokeStartLineCap="Round"
+                                  StrokeEndLineCap="Round" />
+                            <!-- 설정 가능할 때 표시되는 원형 슬라이더 핸들 -->
+                            <Ellipse x:Name="CircularDialKnob"
+                                     Width="20"
+                                     Height="20"
+                                     Canvas.Left="{Binding PomodoroKnobLeft}"
+                                     Canvas.Top="{Binding PomodoroKnobTop}"
+                                     Fill="White"
+                                     Stroke="{Binding PomodoroDialArcBrush}"
+                                     StrokeThickness="3.2"
+                                     Visibility="{Binding CanConfigurePomodoro, Converter={StaticResource HubBoolToVis}}" />
+                        </Canvas>
+
+                        <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center" IsHitTestVisible="False">
+                            <Border Background="{StaticResource HubAccentSoftBrush}" CornerRadius="9" Padding="10,3" HorizontalAlignment="Center">
+                                <TextBlock Text="{Binding PomodoroPhaseText}" FontSize="11" FontWeight="Bold" Foreground="{StaticResource HubAccentTextBrush}" />
+                            </Border>
+                            <TextBlock Text="{Binding PomodoroTimeText}"
+                                       HorizontalAlignment="Center"
+                                       FontSize="42"
+                                       FontWeight="Bold"
+                                       Foreground="{StaticResource HubTextPrimaryBrush}"
+                                       Margin="0,4,0,0" />
+                            <TextBlock Text="{Binding PomodoroLockHintText}"
+                                       HorizontalAlignment="Center"
+                                       FontSize="10"
+                                       Foreground="{StaticResource HubTextMutedBrush}"
+                                       Margin="0,2,0,0" />
+                        </StackPanel>
+                    </Grid>
+
+                    <!-- 시간 미세 조절 + 프리셋 (단일 행 컴팩트 정렬) -->
+                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Margin="0,0,0,14">
+                        <Button x:Name="DecrementMinutesButton"
+                                Style="{StaticResource GameSecondaryButtonStyle}"
+                                Content="-"
+                                Width="30"
+                                Height="32"
+                                Padding="0"
+                                FontWeight="Bold"
+                                Command="{Binding DecrementPomodoroMinutesCommand}"
+                                IsEnabled="{Binding CanConfigurePomodoro}" />
+                        <TextBox x:Name="FocusMinutesTextBox"
+                                 Width="50"
+                                 Height="32"
+                                 Padding="4,0"
+                                 Margin="6,0"
+                                 MaxLength="2"
+                                 FontSize="13.5"
+                                 TextAlignment="Center"
+                                 VerticalContentAlignment="Center"
+                                 FontWeight="Bold"
+                                 Text="{Binding PomodoroFocusMinutesInputText, UpdateSourceTrigger=PropertyChanged}"
+                                 IsEnabled="{Binding CanConfigurePomodoro}"
+                                 PreviewTextInput="FocusMinutesTextBox_PreviewTextInput"
+                                 KeyDown="FocusMinutesTextBox_KeyDown"
+                                 LostFocus="FocusMinutesTextBox_LostFocus" />
+                        <TextBlock Text="분"
+                                   FontSize="12.5"
+                                   FontWeight="SemiBold"
+                                   Foreground="{StaticResource HubTextSecondaryBrush}"
+                                   VerticalAlignment="Center"
+                                   Margin="0,0,6,0" />
+                        <Button x:Name="IncrementMinutesButton"
+                                Style="{StaticResource GameSecondaryButtonStyle}"
+                                Content="+"
+                                Width="30"
+                                Height="32"
+                                Padding="0"
+                                FontWeight="Bold"
+                                Command="{Binding IncrementPomodoroMinutesCommand}"
+                                IsEnabled="{Binding CanConfigurePomodoro}" />
+
+                        <Border Width="1"
+                                Height="18"
+                                Background="{StaticResource HubDividerBrush}"
+                                VerticalAlignment="Center"
+                                Margin="12,0" />
+
+                        <Button x:Name="Preset15Button" Style="{StaticResource GameSecondaryButtonStyle}" Content="15분" Height="32" Padding="11,0" FontSize="12" Command="{Binding SetPomodoroPresetCommand}" CommandParameter="15" IsEnabled="{Binding CanConfigurePomodoro}" Margin="0,0,6,0" />
+                        <Button x:Name="Preset25Button" Style="{StaticResource GameSecondaryButtonStyle}" Content="25분" Height="32" Padding="11,0" FontSize="12" Command="{Binding SetPomodoroPresetCommand}" CommandParameter="25" IsEnabled="{Binding CanConfigurePomodoro}" Margin="0,0,6,0" />
+                        <Button x:Name="Preset50Button" Style="{StaticResource GameSecondaryButtonStyle}" Content="50분" Height="32" Padding="11,0" FontSize="12" Command="{Binding SetPomodoroPresetCommand}" CommandParameter="50" IsEnabled="{Binding CanConfigurePomodoro}" />
                     </StackPanel>
-                </Grid>
 
-                <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Margin="0,0,0,14">
-                    <Button Style="{StaticResource GameSecondaryButtonStyle}" Content="15분" Command="{Binding SetPomodoroPresetCommand}" CommandParameter="15" Margin="0,0,8,0" />
-                    <Button Style="{StaticResource GameSecondaryButtonStyle}" Content="25분 (기본)" Command="{Binding SetPomodoroPresetCommand}" CommandParameter="25" Margin="0,0,8,0" />
-                    <Button Style="{StaticResource GameSecondaryButtonStyle}" Content="50분" Command="{Binding SetPomodoroPresetCommand}" CommandParameter="50" />
+                    <!-- 시작 / 종료 주요 액션 -->
+                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Margin="0,0,0,16">
+                        <Button Content="{Binding PomodoroToggleText}"
+                                Command="{Binding TogglePomodoroCommand}"
+                                Style="{StaticResource GamePrimaryButtonStyle}"
+                                Width="152"
+                                Height="42"
+                                Margin="0,0,10,0" />
+                        <Button x:Name="EndPomodoroButton"
+                                Content="종료"
+                                Style="{StaticResource GameSecondaryButtonStyle}"
+                                Command="{Binding ResetPomodoroCommand}"
+                                Width="104"
+                                Height="42" />
+                    </StackPanel>
+
+                    <!-- 집중 모드 안내 (차분한 뉴트럴 캡슐) -->
+                    <Border Background="#FFF4F6F9"
+                            CornerRadius="12"
+                            Padding="16,11"
+                            Margin="0,0,0,10"
+                            MaxWidth="420">
+                        <StackPanel>
+                            <TextBlock x:Name="FocusBlockInfoText"
+                                       Text="집중하는 동안 친구와의 상호작용이 잠시 차단돼요"
+                                       HorizontalAlignment="Center"
+                                       TextAlignment="Center"
+                                       FontSize="12"
+                                       FontWeight="SemiBold"
+                                       Foreground="#FF333D4B" />
+                            <TextBlock Text="휴식하거나 종료하면 다시 연결되고, 창을 닫아도 타이머는 계속 흘러요."
+                                       HorizontalAlignment="Center"
+                                       TextAlignment="Center"
+                                       TextWrapping="Wrap"
+                                       FontSize="11"
+                                       Foreground="#FF6B7684"
+                                       Margin="0,3,0,0" />
+                        </StackPanel>
+                    </Border>
+
+                    <!-- 예상 보상 요약 -->
+                    <TextBlock Text="{Binding PomodoroRewardPreviewText}"
+                               HorizontalAlignment="Center"
+                               TextAlignment="Center"
+                               FontSize="11.5"
+                               Foreground="#FF8B95A1" />
                 </StackPanel>
-
-                <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Margin="0,0,0,16">
-                    <Button Content="{Binding PomodoroToggleText}"
-                            Command="{Binding TogglePomodoroCommand}"
-                            Style="{StaticResource GamePrimaryButtonStyle}"
-                            Width="156"
-                            Height="44"
-                            Margin="0,0,10,0" />
-                    <Button Content="초기화"
-                            Style="{StaticResource GameSecondaryButtonStyle}"
-                            Command="{Binding ResetPomodoroCommand}"
-                            Width="108"
-                            Height="44" />
-                </StackPanel>
-
-                <TextBlock Text="{Binding PomodoroRewardPreviewText}"
-                           HorizontalAlignment="Center"
-                           TextAlignment="Center"
-                           TextWrapping="Wrap"
-                           FontSize="12"
-                           Foreground="{StaticResource HubTextSecondaryBrush}" />
-                <TextBlock Text="다른 페이지로 이동하거나 통합 창을 닫아도 타이머는 백그라운드에서 계속 동작합니다."
-                           HorizontalAlignment="Center"
-                           TextAlignment="Center"
-                           TextWrapping="Wrap"
-                           FontSize="11.5"
-                           Foreground="{StaticResource HubTextMutedBrush}"
-                           Margin="0,4,0,0" />
-            </StackPanel>
+            </ScrollViewer>
         </Border>
     </Grid>
 </UserControl>

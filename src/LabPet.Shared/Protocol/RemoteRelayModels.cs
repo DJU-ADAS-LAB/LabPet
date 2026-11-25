@@ -85,6 +85,7 @@ public sealed class RemotePresenceUpdate
     public int Level { get; set; } = 1;
     public bool IsMusicActive { get; set; }
     public bool IsSleeping { get; set; }
+    public bool IsFocusing { get; set; }
     public string AppVersion { get; set; } = "0.1.0";
     public int ProtocolVersion { get; set; } = ProtocolConstants.CurrentProtocolVersion;
     public List<string> KnownFriendPetIds { get; set; } = [];
@@ -103,6 +104,7 @@ public sealed class RemoteFriendStateDto
     public int Level { get; set; } = 1;
     public bool IsMusicActive { get; set; }
     public bool IsSleeping { get; set; }
+    public bool IsFocusing { get; set; }
     public string AppVersion { get; set; } = "0.1.0";
     public int ProtocolVersion { get; set; } = ProtocolConstants.CurrentProtocolVersion;
 }

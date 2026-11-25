@@ -13,6 +13,7 @@ public sealed class SnowballInteractionService : IDisposable
     private static readonly TimeSpan SendCooldown = TimeSpan.FromSeconds(1);
     private readonly Dictionary<string, long> _lastSend = new(StringComparer.OrdinalIgnoreCase);
     private readonly ISocialTransport _transport;
+    private readonly SocialCoordinatorService? _social;
     private readonly Dispatcher _dispatcher;
     private readonly Dictionary<string, SnowballAction> _actions = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<Guid, ReceivedWindow> _received = [];
@@ -23,20 +24,26 @@ public sealed class SnowballInteractionService : IDisposable
     private volatile bool _disposed;
 
     internal event EventHandler<SnowballReceivedEventArgs>? Received;
+    public event EventHandler<string>? InteractionRejected;
 
-    public SnowballInteractionService(ISocialTransport transport)
-        : this(transport, Dispatcher.CurrentDispatcher, TimeProvider.System)
+    public SnowballInteractionService(ISocialTransport transport, SocialCoordinatorService? social = null)
+        : this(transport, Dispatcher.CurrentDispatcher, TimeProvider.System, social)
     {
     }
 
-    internal SnowballInteractionService(ISocialTransport transport, Dispatcher dispatcher, TimeProvider clock)
+    internal SnowballInteractionService(ISocialTransport transport, Dispatcher dispatcher, TimeProvider clock, SocialCoordinatorService? social = null)
     {
         _transport = transport;
+        _social = social;
         _dispatcher = dispatcher;
         _clock = clock;
         _stopping = _stop.Token;
         _transport.PeersChanged += OnPeersChanged;
         _transport.SnowballReceived += OnReceived;
+        if (_social is not null)
+        {
+            _social.StateChanged += OnSocialStateChanged;
+        }
     }
 
     public SnowballAction ForFriend(FriendEntry friend)
@@ -51,28 +58,59 @@ public sealed class SnowballInteractionService : IDisposable
     internal SnowballPeerStatus GetStatus(string petId) => _disposed
         ? SnowballPeerStatus.Offline : _transport.GetSnowballPeerStatus(petId);
 
+    internal bool IsBlockedByPomodoroFocus(string petId)
+    {
+        if (_disposed)
+        {
+            return false;
+        }
+
+        if (_social?.IsLocalFocusing == true)
+        {
+            return true;
+        }
+
+        return _transport.GetDiscoveredPeers().Any(p =>
+            string.Equals(p.PetId, petId, StringComparison.OrdinalIgnoreCase) && p.IsFocusing);
+    }
+
     internal async Task<bool> SendAsync(FriendEntry friend)
+        => (await SendDetailedAsync(friend)).Succeeded;
+
+    internal async Task<TransportSendResult> SendDetailedAsync(FriendEntry friend)
     {
         _dispatcher.VerifyAccess();
-        if (_disposed || GetCooldownRemaining(friend.PetId) > TimeSpan.Zero
-            || string.IsNullOrWhiteSpace(friend.PairSecretBase64)
+        if (_disposed || string.IsNullOrWhiteSpace(friend.PairSecretBase64))
+            return TransportSendResult.Fail();
+        if (IsBlockedByPomodoroFocus(friend.PetId))
+        {
+            InteractionRejected?.Invoke(this, FriendOperationErrorCodes.PomodoroFocusMessage);
+            return TransportSendResult.Fail(FriendOperationErrorCodes.PomodoroFocusBlocked);
+        }
+        if (GetCooldownRemaining(friend.PetId) > TimeSpan.Zero
             || GetStatus(friend.PetId) != SnowballPeerStatus.Available)
-            return false;
+            return TransportSendResult.Fail();
         _lastSend[friend.PetId] = Timestamp;
         using var attempt = CancellationTokenSource.CreateLinkedTokenSource(_stopping);
         attempt.CancelAfter(TimeSpan.FromSeconds(8));
         try
         {
-            return await _transport.SendSnowballAsync(friend, Guid.NewGuid(), attempt.Token);
+            var result = await _transport.SendSnowballDetailedAsync(friend, Guid.NewGuid(), attempt.Token);
+            if (result.IsPomodoroFocusBlocked)
+            {
+                InteractionRejected?.Invoke(this, FriendOperationErrorCodes.PomodoroFocusMessage);
+            }
+
+            return result;
         }
         catch (OperationCanceledException) when (attempt.IsCancellationRequested)
         {
-            return false;
+            return TransportSendResult.Fail();
         }
         catch (Exception ex)
         {
             CrashLogWriter.Write("SnowballInteraction.Send", ex);
-            return false;
+            return TransportSendResult.Fail();
         }
     }
 
@@ -87,6 +125,12 @@ public sealed class SnowballInteractionService : IDisposable
     }
 
     private void OnPeersChanged(object? sender, IReadOnlyList<PeerSnapshot> peers)
+        => QueueRefreshActions();
+
+    private void OnSocialStateChanged(object? sender, EventArgs e)
+        => QueueRefreshActions();
+
+    private void QueueRefreshActions()
     {
         if (_disposed || _dispatcher.HasShutdownStarted || Interlocked.Exchange(ref _refreshQueued, 1) != 0)
             return;
@@ -101,12 +145,14 @@ public sealed class SnowballInteractionService : IDisposable
     [System.Reflection.Obfuscation(Exclude = false)]
     private void OnReceived(object? sender, SnowballReceivedEventArgs e)
     {
-        if (_disposed || _dispatcher.HasShutdownStarted || !Guid.TryParse(e.SenderPetId, out var senderId)
+        if (_disposed || _dispatcher.HasShutdownStarted || _social?.IsLocalFocusing == true
+            || !Guid.TryParse(e.SenderPetId, out var senderId)
             || senderId == Guid.Empty || e.EventId == Guid.Empty) return;
 
         _dispatcher.BeginInvoke(() =>
         {
-            if (_disposed || (_clock.GetUtcNow() - e.TimestampUtc).Duration() > TimeSpan.FromSeconds(10))
+            if (_disposed || _social?.IsLocalFocusing == true
+                || (_clock.GetUtcNow() - e.TimestampUtc).Duration() > TimeSpan.FromSeconds(10))
                 return;
             if (!_received.TryGetValue(senderId, out var window))
                 _received.Add(senderId, window = new ReceivedWindow(Timestamp));
@@ -121,6 +167,10 @@ public sealed class SnowballInteractionService : IDisposable
         _disposed = true;
         _transport.PeersChanged -= OnPeersChanged;
         _transport.SnowballReceived -= OnReceived;
+        if (_social is not null)
+        {
+            _social.StateChanged -= OnSocialStateChanged;
+        }
         _stop.Cancel();
         _stop.Dispose();
     }
@@ -154,6 +204,7 @@ public sealed class SnowballAction : ObservableObject
     private FriendEntry _friend;
     private bool _waiting;
     private bool _failed;
+    private bool _rejectedByFocus;
 
     internal SnowballAction(SnowballInteractionService service, FriendEntry friend)
     {
@@ -164,15 +215,19 @@ public sealed class SnowballAction : ObservableObject
 
     public IAsyncRelayCommand Command { get; }
     public string Icon => _waiting ? "1초" : _failed ? "!" : "❄";
-    public string MenuText => _waiting ? "❄  눈던지기 · 대기" : _failed ? "❄  눈던지기 · 전송 실패" : "❄  눈던지기";
-    public string Tooltip => _service.GetStatus(_friend.PetId) switch
-    {
-        SnowballPeerStatus.Offline => "눈던지기 · 친구가 오프라인입니다.",
-        SnowballPeerStatus.Unsupported => "눈던지기 · 상대 앱 업데이트가 필요합니다.",
-        _ when _waiting => "눈던지기 · 잠시 후 다시 보낼 수 있습니다.",
-        _ when _failed => "눈던지기 · 전송에 실패했습니다.",
-        _ => "눈던지기"
-    };
+    public string MenuText => _service.IsBlockedByPomodoroFocus(_friend.PetId)
+        ? $"❄  눈던지기 · {FriendOperationErrorCodes.PomodoroFocusMessage}"
+        : _waiting ? "❄  눈던지기 · 대기" : _failed ? "❄  눈던지기 · 전송 실패" : "❄  눈던지기";
+    public string Tooltip => _service.IsBlockedByPomodoroFocus(_friend.PetId) || _rejectedByFocus
+        ? FriendOperationErrorCodes.PomodoroFocusMessage
+        : _service.GetStatus(_friend.PetId) switch
+        {
+            SnowballPeerStatus.Offline => "눈던지기 · 친구가 오프라인입니다.",
+            SnowballPeerStatus.Unsupported => "눈던지기 · 상대 앱 업데이트가 필요합니다.",
+            _ when _waiting => "눈던지기 · 잠시 후 다시 보낼 수 있습니다.",
+            _ when _failed => "눈던지기 · 전송에 실패했습니다.",
+            _ => "눈던지기"
+        };
 
     internal void UpdateFriend(FriendEntry friend)
     {
@@ -182,6 +237,11 @@ public sealed class SnowballAction : ObservableObject
 
     internal void Refresh()
     {
+        if (!_service.IsBlockedByPomodoroFocus(_friend.PetId) && !_waiting)
+        {
+            _rejectedByFocus = false;
+        }
+
         OnPropertyChanged(nameof(Icon));
         OnPropertyChanged(nameof(MenuText));
         OnPropertyChanged(nameof(Tooltip));
@@ -189,6 +249,7 @@ public sealed class SnowballAction : ObservableObject
     }
 
     private bool CanSend() => !_waiting && !string.IsNullOrWhiteSpace(_friend.PairSecretBase64)
+        && !_service.IsBlockedByPomodoroFocus(_friend.PetId)
         && _service.GetStatus(_friend.PetId) == SnowballPeerStatus.Available
         && _service.GetCooldownRemaining(_friend.PetId) == TimeSpan.Zero;
 
@@ -199,10 +260,13 @@ public sealed class SnowballAction : ObservableObject
         var friend = _friend;
         _waiting = true;
         _failed = false;
+        _rejectedByFocus = false;
         Refresh();
         try
         {
-            _failed = !await _service.SendAsync(friend);
+            var result = await _service.SendDetailedAsync(friend);
+            _failed = !result.Succeeded;
+            _rejectedByFocus = result.IsPomodoroFocusBlocked;
             var remaining = _service.GetCooldownRemaining(friend.PetId);
             if (remaining > TimeSpan.Zero) await Task.Delay(remaining);
         }

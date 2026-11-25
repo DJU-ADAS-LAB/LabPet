@@ -82,6 +82,8 @@ public sealed class GcpSignalRTransport : ISocialTransport
     private readonly Func<HttpMessageHandler>? _httpHandlerFactory;
 
     private readonly ConcurrentDictionary<string, PeerSnapshot> _peers = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, long> _peerPushSequence = new(StringComparer.OrdinalIgnoreCase);
+    private long _presencePushSequence;
     private readonly ConcurrentDictionary<string, string> _musicSubscribers = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, LanP2pTransport.MusicSequenceWindow> _musicReceiveWindows = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, ControlReplayWindow> _replayWindows = new(StringComparer.OrdinalIgnoreCase);
@@ -289,6 +291,11 @@ public sealed class GcpSignalRTransport : ISocialTransport
     public async Task UpdateLocalPresenceAsync(LocalPresenceState presence, CancellationToken cancellationToken = default)
     {
         _localPresence = presence;
+        if (presence.IsFocusing)
+        {
+            _musicSubscribers.Clear();
+        }
+
         var hub = _hub;
         if (!IsRunning || hub is null || hub.State != HubConnectionState.Connected)
         {
@@ -342,6 +349,7 @@ public sealed class GcpSignalRTransport : ISocialTransport
                     Level = existing.Level,
                     IsMusicActive = isFriend && existing.IsMusicActive,
                     IsSleeping = isFriend && existing.IsSleeping,
+                    IsFocusing = isFriend && existing.IsFocusing,
                     IsFriend = isFriend,
                     TransportKind = existing.TransportKind,
                     IpAddress = existing.IpAddress,
@@ -424,6 +432,11 @@ public sealed class GcpSignalRTransport : ISocialTransport
         if (target.RequiresUpdate)
         {
             return FriendOperationResult.Fail(FriendOperationStage.Validation, FriendOperationErrorCodes.ProtocolMismatch, false, PeerTransportKind.GcpRelay);
+        }
+
+        if (_localPresence.IsFocusing)
+        {
+            return FriendOperationResult.Fail(FriendOperationStage.Validation, FriendOperationErrorCodes.PomodoroFocusBlocked, false, PeerTransportKind.GcpRelay, detail: FriendOperationErrorCodes.PomodoroFocusMessage);
         }
 
         if (string.IsNullOrWhiteSpace(target.PetId))
@@ -671,11 +684,19 @@ public sealed class GcpSignalRTransport : ISocialTransport
     }
 
     public async Task<bool> SendBubbleMessageAsync(FriendEntry friend, string message, CancellationToken cancellationToken = default)
+        => (await SendBubbleMessageDetailedAsync(friend, message, cancellationToken).ConfigureAwait(false)).Succeeded;
+
+    public async Task<TransportSendResult> SendBubbleMessageDetailedAsync(FriendEntry friend, string message, CancellationToken cancellationToken = default)
     {
+        if (_localPresence.IsFocusing)
+        {
+            return TransportSendResult.Fail(FriendOperationErrorCodes.PomodoroFocusBlocked);
+        }
+
         var trimmed = (message ?? string.Empty).Trim();
         if (trimmed.Length == 0)
         {
-            return false;
+            return TransportSendResult.Fail();
         }
 
         if (trimmed.Length > ProtocolConstants.MaxBubbleMessageLength)
@@ -683,14 +704,24 @@ public sealed class GcpSignalRTransport : ISocialTransport
             trimmed = trimmed[..ProtocolConstants.MaxBubbleMessageLength];
         }
 
-        return await SendEncryptedFriendPacketAsync(
+        return await SendEncryptedFriendPacketDetailedAsync(
             friend, PacketType.BubbleMessage, new BubbleMessagePayload { Text = trimmed }, cancellationToken)
             .ConfigureAwait(false);
     }
 
-    public Task<bool> SendQuickReactionAsync(FriendEntry friend, string reactionId, CancellationToken cancellationToken = default)
-        => SendEncryptedFriendPacketAsync(
+    public async Task<bool> SendQuickReactionAsync(FriendEntry friend, string reactionId, CancellationToken cancellationToken = default)
+        => (await SendQuickReactionDetailedAsync(friend, reactionId, cancellationToken).ConfigureAwait(false)).Succeeded;
+
+    public Task<TransportSendResult> SendQuickReactionDetailedAsync(FriendEntry friend, string reactionId, CancellationToken cancellationToken = default)
+    {
+        if (_localPresence.IsFocusing)
+        {
+            return Task.FromResult(TransportSendResult.Fail(FriendOperationErrorCodes.PomodoroFocusBlocked));
+        }
+
+        return SendEncryptedFriendPacketDetailedAsync(
             friend, PacketType.QuickReaction, new QuickReactionPayload { ReactionId = reactionId }, cancellationToken);
+    }
 
     public SnowballPeerStatus GetSnowballPeerStatus(string petId)
     {
@@ -702,53 +733,89 @@ public sealed class GcpSignalRTransport : ISocialTransport
             ? SnowballPeerStatus.Available : SnowballPeerStatus.Unsupported;
     }
 
-    public Task<bool> SendSnowballAsync(FriendEntry friend, Guid eventId, CancellationToken cancellationToken = default)
+    public async Task<bool> SendSnowballAsync(FriendEntry friend, Guid eventId, CancellationToken cancellationToken = default)
+        => (await SendSnowballDetailedAsync(friend, eventId, cancellationToken).ConfigureAwait(false)).Succeeded;
+
+    public Task<TransportSendResult> SendSnowballDetailedAsync(FriendEntry friend, Guid eventId, CancellationToken cancellationToken = default)
     {
+        if (_localPresence.IsFocusing)
+        {
+            return Task.FromResult(TransportSendResult.Fail(FriendOperationErrorCodes.PomodoroFocusBlocked));
+        }
+
         if (eventId == Guid.Empty || GetSnowballPeerStatus(friend.PetId) != SnowballPeerStatus.Available)
-            return Task.FromResult(false);
-        return SendEncryptedFriendPacketAsync(friend, PacketType.PetInteraction,
+            return Task.FromResult(TransportSendResult.Fail());
+        return SendEncryptedFriendPacketDetailedAsync(friend, PacketType.PetInteraction,
             new PetInteractionPayload { InteractionType = PetInteractionPayload.SnowballType, EventId = eventId.ToString("N") },
             cancellationToken);
     }
 
-    public Task<bool> SendPetInteractionAsync(FriendEntry friend, string interactionType, CancellationToken cancellationToken = default)
-        => SendEncryptedFriendPacketAsync(
+    public async Task<bool> SendPetInteractionAsync(FriendEntry friend, string interactionType, CancellationToken cancellationToken = default)
+        => (await SendPetInteractionDetailedAsync(friend, interactionType, cancellationToken).ConfigureAwait(false)).Succeeded;
+
+    public Task<TransportSendResult> SendPetInteractionDetailedAsync(FriendEntry friend, string interactionType, CancellationToken cancellationToken = default)
+    {
+        if (_localPresence.IsFocusing)
+        {
+            return Task.FromResult(TransportSendResult.Fail(FriendOperationErrorCodes.PomodoroFocusBlocked));
+        }
+
+        return SendEncryptedFriendPacketDetailedAsync(
             friend, PacketType.PetInteraction, new PetInteractionPayload { InteractionType = interactionType }, cancellationToken);
+    }
 
     public async Task<bool> SetMusicFollowAsync(FriendEntry hostFriend, bool enable, CancellationToken cancellationToken = default)
+        => (await SetMusicFollowDetailedAsync(hostFriend, enable, cancellationToken).ConfigureAwait(false)).Succeeded;
+
+    public async Task<TransportSendResult> SetMusicFollowDetailedAsync(FriendEntry hostFriend, bool enable, CancellationToken cancellationToken = default)
     {
         if (!enable)
         {
             _musicReceiveWindows.TryRemove(hostFriend.PetId, out var prev);
-            return await SendEncryptedFriendPacketAsync(
+            return await SendEncryptedFriendPacketDetailedAsync(
                 hostFriend,
                 PacketType.MusicFollowOff,
                 new MusicFollowPayload { SubscriptionId = prev?.SubscriptionId ?? string.Empty },
                 cancellationToken).ConfigureAwait(false);
         }
 
+        if (_localPresence.IsFocusing)
+        {
+            return TransportSendResult.Fail(FriendOperationErrorCodes.PomodoroFocusBlocked);
+        }
+
         var session = new LanP2pTransport.MusicSequenceWindow(Guid.NewGuid().ToString("N"));
         _musicReceiveWindows[hostFriend.PetId] = session;
-        var ok = await SendEncryptedFriendPacketAsync(
+        var result = await SendEncryptedFriendPacketDetailedAsync(
             hostFriend,
             PacketType.MusicFollowOn,
             new MusicFollowPayload { ListenerUdpPort = 0, SubscriptionId = session.SubscriptionId },
             cancellationToken).ConfigureAwait(false);
-        if (!ok)
+        if (!result.Succeeded)
         {
             _musicReceiveWindows.TryRemove(new KeyValuePair<string, LanP2pTransport.MusicSequenceWindow>(hostFriend.PetId, session));
         }
 
-        return ok;
+        return result;
     }
 
-    public Task<bool> SendGameEventAsync(FriendEntry friend, GameEventPayload payload, CancellationToken cancellationToken = default)
-        => SendEncryptedFriendPacketAsync(friend, PacketType.GameEvent, payload, cancellationToken);
+    public async Task<bool> SendGameEventAsync(FriendEntry friend, GameEventPayload payload, CancellationToken cancellationToken = default)
+        => (await SendGameEventDetailedAsync(friend, payload, cancellationToken).ConfigureAwait(false)).Succeeded;
+
+    public Task<TransportSendResult> SendGameEventDetailedAsync(FriendEntry friend, GameEventPayload payload, CancellationToken cancellationToken = default)
+    {
+        if (_localPresence.IsFocusing && payload?.Action is not ("cancel" or "decline"))
+        {
+            return Task.FromResult(TransportSendResult.Fail(FriendOperationErrorCodes.PomodoroFocusBlocked));
+        }
+
+        return SendEncryptedFriendPacketDetailedAsync(friend, PacketType.GameEvent, payload!, cancellationToken);
+    }
 
     public async ValueTask PublishMusicFrameAsync(MusicFrameData frame, CancellationToken cancellationToken = default)
     {
         var hub = _hub;
-        if (!IsRunning || hub is null || hub.State != HubConnectionState.Connected || _musicSubscribers.IsEmpty)
+        if (!IsRunning || hub is null || hub.State != HubConnectionState.Connected || _musicSubscribers.IsEmpty || _localPresence.IsFocusing)
         {
             return;
         }
@@ -842,7 +909,15 @@ public sealed class GcpSignalRTransport : ISocialTransport
 
         hub.On<RemoteFriendStateDto>(
             SocialHubConstants.ReceiveFriendPresenceChangedClientMethod,
-            dto => ApplyOnlinePeerDto(dto, raiseEvent: true));
+            dto =>
+            {
+                if (!string.IsNullOrWhiteSpace(dto?.PetId))
+                {
+                    _peerPushSequence[dto.PetId] = Interlocked.Increment(ref _presencePushSequence);
+                }
+
+                ApplyOnlinePeerDto(dto!, raiseEvent: true);
+            });
 
         hub.On<string>(
             SocialHubConstants.ReceiveFriendOfflineClientMethod,
@@ -998,9 +1073,10 @@ public sealed class GcpSignalRTransport : ISocialTransport
         using var work = operation;
         try
         {
+            var seqBeforeSync = Interlocked.Read(ref _presencePushSequence);
             var list = await hub.InvokeAsync<List<RemoteFriendStateDto>>(
                 SocialHubConstants.SyncKnownFriendsMethod, friendIds, ct).ConfigureAwait(false);
-            if (!ct.IsCancellationRequested) { ReplaceAllRemotePeers(list); }
+            if (!ct.IsCancellationRequested) { ReplaceAllRemotePeers(list, seqBeforeSync); }
         }
         catch
         {
@@ -1155,14 +1231,7 @@ public sealed class GcpSignalRTransport : ISocialTransport
         return null;
     }
 
-    private Task<bool> SendEncryptedFriendPacketAsync<TPayload>(
-        FriendEntry friend,
-        PacketType packetType,
-        TPayload payload,
-        CancellationToken ct)
-        => SendEncryptedFriendPacketCoreAsync(friend, packetType, payload, ct);
-
-    private async Task<bool> SendEncryptedFriendPacketCoreAsync<TPayload>(
+    private async Task<TransportSendResult> SendEncryptedFriendPacketDetailedAsync<TPayload>(
         FriendEntry friend,
         PacketType packetType,
         TPayload payload,
@@ -1170,12 +1239,14 @@ public sealed class GcpSignalRTransport : ISocialTransport
     {
         if (string.IsNullOrWhiteSpace(friend.PairSecretBase64))
         {
-            return false;
+            return TransportSendResult.Fail();
         }
 
-        var ack = await SendControlRelayAsync(friend.PetId, packetType, payload, friend.PairSecretBase64, ct)
+        var outcome = await SendControlRelayWithOutcomeAsync(friend.PetId, packetType, payload, friend.PairSecretBase64, ct)
             .ConfigureAwait(false);
-        return ack is { Accepted: true };
+        return outcome.VerifiedAck is { Accepted: true }
+            ? TransportSendResult.Ok
+            : TransportSendResult.Fail(outcome.VerifiedAck?.ErrorCode ?? outcome.ErrorCode);
     }
 
     private async Task<AckPayload?> SendControlRelayAsync<TPayload>(
@@ -1433,6 +1504,11 @@ public sealed class GcpSignalRTransport : ISocialTransport
                     return RejectAck(header.MessageId, FriendOperationErrorCodes.InvalidPairingEnvelope);
                 }
 
+                if (_localPresence.IsFocusing)
+                {
+                    return RejectAck(header.MessageId, FriendOperationErrorCodes.PomodoroFocusBlocked);
+                }
+
                 if (!ReceiveFriendRequest(envelope, out var requestError))
                 {
                     return RejectAck(header.MessageId, requestError);
@@ -1465,6 +1541,11 @@ public sealed class GcpSignalRTransport : ISocialTransport
 
             case PacketType.BubbleMessage:
             {
+                if (_localPresence.IsFocusing)
+                {
+                    return RejectAck(header.MessageId, FriendOperationErrorCodes.PomodoroFocusBlocked);
+                }
+
                 var p = JsonSerializer.Deserialize<BubbleMessagePayload>(effectivePayloadJson, ProtocolJson.PacketOptions);
                 if (p is null || string.IsNullOrWhiteSpace(p.Text)) return RejectAck(header.MessageId, "INVALID_PAYLOAD");
                 var safeText = p.Text.Length > ProtocolConstants.MaxBubbleMessageLength
@@ -1477,6 +1558,11 @@ public sealed class GcpSignalRTransport : ISocialTransport
 
             case PacketType.QuickReaction:
             {
+                if (_localPresence.IsFocusing)
+                {
+                    return RejectAck(header.MessageId, FriendOperationErrorCodes.PomodoroFocusBlocked);
+                }
+
                 var p = JsonSerializer.Deserialize<QuickReactionPayload>(effectivePayloadJson, ProtocolJson.PacketOptions);
                 if (p is null) return RejectAck(header.MessageId, "INVALID_PAYLOAD");
                 QuickReactionReceived?.Invoke(this, new QuickReactionReceivedEventArgs(header.SenderPetId, p.ReactionId));
@@ -1485,6 +1571,11 @@ public sealed class GcpSignalRTransport : ISocialTransport
 
             case PacketType.PetInteraction:
             {
+                if (_localPresence.IsFocusing)
+                {
+                    return RejectAck(header.MessageId, FriendOperationErrorCodes.PomodoroFocusBlocked);
+                }
+
                 var p = JsonSerializer.Deserialize<PetInteractionPayload>(effectivePayloadJson, ProtocolJson.PacketOptions);
                 if (p?.InteractionType == PetInteractionPayload.PetType)
                 {
@@ -1503,6 +1594,11 @@ public sealed class GcpSignalRTransport : ISocialTransport
 
             case PacketType.MusicFollowOn:
             {
+                if (_localPresence.IsFocusing)
+                {
+                    return RejectAck(header.MessageId, FriendOperationErrorCodes.PomodoroFocusBlocked);
+                }
+
                 var p = JsonSerializer.Deserialize<MusicFollowPayload>(effectivePayloadJson, ProtocolJson.PacketOptions);
                 if (p is not null && Guid.TryParseExact(p.SubscriptionId, "N", out _))
                 {
@@ -1532,6 +1628,17 @@ public sealed class GcpSignalRTransport : ISocialTransport
                 {
                     return RejectAck(header.MessageId, "INVALID_PAYLOAD");
                 }
+
+                if (_localPresence.IsFocusing)
+                {
+                    if (p.Action is "cancel" or "decline")
+                    {
+                        break;
+                    }
+
+                    return RejectAck(header.MessageId, FriendOperationErrorCodes.PomodoroFocusBlocked);
+                }
+
                 GameEventReceived?.Invoke(this, new GameEventReceivedEventArgs(header.SenderPetId, p));
                 break;
             }
@@ -1573,6 +1680,7 @@ public sealed class GcpSignalRTransport : ISocialTransport
             Level = presence.Level,
             IsMusicActive = presence.IsMusicActive,
             IsSleeping = presence.IsSleeping,
+            IsFocusing = presence.IsFocusing,
             IsFriend = true,
             TransportKind = PeerTransportKind.GcpRelay,
             IpAddress = "GCP",
@@ -1597,6 +1705,7 @@ public sealed class GcpSignalRTransport : ISocialTransport
                 Level = local.Level,
                 IsMusicActive = local.IsMusicActive,
                 IsSleeping = local.IsSleeping,
+                IsFocusing = local.IsFocusing,
                 TcpPort = ProtocolConstants.TcpControlPort,
                 AppVersion = local.AppVersion
             }
@@ -1800,7 +1909,7 @@ public sealed class GcpSignalRTransport : ISocialTransport
         return true;
     }
 
-    private void ReplaceAllRemotePeers(IReadOnlyList<RemoteFriendStateDto> list)
+    private void ReplaceAllRemotePeers(IReadOnlyList<RemoteFriendStateDto> list, long? preservePushesAfterSequence = null)
     {
         var activeIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var dto in list)
@@ -1811,6 +1920,13 @@ public sealed class GcpSignalRTransport : ISocialTransport
             }
 
             activeIds.Add(dto.PetId);
+            if (preservePushesAfterSequence is { } minSeq
+                && _peerPushSequence.TryGetValue(dto.PetId, out var pushedSeq)
+                && pushedSeq > minSeq)
+            {
+                continue;
+            }
+
             ApplyOnlinePeerDto(dto, raiseEvent: false);
         }
 
@@ -1856,6 +1972,7 @@ public sealed class GcpSignalRTransport : ISocialTransport
             Level = dto.Level,
             IsMusicActive = isFriend && dto.IsMusicActive,
             IsSleeping = isFriend && dto.IsSleeping,
+            IsFocusing = isFriend && dto.IsFocusing,
             IsFriend = isFriend,
             TransportKind = PeerTransportKind.GcpRelay,
             IpAddress = "GCP",
@@ -1884,6 +2001,7 @@ public sealed class GcpSignalRTransport : ISocialTransport
             Level = local.Level,
             IsMusicActive = local.IsMusicActive,
             IsSleeping = local.IsSleeping,
+            IsFocusing = local.IsFocusing,
             AppVersion = local.AppVersion,
             ProtocolVersion = ProtocolConstants.CurrentProtocolVersion,
             KnownFriendPetIds = _friendsByPetId.Keys.ToList()

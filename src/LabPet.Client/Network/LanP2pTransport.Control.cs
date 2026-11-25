@@ -193,6 +193,11 @@ public sealed partial class LanP2pTransport
                     return RejectAck(header.MessageId, FriendOperationErrorCodes.InvalidPairingEnvelope);
                 }
 
+                if (_localPresence.IsFocusing)
+                {
+                    return RejectAck(header.MessageId, FriendOperationErrorCodes.PomodoroFocusBlocked);
+                }
+
                 if (!ReceiveFriendRequest(envelope, remoteIp, out var requestError))
                 {
                     return RejectAck(header.MessageId, requestError);
@@ -225,6 +230,11 @@ public sealed partial class LanP2pTransport
 
             case PacketType.BubbleMessage:
             {
+                if (_localPresence.IsFocusing)
+                {
+                    return RejectAck(header.MessageId, FriendOperationErrorCodes.PomodoroFocusBlocked);
+                }
+
                 var p = JsonSerializer.Deserialize<BubbleMessagePayload>(effectivePayloadJson, ProtocolJson.PacketOptions);
                 if (p is null || string.IsNullOrWhiteSpace(p.Text)) return RejectAck(header.MessageId, "INVALID_PAYLOAD");
 
@@ -238,6 +248,11 @@ public sealed partial class LanP2pTransport
 
             case PacketType.QuickReaction:
             {
+                if (_localPresence.IsFocusing)
+                {
+                    return RejectAck(header.MessageId, FriendOperationErrorCodes.PomodoroFocusBlocked);
+                }
+
                 var p = JsonSerializer.Deserialize<QuickReactionPayload>(effectivePayloadJson, ProtocolJson.PacketOptions);
                 if (p is null) return RejectAck(header.MessageId, "INVALID_PAYLOAD");
 
@@ -247,6 +262,11 @@ public sealed partial class LanP2pTransport
 
             case PacketType.PetInteraction:
             {
+                if (_localPresence.IsFocusing)
+                {
+                    return RejectAck(header.MessageId, FriendOperationErrorCodes.PomodoroFocusBlocked);
+                }
+
                 var p = JsonSerializer.Deserialize<PetInteractionPayload>(effectivePayloadJson, ProtocolJson.PacketOptions);
                 if (p?.InteractionType == PetInteractionPayload.PetType)
                 {
@@ -265,6 +285,11 @@ public sealed partial class LanP2pTransport
 
             case PacketType.MusicFollowOn:
             {
+                if (_localPresence.IsFocusing)
+                {
+                    return RejectAck(header.MessageId, FriendOperationErrorCodes.PomodoroFocusBlocked);
+                }
+
                 var p = JsonSerializer.Deserialize<MusicFollowPayload>(effectivePayloadJson, ProtocolJson.PacketOptions);
                 if (p is not null && IsValidPort(p.ListenerUdpPort) && Guid.TryParseExact(p.SubscriptionId, "N", out _)
                     && IPAddress.TryParse(remoteIp, out var parsedIp) && verifiedPairSecret is not null)
@@ -299,6 +324,16 @@ public sealed partial class LanP2pTransport
                 if (p is null || string.IsNullOrWhiteSpace(p.GameType) || string.IsNullOrWhiteSpace(p.Action))
                 {
                     return RejectAck(header.MessageId, "INVALID_PAYLOAD");
+                }
+
+                if (_localPresence.IsFocusing)
+                {
+                    if (p.Action is "cancel" or "decline")
+                    {
+                        break;
+                    }
+
+                    return RejectAck(header.MessageId, FriendOperationErrorCodes.PomodoroFocusBlocked);
                 }
 
                 GameEventReceived?.Invoke(this, new GameEventReceivedEventArgs(header.SenderPetId, p));

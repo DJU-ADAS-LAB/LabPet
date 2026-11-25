@@ -220,9 +220,14 @@ public sealed partial class LanP2pTransport : ISocialTransport
     {
         var previous = _localPresence;
         _localPresence = presence;
+        if (presence.IsFocusing)
+        {
+            _musicSubscribers.Clear();
+        }
 
         if (IsRunning && (previous.IsSleeping != presence.IsSleeping
             || previous.IsMusicActive != presence.IsMusicActive
+            || previous.IsFocusing != presence.IsFocusing
             || previous.Level != presence.Level))
         {
             var operation = BeginBackgroundWork(out var ct);
@@ -302,11 +307,19 @@ public sealed partial class LanP2pTransport : ISocialTransport
             .OrderByDescending(p => p.IsFriend).ThenBy(p => p.PetName, StringComparer.OrdinalIgnoreCase).ToList();
 
     public async Task<bool> SendBubbleMessageAsync(FriendEntry friend, string message, CancellationToken cancellationToken = default)
+        => (await SendBubbleMessageDetailedAsync(friend, message, cancellationToken).ConfigureAwait(false)).Succeeded;
+
+    public async Task<TransportSendResult> SendBubbleMessageDetailedAsync(FriendEntry friend, string message, CancellationToken cancellationToken = default)
     {
+        if (_localPresence.IsFocusing)
+        {
+            return TransportSendResult.Fail(FriendOperationErrorCodes.PomodoroFocusBlocked);
+        }
+
         var trimmed = (message ?? string.Empty).Trim();
         if (trimmed.Length == 0)
         {
-            return false;
+            return TransportSendResult.Fail();
         }
 
         if (trimmed.Length > ProtocolConstants.MaxBubbleMessageLength)
@@ -314,19 +327,29 @@ public sealed partial class LanP2pTransport : ISocialTransport
             trimmed = trimmed[..ProtocolConstants.MaxBubbleMessageLength];
         }
 
-        return await SendFriendControlPacketAsync(
+        return await SendFriendControlPacketDetailedAsync(
             friend,
             PacketType.BubbleMessage,
             new BubbleMessagePayload { Text = trimmed },
             cancellationToken).ConfigureAwait(false);
     }
 
-    public Task<bool> SendQuickReactionAsync(FriendEntry friend, string reactionId, CancellationToken cancellationToken = default)
-        => SendFriendControlPacketAsync(
+    public async Task<bool> SendQuickReactionAsync(FriendEntry friend, string reactionId, CancellationToken cancellationToken = default)
+        => (await SendQuickReactionDetailedAsync(friend, reactionId, cancellationToken).ConfigureAwait(false)).Succeeded;
+
+    public Task<TransportSendResult> SendQuickReactionDetailedAsync(FriendEntry friend, string reactionId, CancellationToken cancellationToken = default)
+    {
+        if (_localPresence.IsFocusing)
+        {
+            return Task.FromResult(TransportSendResult.Fail(FriendOperationErrorCodes.PomodoroFocusBlocked));
+        }
+
+        return SendFriendControlPacketDetailedAsync(
             friend,
             PacketType.QuickReaction,
             new QuickReactionPayload { ReactionId = reactionId },
             cancellationToken);
+    }
 
     public SnowballPeerStatus GetSnowballPeerStatus(string petId)
     {
@@ -337,53 +360,89 @@ public sealed partial class LanP2pTransport : ISocialTransport
             ? SnowballPeerStatus.Available : SnowballPeerStatus.Unsupported;
     }
 
-    public Task<bool> SendSnowballAsync(FriendEntry friend, Guid eventId, CancellationToken cancellationToken = default)
+    public async Task<bool> SendSnowballAsync(FriendEntry friend, Guid eventId, CancellationToken cancellationToken = default)
+        => (await SendSnowballDetailedAsync(friend, eventId, cancellationToken).ConfigureAwait(false)).Succeeded;
+
+    public Task<TransportSendResult> SendSnowballDetailedAsync(FriendEntry friend, Guid eventId, CancellationToken cancellationToken = default)
     {
+        if (_localPresence.IsFocusing)
+        {
+            return Task.FromResult(TransportSendResult.Fail(FriendOperationErrorCodes.PomodoroFocusBlocked));
+        }
+
         if (eventId == Guid.Empty || GetSnowballPeerStatus(friend.PetId) != SnowballPeerStatus.Available)
-            return Task.FromResult(false);
-        return SendFriendControlPacketAsync(friend, PacketType.PetInteraction,
+            return Task.FromResult(TransportSendResult.Fail());
+        return SendFriendControlPacketDetailedAsync(friend, PacketType.PetInteraction,
             new PetInteractionPayload { InteractionType = PetInteractionPayload.SnowballType, EventId = eventId.ToString("N") },
             cancellationToken);
     }
 
-    public Task<bool> SendPetInteractionAsync(FriendEntry friend, string interactionType, CancellationToken cancellationToken = default)
-        => SendFriendControlPacketAsync(
+    public async Task<bool> SendPetInteractionAsync(FriendEntry friend, string interactionType, CancellationToken cancellationToken = default)
+        => (await SendPetInteractionDetailedAsync(friend, interactionType, cancellationToken).ConfigureAwait(false)).Succeeded;
+
+    public Task<TransportSendResult> SendPetInteractionDetailedAsync(FriendEntry friend, string interactionType, CancellationToken cancellationToken = default)
+    {
+        if (_localPresence.IsFocusing)
+        {
+            return Task.FromResult(TransportSendResult.Fail(FriendOperationErrorCodes.PomodoroFocusBlocked));
+        }
+
+        return SendFriendControlPacketDetailedAsync(
             friend,
             PacketType.PetInteraction,
             new PetInteractionPayload { InteractionType = interactionType },
             cancellationToken);
+    }
 
     public async Task<bool> SetMusicFollowAsync(FriendEntry hostFriend, bool enable, CancellationToken cancellationToken = default)
+        => (await SetMusicFollowDetailedAsync(hostFriend, enable, cancellationToken).ConfigureAwait(false)).Succeeded;
+
+    public async Task<TransportSendResult> SetMusicFollowDetailedAsync(FriendEntry hostFriend, bool enable, CancellationToken cancellationToken = default)
     {
         if (!enable)
         {
             _musicReceiveWindows.TryRemove(hostFriend.PetId, out var previous);
-            return await SendFriendControlPacketAsync(hostFriend, PacketType.MusicFollowOff,
+            return await SendFriendControlPacketDetailedAsync(hostFriend, PacketType.MusicFollowOff,
                 new MusicFollowPayload { SubscriptionId = previous?.SubscriptionId ?? string.Empty },
                 cancellationToken).ConfigureAwait(false);
+        }
+
+        if (_localPresence.IsFocusing)
+        {
+            return TransportSendResult.Fail(FriendOperationErrorCodes.PomodoroFocusBlocked);
         }
 
         var session = new MusicSequenceWindow(Guid.NewGuid().ToString("N"));
         _musicReceiveWindows[hostFriend.PetId] = session;
         var localPort = (_musicUdp?.Client.LocalEndPoint as IPEndPoint)?.Port ?? _udpMusicPort;
-        var ok = await SendFriendControlPacketAsync(hostFriend, PacketType.MusicFollowOn,
+        var result = await SendFriendControlPacketDetailedAsync(hostFriend, PacketType.MusicFollowOn,
             new MusicFollowPayload { ListenerUdpPort = localPort, SubscriptionId = session.SubscriptionId },
             cancellationToken).ConfigureAwait(false);
-        if (!ok)
+        if (!result.Succeeded)
         {
             _musicReceiveWindows.TryRemove(new KeyValuePair<string, MusicSequenceWindow>(hostFriend.PetId, session));
         }
-        return ok;
+        return result;
     }
 
-    public Task<bool> SendGameEventAsync(FriendEntry friend, GameEventPayload payload, CancellationToken cancellationToken = default)
-        => SendFriendControlPacketAsync(
+    public async Task<bool> SendGameEventAsync(FriendEntry friend, GameEventPayload payload, CancellationToken cancellationToken = default)
+        => (await SendGameEventDetailedAsync(friend, payload, cancellationToken).ConfigureAwait(false)).Succeeded;
+
+    public Task<TransportSendResult> SendGameEventDetailedAsync(FriendEntry friend, GameEventPayload payload, CancellationToken cancellationToken = default)
+    {
+        if (_localPresence.IsFocusing && payload?.Action is not ("cancel" or "decline"))
+        {
+            return Task.FromResult(TransportSendResult.Fail(FriendOperationErrorCodes.PomodoroFocusBlocked));
+        }
+
+        return SendFriendControlPacketDetailedAsync(
             friend,
             PacketType.GameEvent,
-            payload,
+            payload!,
             cancellationToken);
+    }
 
-    private async Task<bool> SendFriendControlPacketAsync<TPayload>(
+    private async Task<TransportSendResult> SendFriendControlPacketDetailedAsync<TPayload>(
         FriendEntry friend,
         PacketType packetType,
         TPayload payload,
@@ -391,11 +450,11 @@ public sealed partial class LanP2pTransport : ISocialTransport
     {
         if (!TryResolveFriendEndpoint(friend, out var primaryIp, out var primaryPort))
         {
-            return false;
+            return TransportSendResult.Fail(FriendOperationErrorCodes.RecipientOffline);
         }
 
         var messageId = Guid.NewGuid().ToString("N");
-        var ack = await SendControlPacketAsync(
+        var outcome = await SendControlPacketWithOutcomeAsync(
             primaryIp,
             primaryPort,
             packetType,
@@ -403,9 +462,15 @@ public sealed partial class LanP2pTransport : ISocialTransport
             friend.PairSecretBase64,
             cancellationToken, friend.PetId, messageId: messageId).ConfigureAwait(false);
 
-        if (ack is { Accepted: true })
+        if (outcome.VerifiedAck is { Accepted: true })
         {
-            return true;
+            return TransportSendResult.Ok;
+        }
+
+        // 상대가 서명된 ACK로 명시적으로 거절한 경우(예: 뽀모도로 집중 중) 보조 IP로 재시도하지 않는다.
+        if (outcome.VerifiedAck is { Accepted: false } rejectedAck)
+        {
+            return TransportSendResult.Fail(rejectedAck.ErrorCode ?? outcome.ErrorCode);
         }
 
         // 다중 어댑터 환경에서 브로드캐스트 IP와 최근 TCP 연결 IP가 다를 때 보조 IP로 1회 폴백 재시도
@@ -431,23 +496,25 @@ public sealed partial class LanP2pTransport : ISocialTransport
         if (!string.IsNullOrWhiteSpace(fallbackIp) &&
             !string.Equals(fallbackIp, primaryIp, StringComparison.OrdinalIgnoreCase))
         {
-            var retryAck = await SendControlPacketAsync(
+            var retryOutcome = await SendControlPacketWithOutcomeAsync(
                 fallbackIp,
                 fallbackPort,
                 packetType,
                 payload,
                 friend.PairSecretBase64,
                 cancellationToken, friend.PetId, messageId: messageId).ConfigureAwait(false);
-            return retryAck is { Accepted: true };
+            return retryOutcome.VerifiedAck is { Accepted: true }
+                ? TransportSendResult.Ok
+                : TransportSendResult.Fail(retryOutcome.VerifiedAck?.ErrorCode ?? retryOutcome.ErrorCode);
         }
 
-        return false;
+        return TransportSendResult.Fail(outcome.ErrorCode);
     }
 
     public async ValueTask PublishMusicFrameAsync(MusicFrameData frame, CancellationToken cancellationToken = default)
     {
         var udp = _musicUdp;
-        if (!IsRunning || udp is null || _musicSubscribers.IsEmpty)
+        if (!IsRunning || udp is null || _musicSubscribers.IsEmpty || _localPresence.IsFocusing)
         {
             return;
         }
@@ -535,6 +602,7 @@ public sealed partial class LanP2pTransport : ISocialTransport
             Level = presence.Level,
             IsMusicActive = presence.IsMusicActive,
             IsSleeping = presence.IsSleeping,
+            IsFocusing = presence.IsFocusing,
             TcpPort = _boundTcpPort,
             TimestampUtc = DateTimeOffset.UtcNow
         };

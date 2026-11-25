@@ -76,6 +76,42 @@ public sealed class AudioAndSoloTests
         Assert.Equal(66, profile.SoloProgress.Coins);
     }
 
+    [Fact]
+    public void Pomodoro_LimitsDurationAndLocksUntilReset()
+    {
+        var timer = new PomodoroTimerService();
+        try
+        {
+            timer.ConfigureDurations(0);
+            Assert.Equal(1, timer.FocusMinutes);
+            timer.ConfigureDurations(90);
+            Assert.Equal(60, timer.FocusMinutes);
+            timer.ConfigureDurations(37, 7);
+            Assert.Equal(TimeSpan.FromMinutes(37), timer.Remaining);
+            timer.StartOrPause();
+            Assert.True(timer.IsDurationLocked);
+            Assert.True(timer.IsFocusActive);
+            timer.ConfigureDurations(12, 3);
+            Assert.Equal(37, timer.FocusMinutes);
+            Assert.Equal(7, timer.BreakMinutes);
+            timer.StartOrPause();
+            Assert.False(timer.IsRunning);
+            timer.ConfigureDurations(12, 3);
+            Assert.Equal(37, timer.FocusMinutes);
+            Assert.True(timer.IsDurationLocked);
+            timer.Reset();
+            Assert.False(timer.IsDurationLocked);
+            Assert.False(timer.IsFocusActive);
+            timer.ConfigureDurations(12, 3);
+            Assert.Equal(12, timer.FocusMinutes);
+            Assert.Equal(TimeSpan.FromMinutes(12), timer.Remaining);
+        }
+        finally
+        {
+            timer.Reset();
+        }
+    }
+
     private static float[] GenerateSineWave(double frequencyHz, int sampleRate, int length, float amplitude)
     {
         var buffer = new float[length];

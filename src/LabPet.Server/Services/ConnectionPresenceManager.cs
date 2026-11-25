@@ -85,6 +85,7 @@ public sealed class ConnectionPresenceManager(ServerOptions options)
             Level = Math.Max(1, update.Level),
             IsMusicActive = update.IsMusicActive,
             IsSleeping = update.IsSleeping,
+            IsFocusing = update.IsFocusing,
             AppVersion = string.IsNullOrWhiteSpace(update.AppVersion) ? "0.1.0" : update.AppVersion.Trim(),
             ProtocolVersion = update.ProtocolVersion,
             KnownFriendPetIds = update.KnownFriendPetIds ?? []
@@ -109,7 +110,8 @@ public sealed class ConnectionPresenceManager(ServerOptions options)
             var anyChanged = publicChanged
                 || prev is null
                 || prev.IsMusicActive != copy.IsMusicActive
-                || prev.IsSleeping != copy.IsSleeping;
+                || prev.IsSleeping != copy.IsSleeping
+                || prev.IsFocusing != copy.IsFocusing;
 
             session.Presence = copy;
             return (anyChanged, publicChanged);
@@ -286,6 +288,7 @@ public sealed class ConnectionPresenceManager(ServerOptions options)
             Level = p.Level,
             IsMusicActive = includePrivateStates && p.IsMusicActive,
             IsSleeping = includePrivateStates && p.IsSleeping,
+            IsFocusing = includePrivateStates && p.IsFocusing,
             AppVersion = p.AppVersion,
             ProtocolVersion = p.ProtocolVersion
         };

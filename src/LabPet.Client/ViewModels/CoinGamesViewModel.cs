@@ -453,7 +453,7 @@ public sealed partial class CoinGamesViewModel : ObservableObject, IDisposable
         $"{LabPet.Client.Formatting.CompactNumberFormatter.FormatExact((long)SoloLadderBetCoins * 250L / 100L)} 코인";
 
     public bool CanEditLadderSetup => !IsLadderRoomOpen && !IsLadderAnimating;
-    public bool CanOpenLadderRoom => HasOnlineFriends && SelectedLadderInviteeCount > 0 && IsLadderPrizeAllocationMatched && !IsLadderRoomOpen && !IsLadderAnimating;
+    public bool CanOpenLadderRoom => !_social.IsLocalFocusing && HasOnlineFriends && SelectedLadderInviteeCount > 0 && IsLadderPrizeAllocationMatched && !IsLadderRoomOpen && !IsLadderAnimating;
     public bool CanCancelLadderRoom => IsLadderRoomOpen && !IsLadderAnimating && !_ladderStarting && _ladderPreparedStart is null && _ladderRoom?.Phase != LadderRoomPhase.Running;
     public bool CanShareLadderResult => !IsLadderAnimating && _lastLadderResults.Count > 0;
     public int SelectedLadderInviteeCount => LadderFriendPicker.SelectedCount;
@@ -644,7 +644,14 @@ public sealed partial class CoinGamesViewModel : ObservableObject, IDisposable
         NotifyLadderPrizeAllocationChanged();
     }
 
-    private void OnSocialStateChanged(object? sender, EventArgs e) => RunOnUi(RefreshOnlineFriends);
+    private void OnSocialStateChanged(object? sender, EventArgs e) => RunOnUi(() =>
+    {
+        RefreshOnlineFriends();
+        if (_social.IsLocalFocusing)
+        {
+            _ = CancelPendingInvitesForPomodoroFocusAsync();
+        }
+    });
 
     private void OnSocialGameEvent(object? sender, GameEventReceivedEventArgs e)
         => RunOnUi(() =>
@@ -1081,6 +1088,13 @@ public sealed partial class CoinGamesViewModel : ObservableObject, IDisposable
             return;
         }
 
+        if (_social.IsLocalFocusing)
+        {
+            RpsStatusText = FriendOperationErrorCodes.PomodoroFocusMessage;
+            GameNotification?.Invoke(this, FriendOperationErrorCodes.PomodoroFocusMessage);
+            return;
+        }
+
         if (IsAnyGameBusy || HasIncomingInvite)
         {
             RpsStatusText = DescribeInviteReason("busy");
@@ -1090,6 +1104,13 @@ public sealed partial class CoinGamesViewModel : ObservableObject, IDisposable
         if (SelectedRpsFriend is null)
         {
             RpsStatusText = _rpsInviteTargetId is null ? "대결할 온라인 친구를 먼저 선택해 주세요." : DescribeInviteReason("offline");
+            return;
+        }
+
+        if (_social.IsPeerFocusing(SelectedRpsFriend.Friend.PetId))
+        {
+            RpsStatusText = FriendOperationErrorCodes.PomodoroFocusMessage;
+            GameNotification?.Invoke(this, FriendOperationErrorCodes.PomodoroFocusMessage);
             return;
         }
 
@@ -1246,6 +1267,11 @@ public sealed partial class CoinGamesViewModel : ObservableObject, IDisposable
             if (DateTimeOffset.UtcNow >= exchange.Deadline)
             {
                 await EndInviteAsync(exchange, GameInviteStatus.Expired, "expired", Decline);
+                return;
+            }
+            if (_social.IsLocalFocusing)
+            {
+                await EndInviteAsync(exchange, GameInviteStatus.Declined, "pomodoro_focus", Decline);
                 return;
             }
             if (IsAnyGameBusy)

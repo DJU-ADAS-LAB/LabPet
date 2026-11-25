@@ -16,6 +16,7 @@ using LabPet.Client.Social;
 using LabPet.Client.Solo;
 using LabPet.Client.ViewModels;
 using LabPet.Shared.Models;
+using LabPet.Shared.Transport;
 
 namespace LabPet.Client.Views;
 
@@ -159,10 +160,12 @@ public partial class PetWindow : Window, IMessageBubbleTarget
 
         _viewModel.ProfileUpdated += OnProfileUpdated;
         _viewModel.PetScaleChanged += OnPetScaleChanged;
-        _viewModel.ClickThroughChanged += OnClickThroughChanged;
+        // 클릭 투과 집중 모드 UI 제거에 따라 관련 구독 주석 처리
+        // _viewModel.ClickThroughChanged += OnClickThroughChanged;
         _viewModel.ResetPositionRequested += OnResetPositionRequested;
         _viewModel.ExitRequested += OnExitRequested;
         _activityHook.KeyTyped += OnGlobalKeyTyped;
+        _pomodoro.FocusStateChanged += OnPomodoroFocusStateChanged;
         _pomodoro.FocusCompletedWithDuration += OnPomodoroFocusCompleted;
         _pomodoro.BreakCompleted += OnPomodoroBreakCompleted;
         _progression.Economy.LevelUpCompleted += OnEconomyLevelUpCompleted;
@@ -184,7 +187,8 @@ public partial class PetWindow : Window, IMessageBubbleTarget
         SourceInitialized += (_, _) =>
         {
             Win32WindowHelper.ApplyToolWindowStyle(this);
-            Win32WindowHelper.SetClickThrough(this, _viewModel.IsClickThroughEnabled);
+            // 클릭 투과 집중 모드 UI 제거에 따라 관련 호출 주석 처리
+            // Win32WindowHelper.SetClickThrough(this, _viewModel.IsClickThroughEnabled);
         };
 
         _audioAnalyzer.Start();
@@ -231,10 +235,12 @@ public partial class PetWindow : Window, IMessageBubbleTarget
             _viewModel.DisposeBubbles();
             _viewModel.ProfileUpdated -= OnProfileUpdated;
             _viewModel.PetScaleChanged -= OnPetScaleChanged;
-            _viewModel.ClickThroughChanged -= OnClickThroughChanged;
+            // 클릭 투과 집중 모드 UI 제거에 따라 관련 구독 해제 주석 처리
+            // _viewModel.ClickThroughChanged -= OnClickThroughChanged;
             _viewModel.ResetPositionRequested -= OnResetPositionRequested;
             _viewModel.ExitRequested -= OnExitRequested;
             _activityHook.KeyTyped -= OnGlobalKeyTyped;
+            _pomodoro.FocusStateChanged -= OnPomodoroFocusStateChanged;
             _pomodoro.FocusCompletedWithDuration -= OnPomodoroFocusCompleted;
             _pomodoro.BreakCompleted -= OnPomodoroBreakCompleted;
             _progression.Economy.LevelUpCompleted -= OnEconomyLevelUpCompleted;
@@ -274,7 +280,7 @@ public partial class PetWindow : Window, IMessageBubbleTarget
             _animator.AttachRig(rig, profile.Appearance.AccentColorHex);
         }
 
-        _ = _social.UpdateLocalPresenceAsync(profile, _lastReportedMusicActive, _isLocalSleeping);
+        _ = _social.UpdateLocalPresenceAsync(profile, _lastReportedMusicActive, _isLocalSleeping, _pomodoro.IsFocusActive);
     }
 
     internal static Size ComputeViewportSize(double scale)
@@ -357,12 +363,15 @@ public partial class PetWindow : Window, IMessageBubbleTarget
 
     private void PetViewport_MouseEnter(object sender, MouseEventArgs e)
     {
-        if (_viewModel.IsClickThroughEnabled || _isDraggingWindow)
+        // 클릭 투과 집중 모드 UI 제거에 따라 _viewModel.IsClickThroughEnabled 분기 주석 처리
+        // if (_viewModel.IsClickThroughEnabled || _isDraggingWindow)
+        if (_isDraggingWindow)
         {
             return;
         }
 
         CancelOverlayCloseUnlessEditorLeft();
+        _viewModel.RefreshPomodoroOverlayState();
         _viewModel.RefreshQuickOverlayEntries();
         FriendOverlayPopup.IsOpen = true;
         SetPetControlsVisible(true);
@@ -571,19 +580,20 @@ public partial class PetWindow : Window, IMessageBubbleTarget
         }
     }
 
-    private void OnClickThroughChanged(object? sender, bool enable)
-    {
-        Win32WindowHelper.SetClickThrough(this, enable);
-        if (enable)
-        {
-            if (_isPointerPressed)
-            {
-                EndPetGrab();
-                PetViewport.ReleaseMouseCapture();
-            }
-            ClosePetOverlays();
-        }
-    }
+    // 클릭 투과 집중 모드 UI 제거에 따라 관련 핸들러 주석 처리
+    // private void OnClickThroughChanged(object? sender, bool enable)
+    // {
+    //     Win32WindowHelper.SetClickThrough(this, enable);
+    //     if (enable)
+    //     {
+    //         if (_isPointerPressed)
+    //         {
+    //             EndPetGrab();
+    //             PetViewport.ReleaseMouseCapture();
+    //         }
+    //         ClosePetOverlays();
+    //     }
+    // }
 
     private void OnResetPositionRequested(object? sender, EventArgs e)
     {
@@ -599,10 +609,15 @@ public partial class PetWindow : Window, IMessageBubbleTarget
     private void TrayIcon_TrayLeftMouseDown(object sender, RoutedEventArgs e)
     {
         // 트레이 좌클릭 시 펫 창을 활성화하고 인사 말풍선 표시
-        if (_viewModel.IsClickThroughEnabled)
+        if (_pomodoro.IsFocusActive)
         {
-            _viewModel.ShowBubble("집중 모드 ON · 트레이 우클릭으로 해제", 2400);
+            _viewModel.ShowBubble(FriendOperationErrorCodes.PomodoroFocusMessage, 2400);
         }
+        // 클릭 투과 집중 모드 UI 제거에 따라 관련 분기 주석 처리
+        // else if (_viewModel.IsClickThroughEnabled)
+        // {
+        //     _viewModel.ShowBubble("집중 모드 ON · 트레이 우클릭으로 해제", 2400);
+        // }
         else
         {
             _animator.TriggerPetReaction();
@@ -641,6 +656,17 @@ public partial class PetWindow : Window, IMessageBubbleTarget
         await _viewModel.SaveCurrentProfileAsync();
     }
 
+    private void OnPomodoroFocusStateChanged(object? sender, bool isFocusing)
+    {
+        if (isFocusing)
+        {
+            _viewModel.QuickMessageTarget = null;
+        }
+
+        _ = _social.UpdateLocalPresenceAsync(_viewModel.CurrentProfile, _lastReportedMusicActive, _isLocalSleeping, isFocusing);
+        _viewModel.RefreshQuickOverlayEntries();
+    }
+
     private async void OnPomodoroFocusCompleted(object? sender, int focusMinutes)
     {
         var reward = _progression.RecordPomodoroCompletedDetailed(_viewModel.CurrentProfile, focusMinutes);
@@ -661,7 +687,7 @@ public partial class PetWindow : Window, IMessageBubbleTarget
             _animator.TriggerPetReaction();
             _viewModel.ShowBubble($"레벨 업! Lv.{e.NewLevel} 달성!", 3200);
             await _viewModel.SaveCurrentProfileAsync();
-            _ = _social.UpdateLocalPresenceAsync(_viewModel.CurrentProfile, _lastReportedMusicActive, _isLocalSleeping);
+            _ = _social.UpdateLocalPresenceAsync(_viewModel.CurrentProfile, _lastReportedMusicActive, _isLocalSleeping, _pomodoro.IsFocusActive);
         });
     }
 
@@ -796,7 +822,7 @@ public partial class PetWindow : Window, IMessageBubbleTarget
         if (localAudio.IsMusicActive != _lastReportedMusicActive)
         {
             _lastReportedMusicActive = localAudio.IsMusicActive;
-            _ = _social.UpdateLocalPresenceAsync(_viewModel.CurrentProfile, localAudio.IsMusicActive, _isLocalSleeping);
+            _ = _social.UpdateLocalPresenceAsync(_viewModel.CurrentProfile, localAudio.IsMusicActive, _isLocalSleeping, _pomodoro.IsFocusActive);
         }
 
         // 호스트로서 구독 중인 친구들에게 30Hz(약 33ms 간격) 경량 오디오 프레임 송출
@@ -840,7 +866,7 @@ public partial class PetWindow : Window, IMessageBubbleTarget
         _isLocalSleeping = isSleeping;
         _viewModel.IsSleeping = isSleeping;
         _animator.SetSleeping(isSleeping);
-        _ = _social.UpdateLocalPresenceAsync(_viewModel.CurrentProfile, _lastReportedMusicActive, isSleeping);
+        _ = _social.UpdateLocalPresenceAsync(_viewModel.CurrentProfile, _lastReportedMusicActive, isSleeping, _pomodoro.IsFocusActive);
     }
 
     private void ComputeNormalizedLookDirection(out double lookX, out double lookY)
@@ -926,11 +952,18 @@ public partial class PetWindow : Window, IMessageBubbleTarget
         var wasDragging = _isDraggingWindow;
         EndPetGrab();
         PetViewport.ReleaseMouseCapture();
-        if (!wasDragging && _social.TryReservePetInteraction())
+        if (!wasDragging)
         {
-            // 이동 거리 5px 이하: 쓰다듬기 3D 반응
-            _animator.TriggerPetReaction();
-            _viewModel.ShowBubble($"{_viewModel.PetName}(이)가 기분 좋아해요!", 2000);
+            if (_pomodoro.IsFocusActive)
+            {
+                _viewModel.ShowBubble(FriendOperationErrorCodes.PomodoroFocusMessage, 2000);
+            }
+            else if (_social.TryReservePetInteraction())
+            {
+                // 이동 거리 5px 이하: 쓰다듬기 3D 반응
+                _animator.TriggerPetReaction();
+                _viewModel.ShowBubble($"{_viewModel.PetName}(이)가 기분 좋아해요!", 2000);
+            }
         }
 
         e.Handled = true;
@@ -974,7 +1007,7 @@ public partial class PetWindow : Window, IMessageBubbleTarget
         if (_lastHorizontalDirection != 0 && direction != _lastHorizontalDirection)
         {
             _shakeReversalCount++;
-            if (_shakeReversalCount >= 3 && !_dizzyTriggeredDuringDrag)
+            if (_shakeReversalCount >= 3 && !_dizzyTriggeredDuringDrag && !_pomodoro.IsFocusActive)
             {
                 _dizzyTriggeredDuringDrag = true;
                 _animator.TriggerDizzyReaction();

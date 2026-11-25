@@ -5,6 +5,7 @@ using LabPet.Client.Games;
 using LabPet.Client.Solo;
 using LabPet.Shared.Models;
 using LabPet.Shared.Protocol;
+using LabPet.Shared.Transport;
 
 namespace LabPet.Client.ViewModels;
 
@@ -83,6 +84,7 @@ public sealed partial class CoinGamesViewModel
         "invalid" => "유효하지 않은 게임 초대입니다.",
         "upgrade" => "친구와 게임을 하려면 양쪽 앱을 업데이트해야 합니다.",
         "declined" => "상대가 게임 초대를 거절했습니다.",
+        "pomodoro_focus" => FriendOperationErrorCodes.PomodoroFocusMessage,
         _ => "게임 초대가 취소되었습니다."
     };
 
@@ -110,7 +112,19 @@ public sealed partial class CoinGamesViewModel
     {
         try
         {
-            var delivered = await _social.SendGameEventAsync(exchange.Friend, CreateInvitePacket(exchange, action));
+            var result = await _social.SendGameEventDetailedAsync(exchange.Friend, CreateInvitePacket(exchange, action));
+            if (result.IsPomodoroFocusBlocked)
+            {
+                exchange.TerminalDelivered = true;
+                if (exchange.Outgoing && IsInviteLive(exchange.Status))
+                {
+                    RunOnUi(() => _ = EndInviteForPomodoroFocusAsync(exchange));
+                }
+
+                return;
+            }
+
+            var delivered = result.Succeeded;
             if (action == Offer && delivered)
                 exchange.TransportAcknowledged = true;
             if (action == exchange.TerminalPacket && delivered)
@@ -119,6 +133,49 @@ public sealed partial class CoinGamesViewModel
         catch (Exception ex) when (ex is IOException or OperationCanceledException or InvalidOperationException)
         {
             System.Diagnostics.Trace.TraceWarning("게임 초대 전송 실패 ({0}): {1}", action, ex.Message);
+        }
+    }
+
+    private async Task EndInviteForPomodoroFocusAsync(InviteExchange exchange)
+    {
+        await _inviteGate.WaitAsync();
+        try
+        {
+            if (_disposed || !IsInviteLive(exchange.Status))
+            {
+                return;
+            }
+
+            await EndInviteAsync(exchange, GameInviteStatus.Declined, "pomodoro_focus", terminalPacket: null);
+        }
+        finally
+        {
+            _inviteGate.Release();
+        }
+    }
+
+    private async Task CancelPendingInvitesForPomodoroFocusAsync()
+    {
+        await _inviteGate.WaitAsync();
+        try
+        {
+            if (_disposed)
+            {
+                return;
+            }
+
+            foreach (var exchange in _inviteExchanges.Values.Where(e => IsInviteLive(e.Status)).ToArray())
+            {
+                await EndInviteAsync(
+                    exchange,
+                    exchange.Outgoing ? GameInviteStatus.Canceled : GameInviteStatus.Declined,
+                    "pomodoro_focus",
+                    exchange.Outgoing ? Cancel : Decline);
+            }
+        }
+        finally
+        {
+            _inviteGate.Release();
         }
     }
 
@@ -310,6 +367,7 @@ public sealed partial class CoinGamesViewModel
         exchange.TerminalPacket = terminalPacket;
         var message = (status, reason, terminalPacket) switch
         {
+            (_, "pomodoro_focus", _) => FriendOperationErrorCodes.PomodoroFocusMessage,
             (GameInviteStatus.Declined, _, Decline) => "게임 초대를 거절했습니다.",
             (GameInviteStatus.Expired, _, Decline) => "초대 시간이 만료되었습니다.",
             (_, "canceled", Cancel) => "게임 초대를 취소했습니다.",
@@ -366,6 +424,8 @@ public sealed partial class CoinGamesViewModel
             IsRpsWaitingResponse = false;
             RpsPhase = RpsPhase.Setup;
             RpsStatusText = message;
+            if (exchange.Reason == "pomodoro_focus")
+                GameNotification?.Invoke(this, message);
         }
         else if (exchange.Game == TypingSprintEngine.GameTypeId && IsTypingWaitingResponse && _typingSessionId == exchange.Session)
         {
@@ -375,11 +435,15 @@ public sealed partial class CoinGamesViewModel
             IsTypingWaitingResponse = false;
             TypingPhase = TypingPhase.Setup;
             TypingStatusText = message;
+            if (exchange.Reason == "pomodoro_focus")
+                GameNotification?.Invoke(this, message);
         }
         else if (exchange.Game == LabLadderEngine.GameTypeId && IsLadderHost && _ladderRoom?.SessionId == exchange.Session
             && _ladderPendingInviteeIds.Contains(exchange.Friend.PetId))
         {
             await HandleLadderPendingInviteEndedAsync(exchange.Friend.PetId, exchange.Status, exchange.Reason ?? string.Empty, message);
+            if (exchange.Reason == "pomodoro_focus")
+                GameNotification?.Invoke(this, message);
         }
     }
 
@@ -405,6 +469,11 @@ public sealed partial class CoinGamesViewModel
             var key = InviteKey(friend.PetId, packet.SessionId);
             if (packet.Action == Offer)
             {
+                if (_social.IsLocalFocusing)
+                {
+                    return true;
+                }
+
                 RegisterIncomingOffer(friend, name, packet, key);
                 return true;
             }

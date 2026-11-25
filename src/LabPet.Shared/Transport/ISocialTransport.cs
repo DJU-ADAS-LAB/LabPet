@@ -60,14 +60,30 @@ public interface ISocialTransport : IAsyncDisposable
     bool HasPendingOutgoingRequest(string peerPetId) => false;
 
     Task<bool> SendBubbleMessageAsync(FriendEntry friend, string message, CancellationToken cancellationToken = default);
+    async Task<TransportSendResult> SendBubbleMessageDetailedAsync(FriendEntry friend, string message, CancellationToken cancellationToken = default)
+        => new(await SendBubbleMessageAsync(friend, message, cancellationToken).ConfigureAwait(false));
+
     Task<bool> SendQuickReactionAsync(FriendEntry friend, string reactionId, CancellationToken cancellationToken = default);
+    async Task<TransportSendResult> SendQuickReactionDetailedAsync(FriendEntry friend, string reactionId, CancellationToken cancellationToken = default)
+        => new(await SendQuickReactionAsync(friend, reactionId, cancellationToken).ConfigureAwait(false));
+
     SnowballPeerStatus GetSnowballPeerStatus(string petId) => SnowballPeerStatus.Unsupported;
     Task<bool> SendSnowballAsync(FriendEntry friend, Guid eventId, CancellationToken cancellationToken = default)
         => Task.FromResult(false);
+    async Task<TransportSendResult> SendSnowballDetailedAsync(FriendEntry friend, Guid eventId, CancellationToken cancellationToken = default)
+        => new(await SendSnowballAsync(friend, eventId, cancellationToken).ConfigureAwait(false));
 
     Task<bool> SendPetInteractionAsync(FriendEntry friend, string interactionType, CancellationToken cancellationToken = default);
+    async Task<TransportSendResult> SendPetInteractionDetailedAsync(FriendEntry friend, string interactionType, CancellationToken cancellationToken = default)
+        => new(await SendPetInteractionAsync(friend, interactionType, cancellationToken).ConfigureAwait(false));
+
     Task<bool> SetMusicFollowAsync(FriendEntry hostFriend, bool enable, CancellationToken cancellationToken = default);
+    async Task<TransportSendResult> SetMusicFollowDetailedAsync(FriendEntry hostFriend, bool enable, CancellationToken cancellationToken = default)
+        => new(await SetMusicFollowAsync(hostFriend, enable, cancellationToken).ConfigureAwait(false));
+
     Task<bool> SendGameEventAsync(FriendEntry friend, GameEventPayload payload, CancellationToken cancellationToken = default);
+    async Task<TransportSendResult> SendGameEventDetailedAsync(FriendEntry friend, GameEventPayload payload, CancellationToken cancellationToken = default)
+        => new(await SendGameEventAsync(friend, payload, cancellationToken).ConfigureAwait(false));
 
     /// <summary>구독 중인 팔로워들에게만 30Hz 경량 오디오 프레임을 전송한다.</summary>
     ValueTask PublishMusicFrameAsync(MusicFrameData frame, CancellationToken cancellationToken = default);

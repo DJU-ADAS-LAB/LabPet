@@ -185,6 +185,16 @@ public partial class App : Application
         social.StateChanged += OnSnowballSocialStateChanged;
         _snowballs = _serviceProvider.GetRequiredService<SnowballInteractionService>();
         _snowballs.Received += OnSnowballReceived;
+        _snowballs.InteractionRejected += (_, msg) => Dispatcher.BeginInvoke(() => petVm.ShowBubble(msg, 2400));
+
+        var pomodoro = _serviceProvider.GetRequiredService<PomodoroTimerService>();
+        pomodoro.FocusStateChanged += (_, isFocusing) =>
+        {
+            if (isFocusing)
+            {
+                Dispatcher.BeginInvoke(DismissAllVisitorWindowsForFocus);
+            }
+        };
     }
 
     internal bool TryReceiveSnowball(Guid senderPetId, Guid eventId, LabPet.Shared.Models.PetAppearance appearance)
@@ -259,6 +269,12 @@ public partial class App : Application
             return;
         }
 
+        if (_social is { } social && social.IsInteractionBlocked(friend.PetId))
+        {
+            petVm.ShowBubble(FriendOperationErrorCodes.PomodoroFocusMessage, 2400);
+            return;
+        }
+
         var visitor = new VisitorPetWindow(
             friend,
             appearance,
@@ -288,6 +304,20 @@ public partial class App : Application
             {
                 visitor.CloseChatComposer();
             }
+        }
+    }
+
+    private void DismissAllVisitorWindowsForFocus()
+    {
+        if (_visitorWindows.Count == 0)
+        {
+            return;
+        }
+
+        foreach (var pair in _visitorWindows.ToArray())
+        {
+            RemoveVisitorWindow(pair.Key);
+            pair.Value.Close();
         }
     }
 

@@ -106,11 +106,13 @@ public sealed class HubNavigationAndLifecycleTests : IDisposable
             Assert.DoesNotContain(trayHeaders, h => h.Contains("크기 조절", StringComparison.Ordinal));
             Assert.DoesNotContain(petHeaders, h => h.Contains("방화벽", StringComparison.Ordinal));
             Assert.DoesNotContain(trayHeaders, h => h.Contains("방화벽", StringComparison.Ordinal));
+            Assert.DoesNotContain(petHeaders, h => h.Contains("클릭 투과", StringComparison.Ordinal));
+            Assert.DoesNotContain(trayHeaders, h => h.Contains("클릭 투과", StringComparison.Ordinal));
 
             foreach (var required in new[]
             {
                 "LabPet 열기", "외형", "친구", "성장", "뽀모도로", "코인 게임",
-                "크리스마스 트리", "클릭 투과 집중 모드", "기본 위치로 복귀",
+                "크리스마스 트리", "기본 위치로 복귀",
                 "설정", "업데이트 확인", "LabPet 종료"
             })
             {

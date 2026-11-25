@@ -15,6 +15,7 @@ using LabPet.Client.Rendering;
 using LabPet.Client.Social;
 using LabPet.Client.ViewModels;
 using LabPet.Shared.Models;
+using LabPet.Shared.Transport;
 
 namespace LabPet.Client.Views;
 
@@ -1323,6 +1324,10 @@ public partial class VisitorPetWindow : Window, IMessageBubbleTarget
             }
 
             ApplyFriendSleepState(livePeer?.IsSleeping ?? true);
+            if (_social.IsInteractionBlocked(_friend.PetId))
+            {
+                CloseChatComposer();
+            }
         });
     }
 
@@ -1512,6 +1517,12 @@ public partial class VisitorPetWindow : Window, IMessageBubbleTarget
             return;
         }
 
+        if (_social.IsInteractionBlocked(_friend.PetId))
+        {
+            ShowVisitorBubble(FriendOperationErrorCodes.PomodoroFocusMessage, 2200);
+            return;
+        }
+
         _beforeChatComposerOpen?.Invoke(this);
         VisitorChatInput.ToolTip = $"{SocialCoordinatorService.FormatDisplayName(_friend.OwnerName, _friend.PetName)}에게 메시지";
         _composerCloseTimer.Stop();
@@ -1602,19 +1613,30 @@ public partial class VisitorPetWindow : Window, IMessageBubbleTarget
             return false;
         }
 
+        if (_social.IsInteractionBlocked(_friend.PetId))
+        {
+            CloseChatComposer();
+            ShowVisitorBubble(FriendOperationErrorCodes.PomodoroFocusMessage, 2200);
+            return false;
+        }
+
         var revision = _composerDraftVersion;
         _isSendingComposerMessage = true;
         try
         {
-            var sent = await _social.SendBubbleMessageAsync(_friend, text);
+            var result = await _social.SendBubbleMessageDetailedAsync(_friend, text);
             if (_isClosingOrClosed)
             {
-                return sent;
+                return result.Succeeded;
             }
 
-            if (!sent)
+            if (!result.Succeeded)
             {
-                ShowVisitorBubble("메시지 전송 실패", 2200);
+                ShowVisitorBubble(
+                    result.IsPomodoroFocusBlocked
+                        ? FriendOperationErrorCodes.PomodoroFocusMessage
+                        : "메시지 전송 실패",
+                    2200);
                 return false;
             }
 
@@ -1654,7 +1676,12 @@ public partial class VisitorPetWindow : Window, IMessageBubbleTarget
 
     private async void PetFriendMenu_Click(object sender, RoutedEventArgs e)
     {
-        if (await _social.SendPetInteractionAsync(_friend) == PetInteractionSendResult.Unavailable)
+        var result = await _social.SendPetInteractionAsync(_friend);
+        if (result == PetInteractionSendResult.PomodoroFocusBlocked)
+        {
+            ShowVisitorBubble(FriendOperationErrorCodes.PomodoroFocusMessage, 2200);
+        }
+        else if (result == PetInteractionSendResult.Unavailable)
         {
             ShowVisitorBubble("인사하기를 보내지 못했어요", 1800);
         }
@@ -1665,25 +1692,39 @@ public partial class VisitorPetWindow : Window, IMessageBubbleTarget
         var isFollowing = string.Equals(_social.FollowingHostPetId, _friend.PetId, StringComparison.OrdinalIgnoreCase);
         var livePeer = _social.DiscoveredPeers.FirstOrDefault(p => string.Equals(p.PetId, _friend.PetId, StringComparison.OrdinalIgnoreCase));
         var isMusicActive = livePeer?.IsMusicActive ?? false;
+        var isFocusBlocked = _social.IsInteractionBlocked(_friend.PetId);
+
+        PetFriendMenuItem.IsEnabled = !isFocusBlocked && livePeer is not null && !livePeer.RequiresUpdate;
+        PetFriendMenuItem.ToolTip = isFocusBlocked ? FriendOperationErrorCodes.PomodoroFocusMessage : null;
 
         if (isFollowing)
         {
             MusicFollowMenuItem.Header = "⏹  노래 따라하기 중지";
+            MusicFollowMenuItem.ToolTip = null;
             MusicFollowMenuItem.IsEnabled = true;
+        }
+        else if (isFocusBlocked)
+        {
+            MusicFollowMenuItem.Header = $"✏️  {FriendOperationErrorCodes.PomodoroFocusMessage}";
+            MusicFollowMenuItem.ToolTip = FriendOperationErrorCodes.PomodoroFocusMessage;
+            MusicFollowMenuItem.IsEnabled = false;
         }
         else if (livePeer is null)
         {
             MusicFollowMenuItem.Header = "🎵  오프라인";
+            MusicFollowMenuItem.ToolTip = null;
             MusicFollowMenuItem.IsEnabled = false;
         }
         else if (isMusicActive)
         {
             MusicFollowMenuItem.Header = "🎵  노래 따라하기 시작";
+            MusicFollowMenuItem.ToolTip = null;
             MusicFollowMenuItem.IsEnabled = true;
         }
         else
         {
             MusicFollowMenuItem.Header = "🎵  음악 재생 중이 아님";
+            MusicFollowMenuItem.ToolTip = null;
             MusicFollowMenuItem.IsEnabled = false;
         }
     }
@@ -1691,14 +1732,18 @@ public partial class VisitorPetWindow : Window, IMessageBubbleTarget
     private async void ToggleMusicFollowMenu_Click(object sender, RoutedEventArgs e)
     {
         var wasFollowing = string.Equals(_social.FollowingHostPetId, _friend.PetId, StringComparison.OrdinalIgnoreCase);
-        var ok = await _social.ToggleMusicFollowAsync(_friend);
-        if (ok)
+        var result = await _social.ToggleMusicFollowDetailedAsync(_friend);
+        if (result.Succeeded)
         {
             ShowVisitorBubble(wasFollowing ? "노래 따라하기 중지" : "노래 따라하기 시작!", 2000);
         }
         else
         {
-            ShowVisitorBubble("현재 음악 재생 중이 아니에요", 2000);
+            ShowVisitorBubble(
+                result.IsPomodoroFocusBlocked
+                    ? FriendOperationErrorCodes.PomodoroFocusMessage
+                    : "현재 음악 재생 중이 아니에요",
+                2200);
         }
     }
 

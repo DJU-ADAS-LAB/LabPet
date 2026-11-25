@@ -20,6 +20,9 @@ public sealed partial class PeerListItemViewModel : ObservableObject
     public bool IsFriend => Snapshot.IsFriend;
     public bool IsMusicActive => Snapshot.IsMusicActive;
     public bool IsSleeping => Snapshot.IsSleeping;
+    public bool IsFocusing => Snapshot.IsFocusing;
+    public bool IsLocalFocusing { get; }
+    public bool IsFocusBlocked => IsFocusing || IsLocalFocusing;
     public bool RequiresUpdate => Snapshot.RequiresUpdate;
 
     [ObservableProperty, NotifyPropertyChangedFor(nameof(CanSendFriendRequest), nameof(FriendRequestButtonText))]
@@ -29,7 +32,8 @@ public sealed partial class PeerListItemViewModel : ObservableObject
     [ObservableProperty, NotifyPropertyChangedFor(nameof(FriendRequestButtonText))]
     private bool _canRetryFriendRequest;
 
-    public bool CanSendFriendRequest => !Snapshot.IsFriend && !Snapshot.RequiresUpdate && !IsSendingFriendRequest && !IsFriendRequestPending;
+    public bool CanSendFriendRequest => !Snapshot.IsFriend && !Snapshot.RequiresUpdate && !IsFocusBlocked && !IsSendingFriendRequest && !IsFriendRequestPending;
+    public string? FriendRequestTooltip => IsFocusBlocked ? FriendOperationErrorCodes.PomodoroFocusMessage : null;
     public string FriendRequestButtonText => IsSendingFriendRequest
         ? "전송 중..."
         : IsFriendRequestPending
@@ -53,9 +57,11 @@ public sealed partial class PeerListItemViewModel : ObservableObject
     public PeerListItemViewModel(
         PeerSnapshot snapshot,
         OutgoingFriendRequestState outgoingState = OutgoingFriendRequestState.None,
-        bool canRetry = false)
+        bool canRetry = false,
+        bool isLocalFocusing = false)
     {
         Snapshot = snapshot;
+        IsLocalFocusing = isLocalFocusing;
         _isSendingFriendRequest = outgoingState == OutgoingFriendRequestState.Sending;
         _isFriendRequestPending = outgoingState == OutgoingFriendRequestState.Pending;
         _canRetryFriendRequest = canRetry;
@@ -70,7 +76,12 @@ public sealed class FriendListItemViewModel
     public bool IsOnline { get; }
     public bool IsMusicActive { get; }
     public bool IsSleeping { get; }
+    public bool IsFocusing { get; }
+    public bool IsLocalFocusing { get; }
+    public bool IsFocusBlocked => IsFocusing || IsLocalFocusing;
+    public bool ShowsFocusBadge => IsOnline && IsFocusing;
     public bool ShowsSleepPose => IsSleeping || !IsOnline;
+    public bool ShowsSleepBadge => !ShowsFocusBadge && ShowsSleepPose;
     public bool IsFollowingMusic { get; }
     public bool IsVisitingDesktop { get; }
     public bool RequiresUpdate { get; }
@@ -83,13 +94,15 @@ public sealed class FriendListItemViewModel
     public string StatusText => RequiresUpdate
         ? UpdateBadgeText
         : IsOnline
-            ? (IsSleeping, IsMusicActive) switch
-            {
-                (true, true) => "온라인 · zzz · 🎵 음악 반응 중",
-                (true, false) => "온라인 · zzz",
-                (false, true) => "온라인 · 🎵 음악 반응 중",
-                (false, false) => "온라인"
-            }
+            ? IsFocusing
+                ? $"온라인 · ✏️ {FriendOperationErrorCodes.PomodoroFocusMessage}"
+                : (IsSleeping, IsMusicActive) switch
+                {
+                    (true, true) => "온라인 · zzz · 🎵 음악 반응 중",
+                    (true, false) => "온라인 · zzz",
+                    (false, true) => "온라인 · 🎵 음악 반응 중",
+                    (false, false) => "온라인"
+                }
             : "오프라인";
 
     public int ClampedIntimacy => FriendEntry.NormalizeIntimacy(Entry.Intimacy);
@@ -106,24 +119,32 @@ public sealed class FriendListItemViewModel
             ? "🎵  오프라인"
             : RequiresUpdate
                 ? "🎵  업데이트 필요"
-                : IsMusicActive
-                    ? "🎵  노래 따라하기"
-                    : "🎵  음악 재생 중이 아님";
+                : IsFocusBlocked
+                    ? $"✏️  {FriendOperationErrorCodes.PomodoroFocusMessage}"
+                    : IsMusicActive
+                        ? "🎵  노래 따라하기"
+                        : "🎵  음악 재생 중이 아님";
     public string VisitButtonText => IsVisitingDesktop ? "바탕화면에서 돌려보내기" : "내 바탕화면에 데려오기";
-    public bool CanFollowMusic => IsOnline && !RequiresUpdate && (IsMusicActive || IsFollowingMusic);
-    public bool CanInteract => IsOnline && !RequiresUpdate;
+    public string? InteractionTooltip => IsFocusBlocked ? FriendOperationErrorCodes.PomodoroFocusMessage : null;
+    public string? VisitTooltip => !IsVisitingDesktop && IsFocusBlocked ? FriendOperationErrorCodes.PomodoroFocusMessage : null;
+    public bool CanFollowMusic => IsOnline && !RequiresUpdate && (IsFollowingMusic || (!IsFocusBlocked && IsMusicActive));
+    public bool CanInteract => IsOnline && !RequiresUpdate && !IsFocusBlocked;
+    public bool CanToggleVisit => IsVisitingDesktop || !IsFocusBlocked;
 
     public FriendListItemViewModel(
         FriendEntry entry,
         PeerSnapshot? livePeer,
         bool isFollowingMusic,
-        bool isVisitingDesktop)
+        bool isVisitingDesktop,
+        bool isLocalFocusing = false)
     {
         Entry = entry;
         EffectiveAppearance = (livePeer?.Appearance ?? entry.CachedAppearance ?? new PetAppearance()).Clone();
         IsOnline = livePeer is not null;
         IsMusicActive = livePeer?.IsMusicActive ?? false;
         IsSleeping = livePeer?.IsSleeping ?? false;
+        IsFocusing = livePeer?.IsFocusing ?? false;
+        IsLocalFocusing = isLocalFocusing;
         IsFollowingMusic = isFollowingMusic;
         IsVisitingDesktop = isVisitingDesktop;
         RequiresUpdate = livePeer?.RequiresUpdate ?? false;
@@ -230,6 +251,7 @@ public sealed partial class SocialViewModel : ObservableObject
         var friendPetIds = new HashSet<string>(friends.Select(f => f.PetId), StringComparer.OrdinalIgnoreCase);
 
         // 이미 친구로 추가된 펫은 주변 펫 목록에서 제외
+        var isLocalFocusing = _social.IsLocalFocusing;
         NearbyPeers.Clear();
         foreach (var peer in peers)
         {
@@ -241,7 +263,7 @@ public sealed partial class SocialViewModel : ObservableObject
 
             var outgoingState = _social.GetOutgoingFriendRequestState(peer.PetId);
             var canRetry = outgoingState == OutgoingFriendRequestState.None && _retryableFailedPeerIds.Contains(peer.PetId);
-            NearbyPeers.Add(new PeerListItemViewModel(peer, outgoingState, canRetry));
+            NearbyPeers.Add(new PeerListItemViewModel(peer, outgoingState, canRetry, isLocalFocusing));
         }
 
         Friends.Clear();
@@ -250,7 +272,7 @@ public sealed partial class SocialViewModel : ObservableObject
             var live = peers.FirstOrDefault(p => string.Equals(p.PetId, friend.PetId, StringComparison.OrdinalIgnoreCase));
             var isFollowing = string.Equals(_social.FollowingHostPetId, friend.PetId, StringComparison.OrdinalIgnoreCase);
             var isVisiting = _isVisitorActivePredicate?.Invoke(friend.PetId) ?? false;
-            Friends.Add(new FriendListItemViewModel(friend, live, isFollowing, isVisiting)
+            Friends.Add(new FriendListItemViewModel(friend, live, isFollowing, isVisiting, isLocalFocusing)
             {
                 Snowball = _snowballs?.ForFriend(friend)
             });
@@ -316,7 +338,19 @@ public sealed partial class SocialViewModel : ObservableObject
     [RelayCommand]
     private async Task SendBubbleMessageAsync()
     {
-        if (SelectedFriend is null || !SelectedFriend.CanInteract)
+        if (SelectedFriend is null)
+        {
+            StatusBanner = "온라인 상태의 친구를 선택해 주세요.";
+            return;
+        }
+
+        if (SelectedFriend.IsFocusBlocked || _social.IsInteractionBlocked(SelectedFriend.Entry.PetId))
+        {
+            StatusBanner = FriendOperationErrorCodes.PomodoroFocusMessage;
+            return;
+        }
+
+        if (!SelectedFriend.CanInteract)
         {
             StatusBanner = "온라인 상태의 친구를 선택해 주세요.";
             return;
@@ -328,45 +362,76 @@ public sealed partial class SocialViewModel : ObservableObject
             return;
         }
 
-        var ok = await _social.SendBubbleMessageAsync(SelectedFriend.Entry, trimmed);
-        if (ok)
+        var result = await _social.SendBubbleMessageDetailedAsync(SelectedFriend.Entry, trimmed);
+        if (result.Succeeded)
         {
             MessageText = string.Empty;
-            if (StatusBanner == MessageSendFailureStatus)
+            if (StatusBanner == MessageSendFailureStatus || StatusBanner == FriendOperationErrorCodes.PomodoroFocusMessage)
             {
                 StatusBanner = DefaultStatusBanner;
             }
         }
         else
         {
-            StatusBanner = MessageSendFailureStatus;
+            StatusBanner = result.IsPomodoroFocusBlocked
+                ? FriendOperationErrorCodes.PomodoroFocusMessage
+                : MessageSendFailureStatus;
         }
     }
 
     [RelayCommand]
     private async Task SendQuickReactionAsync(string? emoji)
     {
-        if (SelectedFriend is null || !SelectedFriend.CanInteract || string.IsNullOrWhiteSpace(emoji))
+        if (SelectedFriend is null || string.IsNullOrWhiteSpace(emoji))
         {
             return;
         }
 
-        var ok = await _social.SendQuickReactionAsync(SelectedFriend.Entry, emoji);
-        StatusBanner = ok
+        if (SelectedFriend.IsFocusBlocked || _social.IsInteractionBlocked(SelectedFriend.Entry.PetId))
+        {
+            StatusBanner = FriendOperationErrorCodes.PomodoroFocusMessage;
+            return;
+        }
+
+        if (!SelectedFriend.CanInteract)
+        {
+            return;
+        }
+
+        var result = await _social.SendQuickReactionDetailedAsync(SelectedFriend.Entry, emoji);
+        StatusBanner = result.Succeeded
             ? $"{SelectedFriend.DisplayTitle}에게 {emoji} 반응을 보냈습니다."
-            : "반응 전송에 실패했습니다.";
+            : result.IsPomodoroFocusBlocked
+                ? FriendOperationErrorCodes.PomodoroFocusMessage
+                : "반응 전송에 실패했습니다.";
     }
 
     [RelayCommand]
     private async Task SendPetInteractionAsync()
     {
-        if (SelectedFriend is not { CanInteract: true } friend)
+        if (SelectedFriend is null)
         {
             return;
         }
 
+        if (SelectedFriend.IsFocusBlocked || _social.IsInteractionBlocked(SelectedFriend.Entry.PetId))
+        {
+            StatusBanner = FriendOperationErrorCodes.PomodoroFocusMessage;
+            return;
+        }
+
+        if (!SelectedFriend.CanInteract)
+        {
+            return;
+        }
+
+        var friend = SelectedFriend;
         var result = await _social.SendPetInteractionAsync(friend.Entry);
-        if (result != PetInteractionSendResult.Cooldown)
+        if (result == PetInteractionSendResult.PomodoroFocusBlocked)
+        {
+            StatusBanner = FriendOperationErrorCodes.PomodoroFocusMessage;
+        }
+        else if (result != PetInteractionSendResult.Cooldown)
         {
             StatusBanner = result == PetInteractionSendResult.Sent
                 ? $"{friend.DisplayTitle}에게 인사했습니다."
@@ -378,15 +443,28 @@ public sealed partial class SocialViewModel : ObservableObject
     private async Task ToggleMusicFollowAsync(FriendListItemViewModel? friend)
     {
         var target = friend ?? SelectedFriend;
-        if (target is null || !target.CanFollowMusic)
+        if (target is null)
         {
             return;
         }
 
-        var ok = await _social.ToggleMusicFollowAsync(target.Entry);
-        if (!ok)
+        if (!target.IsFollowingMusic && (target.IsFocusBlocked || _social.IsInteractionBlocked(target.Entry.PetId)))
         {
-            StatusBanner = "노래 따라하기 요청에 실패했습니다.";
+            StatusBanner = FriendOperationErrorCodes.PomodoroFocusMessage;
+            return;
+        }
+
+        if (!target.CanFollowMusic)
+        {
+            return;
+        }
+
+        var result = await _social.ToggleMusicFollowDetailedAsync(target.Entry);
+        if (!result.Succeeded)
+        {
+            StatusBanner = result.IsPomodoroFocusBlocked
+                ? FriendOperationErrorCodes.PomodoroFocusMessage
+                : "노래 따라하기 요청에 실패했습니다.";
         }
     }
 
@@ -396,6 +474,12 @@ public sealed partial class SocialViewModel : ObservableObject
         var target = friend ?? SelectedFriend;
         if (target is null)
         {
+            return;
+        }
+
+        if (!target.IsVisitingDesktop && (target.IsFocusBlocked || _social.IsInteractionBlocked(target.Entry.PetId)))
+        {
+            StatusBanner = FriendOperationErrorCodes.PomodoroFocusMessage;
             return;
         }
 

@@ -9,6 +9,7 @@ public sealed partial class LanP2pTransport
 {
     private readonly SemaphoreSlim _presenceSlots = new(8);
     private readonly ConcurrentDictionary<string, byte> _presenceInFlight = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, (string Ip, int Port)> _presenceResendPending = new(StringComparer.OrdinalIgnoreCase);
 
     internal void HandleDiscoveryHello(DiscoveryHelloPacket hello, string ip, CancellationToken ct)
     {
@@ -29,7 +30,7 @@ public sealed partial class LanP2pTransport
         {
             PetId = hello.PetId, OwnerName = hello.OwnerName ?? string.Empty, PetName = hello.PetName,
             Appearance = hello.Appearance ?? new PetAppearance(), Level = hello.Level, IsMusicActive = hello.IsMusicActive,
-            IsSleeping = hello.IsSleeping, IpAddress = ip, TcpPort = hello.TcpPort,
+            IsSleeping = hello.IsSleeping, IsFocusing = hello.IsFocusing, IpAddress = ip, TcpPort = hello.TcpPort,
             ProtocolVersion = hello.ProtocolVersion, AppVersion = hello.AppVersion,
             Compatibility = ProtocolConstants.EvaluateCompatibility(hello.ProtocolVersion), LastSeenUtc = DateTimeOffset.UtcNow
         };
@@ -50,15 +51,23 @@ public sealed partial class LanP2pTransport
                 continue;
             }
 
-            if (_friendsByPetId.TryGetValue(peer.PetId, out var friend) && _presenceInFlight.TryAdd(friend.PetId, 0))
+            if (_friendsByPetId.TryGetValue(peer.PetId, out var friend))
             {
-                if (_presenceSlots.Wait(0))
+                if (_presenceInFlight.TryAdd(friend.PetId, 0))
                 {
-                    StartPresenceVerification(friend, peer.IpAddress, peer.TcpPort);
+                    if (_presenceSlots.Wait(0))
+                    {
+                        StartPresenceVerification(friend, peer.IpAddress, peer.TcpPort);
+                    }
+                    else
+                    {
+                        _presenceInFlight.TryRemove(friend.PetId, out _);
+                    }
                 }
                 else
                 {
-                    _presenceInFlight.TryRemove(friend.PetId, out _);
+                    // 이전 프레즌스 동기화가 진행 중이면 완료 직후 최신 상태를 한 번 더 전송하도록 예약한다.
+                    _presenceResendPending[friend.PetId] = (peer.IpAddress, peer.TcpPort);
                 }
             }
         }
@@ -112,6 +121,20 @@ public sealed partial class LanP2pTransport
         {
             _presenceInFlight.TryRemove(friend.PetId, out _);
             _presenceSlots.Release();
+            if (!ct.IsCancellationRequested
+                && _presenceResendPending.TryRemove(friend.PetId, out var pendingEndpoint)
+                && _friendsByPetId.TryGetValue(friend.PetId, out var latestFriend)
+                && _presenceInFlight.TryAdd(latestFriend.PetId, 0))
+            {
+                if (_presenceSlots.Wait(0))
+                {
+                    StartPresenceVerification(latestFriend, pendingEndpoint.Ip, pendingEndpoint.Port);
+                }
+                else
+                {
+                    _presenceInFlight.TryRemove(latestFriend.PetId, out _);
+                }
+            }
         }
     }
 
@@ -122,6 +145,7 @@ public sealed partial class LanP2pTransport
         {
             OwnerName = local.OwnerName, PetName = local.PetName, Appearance = local.Appearance,
             Level = local.Level, IsMusicActive = local.IsMusicActive, IsSleeping = local.IsSleeping,
+            IsFocusing = local.IsFocusing,
             TcpPort = _boundTcpPort, AppVersion = local.AppVersion
         };
     }
@@ -158,7 +182,8 @@ public sealed partial class LanP2pTransport
         {
             PetId = petId, IpAddress = ip, TcpPort = presence.TcpPort, PetName = presence.PetName,
             OwnerName = presence.OwnerName ?? string.Empty, Appearance = presence.Appearance.Clone(),
-            Level = presence.Level, IsMusicActive = presence.IsMusicActive, IsSleeping = presence.IsSleeping, IsFriend = true,
+            Level = presence.Level, IsMusicActive = presence.IsMusicActive, IsSleeping = presence.IsSleeping,
+            IsFocusing = presence.IsFocusing, IsFriend = true,
             ProtocolVersion = ProtocolConstants.CurrentProtocolVersion, AppVersion = presence.AppVersion,
             Compatibility = ProtocolCompatibility.Compatible, LastSeenUtc = now
         };

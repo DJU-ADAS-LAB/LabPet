@@ -52,6 +52,9 @@ public sealed class PetProfile
     /// <summary>Windows 시작 시 자동 실행 설정 (null이면 최초 실행 시 기본값 true로 자동 등록).</summary>
     public bool? AutoStartEnabled { get; set; }
 
+    /// <summary>업데이트 이후 뽀모도로 신규 안내 배지(빨간 점)를 클릭해 확인했는지 여부.</summary>
+    public bool HasSeenPomodoroFeatureBadge { get; set; }
+
     public DateTimeOffset CreatedAtUtc { get; set; } = DateTimeOffset.UtcNow;
     public DateTimeOffset UpdatedAtUtc { get; set; } = DateTimeOffset.UtcNow;
 
