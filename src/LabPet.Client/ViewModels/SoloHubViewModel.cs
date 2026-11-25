@@ -163,7 +163,6 @@ public sealed partial class SoloHubViewModel : ObservableObject, IDisposable
     public const double PomodoroDialSize = 200.0;
     public const double PomodoroDialCenter = 100.0;
     public const double PomodoroDialRadius = 86.0;
-    private const double PomodoroKnobDiameter = 20.0;
 
     // 뽀모도로 상태
     [ObservableProperty] private string _pomodoroPhaseText = "집중 시간";
@@ -171,10 +170,7 @@ public sealed partial class SoloHubViewModel : ObservableObject, IDisposable
     [ObservableProperty] private string _pomodoroToggleText = "시작";
     [ObservableProperty] private double _pomodoroRingDashOffset;
     [ObservableProperty] private double _pomodoroDialProgressRatio = 25.0 / PomodoroTimerService.MaximumFocusMinutes;
-    [ObservableProperty] private Geometry _pomodoroDialArcGeometry = Geometry.Empty;
     [ObservableProperty] private Brush _pomodoroDialArcBrush = PomodoroFocusArcBrush;
-    [ObservableProperty] private double _pomodoroKnobLeft;
-    [ObservableProperty] private double _pomodoroKnobTop;
     [ObservableProperty] private string _pomodoroRewardPreviewText = $"25분 설정 · 완료 시 +{PetEconomyService.GetPomodoroRewardCoins(25)} 코인";
     [ObservableProperty] private string _pomodoroFocusMinutesInputText = "25";
 
@@ -304,7 +300,6 @@ public sealed partial class SoloHubViewModel : ObservableObject, IDisposable
         OnPropertyChanged(nameof(IsPomodoroDurationLocked));
         OnPropertyChanged(nameof(IsPomodoroFocusActive));
         OnPropertyChanged(nameof(PomodoroFocusMinutes));
-        OnPropertyChanged(nameof(PomodoroLockHintText));
         PomodoroFocusMinutesInputText = _pomodoro.FocusMinutes.ToString();
         SetPomodoroPresetCommand.NotifyCanExecuteChanged();
         DecrementPomodoroMinutesCommand.NotifyCanExecuteChanged();
@@ -323,15 +318,8 @@ public sealed partial class SoloHubViewModel : ObservableObject, IDisposable
         const double ringCircumference = 56.55;
         PomodoroRingDashOffset = ringCircumference * (1.0 - ratio);
 
-        var dialRatio = PomodoroCircularDialMath.ComputeDisplayProgressRatio(_pomodoro);
-        PomodoroDialProgressRatio = dialRatio;
+        PomodoroDialProgressRatio = PomodoroCircularDialMath.ComputeDisplayProgressRatio(_pomodoro);
         PomodoroDialArcBrush = _pomodoro.CurrentPhase == PomodoroPhase.Break ? PomodoroBreakArcBrush : PomodoroFocusArcBrush;
-        PomodoroDialArcGeometry = PomodoroCircularDialMath.BuildArcGeometry(
-            PomodoroDialCenter, PomodoroDialCenter, PomodoroDialRadius, dialRatio);
-        var knobCenter = PomodoroCircularDialMath.ComputeKnobCenter(
-            PomodoroDialCenter, PomodoroDialCenter, PomodoroDialRadius, dialRatio);
-        PomodoroKnobLeft = knobCenter.X - PomodoroKnobDiameter * 0.5;
-        PomodoroKnobTop = knobCenter.Y - PomodoroKnobDiameter * 0.5;
     }
 
     [RelayCommand]
@@ -356,9 +344,6 @@ public sealed partial class SoloHubViewModel : ObservableObject, IDisposable
     public bool CanConfigurePomodoro => !_pomodoro.IsDurationLocked;
     public bool IsPomodoroDurationLocked => _pomodoro.IsDurationLocked;
     public bool IsPomodoroFocusActive => _pomodoro.IsFocusActive;
-    public string PomodoroLockHintText => _pomodoro.IsDurationLocked
-        ? "종료 전까지 시간을 바꿀 수 없어요"
-        : "원형을 돌려 1~60분 설정";
 
     public int PomodoroFocusMinutes
     {

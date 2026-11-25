@@ -38,7 +38,6 @@
                                      StrokeThickness="11" />
                             <!-- 색으로 채워지는 원형 슬라이더/진행 호 -->
                             <Path x:Name="CircularDialArcPath"
-                                  Data="{Binding PomodoroDialArcGeometry}"
                                   Stroke="{Binding PomodoroDialArcBrush}"
                                   StrokeThickness="11"
                                   StrokeStartLineCap="Round"
@@ -47,30 +46,20 @@
                             <Ellipse x:Name="CircularDialKnob"
                                      Width="20"
                                      Height="20"
-                                     Canvas.Left="{Binding PomodoroKnobLeft}"
-                                     Canvas.Top="{Binding PomodoroKnobTop}"
                                      Fill="White"
                                      Stroke="{Binding PomodoroDialArcBrush}"
                                      StrokeThickness="3.2"
                                      Visibility="{Binding CanConfigurePomodoro, Converter={StaticResource HubBoolToVis}}" />
                         </Canvas>
 
-                        <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center" IsHitTestVisible="False">
-                            <Border Background="{StaticResource HubAccentSoftBrush}" CornerRadius="9" Padding="10,3" HorizontalAlignment="Center">
-                                <TextBlock Text="{Binding PomodoroPhaseText}" FontSize="11" FontWeight="Bold" Foreground="{StaticResource HubAccentTextBrush}" />
-                            </Border>
-                            <TextBlock Text="{Binding PomodoroTimeText}"
-                                       HorizontalAlignment="Center"
-                                       FontSize="42"
-                                       FontWeight="Bold"
-                                       Foreground="{StaticResource HubTextPrimaryBrush}"
-                                       Margin="0,4,0,0" />
-                            <TextBlock Text="{Binding PomodoroLockHintText}"
-                                       HorizontalAlignment="Center"
-                                       FontSize="10"
-                                       Foreground="{StaticResource HubTextMutedBrush}"
-                                       Margin="0,2,0,0" />
-                        </StackPanel>
+                        <TextBlock Text="{Binding PomodoroTimeText}"
+                                   AutomationProperties.HelpText="{Binding PomodoroPhaseText}"
+                                   HorizontalAlignment="Center"
+                                   VerticalAlignment="Center"
+                                   IsHitTestVisible="False"
+                                   FontSize="42"
+                                   FontWeight="Bold"
+                                   Foreground="{StaticResource HubTextPrimaryBrush}" />
                     </Grid>
 
                     <!-- 시간 미세 조절 + 프리셋 (단일 행 컴팩트 정렬) -->

@@ -3,6 +3,7 @@ using System.Net;
 using System.Net.Sockets;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Media;
 using Ellipse = System.Windows.Shapes.Ellipse;
 using LabPet.Client.Audio;
 using LabPet.Client.Navigation;
@@ -116,7 +117,7 @@ public sealed class PomodoroFocusAndUiTests : IDisposable
                 Assert.Contains($"35분 설정 · 완료 시 +{PetEconomyService.GetPomodoroRewardCoins(35)} 코인", vm1.PomodoroRewardPreviewText);
                 Assert.True(vm1.CanConfigurePomodoro);
                 Assert.Equal(Visibility.Visible, page1.CircularDialKnob.Visibility);
-                Assert.NotEqual(System.Windows.Media.Geometry.Empty, vm1.PomodoroDialArcGeometry);
+                Assert.NotEqual(System.Windows.Media.Geometry.Empty, page1.CircularDialArcPath.Data);
                 Assert.True(page1.FocusMinutesTextBox.IsEnabled);
                 Assert.True(page1.DecrementMinutesButton.IsEnabled);
                 Assert.True(page1.IncrementMinutesButton.IsEnabled);
@@ -224,6 +225,101 @@ public sealed class PomodoroFocusAndUiTests : IDisposable
                 page1.Dispose();
             }
         });
+    }
+
+    [Fact]
+    public async Task Pomodoro_DialShowsOnlyTimeAndAnimatesFromItsVisiblePosition()
+    {
+        await WpfTestHost.RunAsync(async () =>
+        {
+            var store = new JsonAppDataStore(new StateMigrator(), Path.Combine(_tempRoot, "animated-dial"));
+            await using var transport = new LanP2pTransport(udpDiscoveryPort: 0, udpMusicPort: 0, tcpControlPort: 0);
+            var progression = new SoloProgressionService();
+            await using var social = new SocialCoordinatorService(transport, store, progression);
+            var pomodoro = new PomodoroTimerService();
+            var petVm = new PetWindowViewModel(store, social);
+            petVm.ApplyProfile(new PetProfile { PetName = "모찌" });
+
+            using var audio = new StubAudioAnalyzer();
+            using var games = new CoinGamesViewModel(store, progression, social);
+            using var page = new PomodoroPageView(new SoloHubViewModel(pomodoro, audio, games, progression.Economy), pomodoro, petVm);
+            var window = new Window { Content = page, Width = 550, Height = 500, ShowActivated = false, ShowInTaskbar = false };
+
+            try
+            {
+                window.Show();
+                page.OnActivated(new NavigationRequest(HubPage.Pomodoro));
+                await WpfTestHost.FlushAsync();
+
+                var time = Assert.IsType<TextBlock>(page.CircularDialHost.Children[1]);
+                Assert.Equal(2, page.CircularDialHost.Children.Count);
+                Assert.Equal("25:00", time.Text);
+                var centered = time.TransformToAncestor(page.CircularDialHost)
+                    .Transform(new Point(time.ActualWidth / 2, time.ActualHeight / 2));
+                Assert.Equal(SoloHubViewModel.PomodoroDialCenter, centered.X, precision: 1);
+                Assert.Equal(SoloHubViewModel.PomodoroDialCenter, centered.Y, precision: 1);
+                Assert.True(page.Preset50Button.TransformToAncestor(page)
+                    .TransformBounds(new Rect(page.Preset50Button.RenderSize)).Right <= page.ActualWidth);
+
+                Press(page.Preset50Button);
+                Assert.Equal(50, pomodoro.FocusMinutes);
+                Assert.Equal("50:00", time.Text);
+                Assert.Equal(25, DisplayedMinutes(), precision: 2);
+                var intermediate = await WaitForDisplayedMinutes(26, 49);
+
+                Press(page.Preset15Button);
+                Assert.Equal(15, pomodoro.FocusMinutes);
+                Assert.Equal(intermediate, DisplayedMinutes(), precision: 2);
+                await WaitForDisplayedMinutes(14.999, 15.001);
+
+                Press(page.IncrementMinutesButton);
+                Assert.Equal(16, pomodoro.FocusMinutes);
+                Assert.Equal(15, DisplayedMinutes(), precision: 2);
+                await WaitForDisplayedMinutes(15.05, 15.95);
+                await WaitForDisplayedMinutes(15.999, 16.001);
+
+                Press(page.DecrementMinutesButton);
+                Assert.Equal(15, pomodoro.FocusMinutes);
+                Assert.Equal(16, DisplayedMinutes(), precision: 2);
+                await WaitForDisplayedMinutes(15.05, 15.95);
+                Assert.True(page.ApplyDialPointerForTest(new Point(100, 195)));
+                Assert.Equal(30, DisplayedMinutes(), precision: 2);
+
+                Press(page.Preset50Button);
+                page.Visibility = Visibility.Collapsed;
+                Assert.Equal(50, DisplayedMinutes(), precision: 2);
+            }
+            finally
+            {
+                window.Close();
+            }
+
+            double DisplayedMinutes()
+            {
+                var knob = page.CircularDialKnob;
+                var center = new Point(Canvas.GetLeft(knob) + knob.Width / 2, Canvas.GetTop(knob) + knob.Height / 2);
+                var arc = Assert.IsType<PathGeometry>(page.CircularDialArcPath.Data);
+                var end = Assert.IsType<ArcSegment>(arc.Figures[0].Segments[^1]).Point;
+                Assert.InRange((end - center).Length, 0, 0.001);
+                var delta = center - new Point(SoloHubViewModel.PomodoroDialCenter, SoloHubViewModel.PomodoroDialCenter);
+                var ratio = (Math.Atan2(delta.X, -delta.Y) / (2 * Math.PI) + 1) % 1;
+                return ratio * PomodoroTimerService.MaximumFocusMinutes;
+            }
+
+            async Task<double> WaitForDisplayedMinutes(double lower, double upper)
+            {
+                using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(3));
+                var minutes = DisplayedMinutes();
+                while (minutes < lower || minutes > upper)
+                {
+                    await Task.Delay(8, timeout.Token);
+                    minutes = DisplayedMinutes();
+                }
+                return minutes;
+            }
+        });
+
+        static void Press(Button button) => button.Command.Execute(button.CommandParameter);
     }
 
     [Fact]

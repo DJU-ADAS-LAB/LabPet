@@ -1,6 +1,8 @@
+using System.ComponentModel;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
+using System.Windows.Media.Animation;
 using LabPet.Client.Navigation;
 using LabPet.Client.Solo;
 using LabPet.Client.ViewModels;
@@ -9,6 +11,11 @@ namespace LabPet.Client.Views.Hub.Pages;
 
 public partial class PomodoroPageView : UserControl, IHubPageLifecycle, IDisposable
 {
+    private static readonly TimeSpan DialTransitionDuration = TimeSpan.FromMilliseconds(220);
+    private static readonly DependencyProperty DisplayedDialRatioProperty = DependencyProperty.Register(
+        "DisplayedDialRatio", typeof(double), typeof(PomodoroPageView),
+        new PropertyMetadata(0.0, (control, args) => ((PomodoroPageView)control).DrawDial((double)args.NewValue)));
+
     private readonly SoloHubViewModel _viewModel;
     private readonly PomodoroTimerService _pomodoro;
     private readonly PetWindowViewModel _petVm;
@@ -23,6 +30,53 @@ public partial class PomodoroPageView : UserControl, IHubPageLifecycle, IDisposa
         _petVm = petVm;
         DataContext = _viewModel;
         _viewModel.BindProfile(petVm.CurrentProfile);
+        _viewModel.PropertyChanged += OnViewModelPropertyChanged;
+        IsVisibleChanged += OnDialVisibilityChanged;
+        UpdateDialDisplay(animate: false);
+    }
+
+    private void OnViewModelPropertyChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName == nameof(SoloHubViewModel.PomodoroDialProgressRatio))
+        {
+            UpdateDialDisplay(animate: !_isDraggingDial && _viewModel.CanConfigurePomodoro && IsLoaded && IsVisible);
+        }
+        else if (e.PropertyName == nameof(SoloHubViewModel.CanConfigurePomodoro)
+                 && !_viewModel.CanConfigurePomodoro && HasAnimatedProperties)
+        {
+            UpdateDialDisplay(animate: false);
+        }
+    }
+
+    private void OnDialVisibilityChanged(object sender, DependencyPropertyChangedEventArgs e)
+        => UpdateDialDisplay(animate: false);
+
+    private void UpdateDialDisplay(bool animate)
+    {
+        var target = _viewModel.PomodoroDialProgressRatio;
+        var current = (double)GetValue(DisplayedDialRatioProperty);
+        if (animate && current != target)
+        {
+            // 연타하면 직전 목표 대신 그 순간 화면에 그려진 비율부터 다시 이어 간다.
+            BeginAnimation(DisplayedDialRatioProperty, new DoubleAnimation(current, target, DialTransitionDuration)
+            {
+                EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut }
+            });
+            return;
+        }
+
+        BeginAnimation(DisplayedDialRatioProperty, null);
+        SetValue(DisplayedDialRatioProperty, target);
+    }
+
+    private void DrawDial(double ratio)
+    {
+        const double center = SoloHubViewModel.PomodoroDialCenter;
+        const double radius = SoloHubViewModel.PomodoroDialRadius;
+        CircularDialArcPath.Data = PomodoroCircularDialMath.BuildArcGeometry(center, center, radius, ratio);
+        var knobCenter = PomodoroCircularDialMath.ComputeKnobCenter(center, center, radius, ratio);
+        Canvas.SetLeft(CircularDialKnob, knobCenter.X - CircularDialKnob.Width / 2);
+        Canvas.SetTop(CircularDialKnob, knobCenter.Y - CircularDialKnob.Height / 2);
     }
 
     internal bool ApplyDialPointerForTest(Point pointOnDial, bool usePreviousMinutes = false)
@@ -37,7 +91,7 @@ public partial class PomodoroPageView : UserControl, IHubPageLifecycle, IDisposa
             pointOnDial,
             center,
             usePreviousMinutes ? _viewModel.PomodoroFocusMinutes : null);
-        _viewModel.PomodoroFocusMinutes = nextMinutes;
+        SetDialFromPointer(nextMinutes);
         return true;
     }
 
@@ -64,7 +118,7 @@ public partial class PomodoroPageView : UserControl, IHubPageLifecycle, IDisposa
 
         _isDraggingDial = true;
         CircularDialHost.CaptureMouse();
-        _viewModel.PomodoroFocusMinutes = PomodoroCircularDialMath.PointToFocusMinutes(pos, center, previousMinutes: null);
+        SetDialFromPointer(PomodoroCircularDialMath.PointToFocusMinutes(pos, center, previousMinutes: null));
         e.Handled = true;
     }
 
@@ -82,8 +136,14 @@ public partial class PomodoroPageView : UserControl, IHubPageLifecycle, IDisposa
             center = new Point(SoloHubViewModel.PomodoroDialCenter, SoloHubViewModel.PomodoroDialCenter);
         }
 
-        _viewModel.PomodoroFocusMinutes = PomodoroCircularDialMath.PointToFocusMinutes(
-            pos, center, previousMinutes: _viewModel.PomodoroFocusMinutes);
+        SetDialFromPointer(PomodoroCircularDialMath.PointToFocusMinutes(
+            pos, center, previousMinutes: _viewModel.PomodoroFocusMinutes));
+    }
+
+    private void SetDialFromPointer(int minutes)
+    {
+        _viewModel.PomodoroFocusMinutes = minutes;
+        UpdateDialDisplay(animate: false);
     }
 
     private void CircularDialHost_MouseLeftButtonUp(object sender, MouseButtonEventArgs e)
@@ -140,11 +200,13 @@ public partial class PomodoroPageView : UserControl, IHubPageLifecycle, IDisposa
         }
 
         _viewModel.RefreshPomodoroUi();
+        UpdateDialDisplay(animate: false);
     }
 
     public void OnDeactivated()
     {
         // 창을 닫거나 다른 페이지로 이동해도 PomodoroTimerService 백그라운드 타이머는 유지한다.
+        UpdateDialDisplay(animate: false);
     }
 
     public void Dispose()
@@ -155,6 +217,9 @@ public partial class PomodoroPageView : UserControl, IHubPageLifecycle, IDisposa
         }
 
         _disposed = true;
+        _viewModel.PropertyChanged -= OnViewModelPropertyChanged;
+        IsVisibleChanged -= OnDialVisibilityChanged;
+        BeginAnimation(DisplayedDialRatioProperty, null);
         _viewModel.Dispose();
     }
 }
