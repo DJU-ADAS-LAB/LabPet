@@ -6,6 +6,7 @@ using System.Text.Json;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Interop;
+using System.Windows.Media;
 using System.Windows.Threading;
 using LabPet.Client.Audio;
 using LabPet.Client.Games;
@@ -265,6 +266,143 @@ public sealed class GameUiUxAndInviteTests : IAsyncLifetime
         var clampedRect = new Rect(clampedPos, cardSize);
         Assert.True(workArea.Contains(clampedRect));
         Assert.False(petTopLeft.IntersectsWith(clampedRect));
+    }
+
+    [Fact]
+    public async Task InviteCardPresenter_KeepsOneCardWithHubOpenAndStopsQueuedUpdatesOnPetClose()
+    {
+        await WpfTestHost.RunAsync(async () =>
+        {
+            var petVm = new PetWindowViewModel(_hostStore, _hostSocial);
+            petVm.ApplyProfile(_hostProfile);
+            using var games = new CoinGamesViewModel(_hostStore, new SoloProgressionService(), _hostSocial);
+            games.BindProfile(_hostProfile);
+            using var sender = new CoinGamesViewModel(_guestStore, new SoloProgressionService(), _guestSocial);
+            sender.BindProfile(_guestProfile);
+            var portraits = new PetPortraitRenderer(new ProceduralPetMeshFactory());
+            using var audio = new TestAudioAnalyzer();
+            using var hook = new GlobalActivityHookService();
+            var pet = new PetWindow(petVm, new ProceduralPetMeshFactory(), portraits, new PetAnimationController(),
+                audio, hook, new SoloProgressionService(), new PomodoroTimerService(), _hostSocial)
+            {
+                Left = 420, Top = 380, ShowActivated = false
+            };
+            petVm.ApplyProfile(_hostProfile);
+            using var presenter = new GameInviteCardPresenter(games, pet, pet.GetInviteCardObstacle, pet.GetInviteCardHead);
+            pet.SpeechBubbleLayoutChanged += (_, _) => presenter.RequestUpdate();
+            HubWindow? hub = null;
+            HubNavigationService? navigation = null;
+            navigation = new HubNavigationService(() => hub = new HubWindow(
+                new HubViewModel(navigation!, petVm, games, portraits),
+                _ => new GamesPageView(games, petVm), new HubWindowStateStore(_hostStore.DataDirectory)));
+            pet.Show();
+            try
+            {
+                await navigation.NavigateAsync(new NavigationRequest(HubPage.Games));
+                games.IncomingInviteStatus = GameInviteStatus.Pending;
+                games.IncomingInviteRemainingSeconds = 19;
+                var invite = new IncomingGameInvite(
+                    _guestProfile.PetId, "초대 발신자", _guestAsFriend, RpsGameEngine.GameTypeId,
+                    Guid.NewGuid().ToString("N"), 10);
+                games.IncomingInvite = invite;
+                await WpfTestHost.FlushAsync();
+
+                var card = Assert.Single(pet.OwnedWindows.OfType<GameInviteCardWindow>());
+                Assert.True(card.IsVisible);
+                Assert.Same(games, card.DataContext);
+                var banner = Assert.IsType<Border>(hub!.FindName("GameInviteBanner"));
+                Assert.Equal(Visibility.Visible, banner.Visibility);
+                petVm.ShowBubble("두 창이 열릴 때도 유지하는 말풍선", 12_000);
+                await WpfTestHost.FlushAsync();
+                var obstacle = pet.GetInviteCardObstacle();
+                Assert.False(obstacle.IsEmpty);
+                Assert.True(Win32WindowHelper.TryGetWindowPhysicalBounds(card, out var relocated));
+                Assert.False(obstacle.IntersectsWith(relocated));
+
+                hub.WindowState = WindowState.Minimized;
+                await WpfTestHost.FlushAsync();
+                hub.WindowState = WindowState.Normal;
+                games.IncomingInviteStatus = GameInviteStatus.Accepting;
+                await WpfTestHost.FlushAsync();
+                Assert.Same(card, Assert.Single(pet.OwnedWindows.OfType<GameInviteCardWindow>()));
+                Assert.False(Assert.IsType<Button>(hub.FindName("GameInviteBannerAccept")).IsEnabled);
+                var acceptCard = Assert.Single(FindButtons(card), button => button.Command == games.AcceptIncomingInviteCommand);
+                Assert.False(acceptCard.IsEnabled);
+
+                games.IncomingInviteStatus = GameInviteStatus.Expired;
+                games.IncomingInvite = null;
+                await WpfTestHost.FlushAsync();
+                Assert.Empty(pet.OwnedWindows.OfType<GameInviteCardWindow>());
+                Assert.Equal(Visibility.Collapsed, banner.Visibility);
+
+                sender.SelectedRpsFriend = sender.OnlineFriends.Single();
+                sender.RpsWager = 30;
+                await SendInviteAsync();
+                var decline = Assert.Single(FindButtons(hub), button => button.Command == games.DeclineIncomingInviteCommand);
+                var declined = WaitUntilAsync(sender, () => !sender.IsRpsWaitingResponse);
+                decline.Command.Execute(null);
+                await declined.WaitAsync(TimeSpan.FromSeconds(5));
+                await WpfTestHost.FlushAsync();
+                Assert.Empty(pet.OwnedWindows.OfType<GameInviteCardWindow>());
+                Assert.Equal(Visibility.Collapsed, banner.Visibility);
+                Assert.Equal(200, _hostProfile.SoloProgress.Coins);
+
+                await SendInviteAsync();
+                var activeCard = Assert.Single(pet.OwnedWindows.OfType<GameInviteCardWindow>());
+                var accept = Assert.Single(FindButtons(activeCard), button => button.Command == games.AcceptIncomingInviteCommand);
+                var accepted = WaitUntilAsync(games, () => games.IncomingInviteStatus == GameInviteStatus.Accepted);
+                accept.Command.Execute(null);
+                await accepted.WaitAsync(TimeSpan.FromSeconds(5));
+                await WpfTestHost.FlushAsync();
+                Assert.Empty(pet.OwnedWindows.OfType<GameInviteCardWindow>());
+                Assert.Equal(Visibility.Collapsed, banner.Visibility);
+                Assert.Equal(170, _hostProfile.SoloProgress.Coins);
+
+                games.IncomingInviteStatus = GameInviteStatus.Pending;
+                games.IncomingInvite = invite;
+                presenter.RequestUpdate();
+                pet.Close();
+                await WpfTestHost.FlushAsync();
+                Assert.Empty(pet.OwnedWindows.OfType<GameInviteCardWindow>());
+            }
+            finally
+            {
+                if (pet.IsVisible) pet.Close();
+                navigation.CloseIfOpen();
+            }
+
+            async Task SendInviteAsync()
+            {
+                var received = WaitUntilAsync(games, () => games.HasIncomingInvite);
+                await sender.SendRpsInviteCommand.ExecuteAsync(null);
+                await received.WaitAsync(TimeSpan.FromSeconds(5));
+                await WpfTestHost.FlushAsync();
+                Assert.Equal(Visibility.Visible, Assert.IsType<Border>(hub!.FindName("GameInviteBanner")).Visibility);
+            }
+        });
+
+        static IEnumerable<Button> FindButtons(DependencyObject element)
+        {
+            if (element is Button button) yield return button;
+            for (var i = 0; i < VisualTreeHelper.GetChildrenCount(element); i++)
+            {
+                foreach (var child in FindButtons(VisualTreeHelper.GetChild(element, i))) yield return child;
+            }
+        }
+    }
+
+    [Fact]
+    public void InviteCardPlacement_PrefersAbovePetAndStepsAsideForBubble()
+    {
+        var work = new Rect(0, 0, 1920, 1080);
+        var pet = new Rect(800, 440, 220, 200);
+        var size = new Size(320, 220);
+        var top = GameInviteCardWindow.CalculatePlacement(pet, size, work);
+        Assert.True(top.Y + size.Height < pet.Top);
+        var bubble = new Rect(top, size);
+        var side = GameInviteCardWindow.CalculatePlacement(pet, size, work, obstacle: bubble);
+        Assert.False(new Rect(side, size).IntersectsWith(bubble));
+        Assert.True(side.X + size.Width < pet.Left);
     }
 
     [Fact]

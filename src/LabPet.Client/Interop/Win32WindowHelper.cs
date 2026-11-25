@@ -258,7 +258,7 @@ public static partial class Win32WindowHelper
             return false;
         }
 
-        return SetWindowPos(hwnd, HwndTopMost, physicalX, physicalY, 0, 0, SwpNoSize | SwpNoActivate | SwpNoOwnerZOrder);
+        return SetWindowPos(hwnd, IntPtr.Zero, physicalX, physicalY, 0, 0, SwpNoSize | SwpNoActivate | SwpNoOwnerZOrder | SwpNoZOrder);
     }
 
     /// <summary>

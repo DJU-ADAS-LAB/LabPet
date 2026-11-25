@@ -49,7 +49,7 @@ flowchart LR
 | `SCR-03H` | [SettingsPageView.xaml](../../src/LabPet.Client/Views/Hub/Pages/SettingsPageView.xaml) | 일반(자동 실행·위치 초기화), 표시(크기·투명도·클릭 투과), 데이터 저장소 경로 · 폴더 열기 |
 | `SCR-03I` | [AboutPageView.xaml](../../src/LabPet.Client/Views/Hub/Pages/AboutPageView.xaml) | 설치 버전 배지, Velopack 업데이트 확인·적용(`HubNavigationAction.CheckUpdates`), 저장소·릴리스 노트 링크, 오픈소스 라이선스 |
 | `SCR-06` | [VisitorPetWindow.xaml](../../src/LabPet.Client/Views/VisitorPetWindow.xaml) | 내 바탕화면 옆 방문 친구 3D 펫 창 (크기·투명도 공유, 좌클릭 빠른 채팅, 우클릭 `👋 인사하기 보내기`, 호버 `✕` 돌려보내기) |
-| `SCR-07` | [GameInviteCardWindow.xaml](../../src/LabPet.Client/Views/GameInviteCardWindow.xaml) | 통합 창이 닫혀 있거나 최소화되었을 때 펫 주변에 표시되는 비활성화 독립 초대 카드 (필요·보유·부족 코인 표시 및 수락 잠금 지원) |
+| `SCR-07` | [GameInviteCardWindow.xaml](../../src/LabPet.Client/Views/GameInviteCardWindow.xaml) | 통합 창 상단 배너와 동시에 내 펫 머리 위에 표시할 수 있는 비활성화 독립 초대 카드 (필요·보유·부족 코인 표시 및 수락 잠금 지원) |
 
 ## 게임·경제 개편 화면 검증 캡처 (2026-11-24)
 - [01 친구 선택 카드 그리드](./게임_경제_개편_검증/01_친구선택_카드그리드.png)

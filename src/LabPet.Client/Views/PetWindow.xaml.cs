@@ -131,6 +131,9 @@ public partial class PetWindow : Window, IMessageBubbleTarget
         SpeechBubblePopup.CustomPopupPlacementCallback = (popupSize, targetSize, _) =>
             GetSpeechBubblePlacements(popupSize, targetSize, VisualTreeHelper.GetDpi(PetLayout));
 
+        SpeechBubblePopup.Opened += (_, _) => SpeechBubbleLayoutChanged?.Invoke(this, EventArgs.Empty);
+        SpeechBubblePopup.Closed += (_, _) => SpeechBubbleLayoutChanged?.Invoke(this, EventArgs.Empty);
+
         Loaded += (_, _) =>
         {
             UpdateNameplatePosition();
@@ -292,6 +295,25 @@ public partial class PetWindow : Window, IMessageBubbleTarget
         RepositionSpeechBubblePopup();
     }
 
+    internal event EventHandler? SpeechBubbleLayoutChanged;
+
+    internal Point? GetInviteCardHead()
+    {
+        if (!IsAvailableForMessages || PresentationSource.FromVisual(PetViewport) is null
+            || _currentRig is not { } rig || rig.BodyBounds.IsEmpty) return null;
+        var bounds = rig.BodyBounds;
+        var top = new Point3D(0, bounds.Y + bounds.SizeY, bounds.Z + bounds.SizeZ * 0.65);
+        if (!PetViewport.IsAncestorOf(PetVisual)
+            || !PetVisual.TransformToAncestor(PetViewport).TryTransform(top, out var local)
+            || !double.IsFinite(local.X) || !double.IsFinite(local.Y)) return null;
+        var physical = PetViewport.PointToScreen(local);
+        return double.IsFinite(physical.X) && double.IsFinite(physical.Y) ? physical : null;
+    }
+
+    internal Rect GetInviteCardObstacle() =>
+        SpeechBubblePopup.IsOpen && Win32WindowHelper.TryGetVisualWindowPhysicalBounds(SpeechBubbleContent, out var bounds)
+            ? bounds : Rect.Empty;
+
     private static CustomPopupPlacement[] GetSpeechBubblePlacements(Size popupSize, Size targetSize, DpiScale dpi)
     {
         var centerX = (targetSize.Width - popupSize.Width) / 2.0;
@@ -317,6 +339,7 @@ public partial class PetWindow : Window, IMessageBubbleTarget
         var offset = SpeechBubblePopup.HorizontalOffset;
         SpeechBubblePopup.HorizontalOffset = offset + 0.01;
         SpeechBubblePopup.HorizontalOffset = offset;
+        SpeechBubbleLayoutChanged?.Invoke(this, EventArgs.Empty);
     }
 
     private void UpdateNameplatePosition()
@@ -976,7 +999,7 @@ public partial class PetWindow : Window, IMessageBubbleTarget
 
     private static System.Drawing.Icon CreateTrayIcon()
     {
-        var resourceUri = new Uri("pack://application:,,,/Assets/app.ico", UriKind.Absolute);
+        var resourceUri = new Uri("pack://application:,,,/LabPet.Client;component/Assets/app.ico", UriKind.Absolute);
         var streamInfo = Application.GetResourceStream(resourceUri);
         if (streamInfo is not null)
         {

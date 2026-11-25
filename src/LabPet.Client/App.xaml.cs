@@ -28,7 +28,7 @@ public partial class App : Application
     private SocialCoordinatorService? _social;
     private FriendMessageRouter? _messageRouter;
     private PetWindow? _petWindow;
-    private GameInviteCardWindow? _inviteCardWindow;
+    private GameInviteCardPresenter? _inviteCard;
     private readonly Dictionary<string, VisitorPetWindow> _visitorWindows = new(StringComparer.OrdinalIgnoreCase);
     private readonly VisitorPopupOrder _visitorPopupOrder = new();
     private bool _crashHooksAttached;
@@ -142,10 +142,7 @@ public partial class App : Application
         // 코인 게임 허브(초대 카드 · 말풍선 알림 · 수락 시 해당 게임 화면 직행)
         var gamesVm = _serviceProvider.GetRequiredService<CoinGamesViewModel>();
         gamesVm.BindProfile(profile);
-        var hubNavigation = _serviceProvider.GetRequiredService<IHubNavigationService>();
-        hubNavigation.HubVisibilityChanged += (_, _) => Dispatcher.BeginInvoke(() => SyncInviteCardWindow(gamesVm));
         var animator = _serviceProvider.GetRequiredService<PetAnimationController>();
-        gamesVm.IncomingInviteChanged += (_, _) => Dispatcher.BeginInvoke(() => SyncInviteCardWindow(gamesVm));
         gamesVm.GameNotification += (_, msg) => Dispatcher.BeginInvoke(() => petVm.ShowBubble(msg, 3400));
         gamesVm.PetEmotionTriggered += (_, isHappy) => Dispatcher.BeginInvoke(() => animator.TriggerGameReaction(isHappy));
         gamesVm.OpenGameScreenRequested += (_, screen) => Dispatcher.BeginInvoke(() =>
@@ -162,8 +159,9 @@ public partial class App : Application
             () => _petWindow);
         social.FriendMessageReceived += OnSocialFriendMessageReceived;
         social.FriendStatusNotification += OnSocialFriendStatusNotification;
-        _petWindow.LocationChanged += (_, _) => RepositionInviteCard();
-        _petWindow.SizeChanged += (_, _) => RepositionInviteCard();
+        _inviteCard = new GameInviteCardPresenter(gamesVm, _petWindow,
+            _petWindow.GetInviteCardObstacle, _petWindow.GetInviteCardHead);
+        _petWindow.SpeechBubbleLayoutChanged += (_, _) => _inviteCard?.RequestUpdate();
         _petWindow.InitializeWithProfile(profile);
         _petWindow.Show();
     }
@@ -200,60 +198,6 @@ public partial class App : Application
 
         var navigation = _serviceProvider.GetRequiredService<IHubNavigationService>();
         return navigation.NavigateAsync(request);
-    }
-
-    private void SyncInviteCardWindow(CoinGamesViewModel gamesVm)
-    {
-        if (_petWindow is null)
-        {
-            return;
-        }
-
-        var hubVisible = _serviceProvider?.GetService<IHubNavigationService>()?.IsHubVisibleAndNotMinimized == true;
-        if (!gamesVm.HasIncomingInvite || hubVisible)
-        {
-            CloseInviteCardWindow();
-            return;
-        }
-
-        if (_inviteCardWindow is null)
-        {
-            _inviteCardWindow = new GameInviteCardWindow(gamesVm)
-            {
-                Owner = _petWindow
-            };
-            _inviteCardWindow.Closed += (_, _) => _inviteCardWindow = null;
-            _inviteCardWindow.Show();
-            _inviteCardWindow.PositionNearPet(_petWindow);
-        }
-        else
-        {
-            if (!_inviteCardWindow.IsVisible)
-            {
-                _inviteCardWindow.Show();
-            }
-
-            _inviteCardWindow.PositionNearPet(_petWindow);
-            _inviteCardWindow.ReplayEntrance();
-        }
-    }
-
-    private void RepositionInviteCard()
-    {
-        if (_petWindow is not null && _inviteCardWindow is { IsVisible: true })
-        {
-            _inviteCardWindow.PositionNearPet(_petWindow);
-        }
-    }
-
-    private void CloseInviteCardWindow()
-    {
-        if (_inviteCardWindow is not null)
-        {
-            var card = _inviteCardWindow;
-            _inviteCardWindow = null;
-            card.Close();
-        }
     }
 
     private void ToggleVisitorPetWindow(LabPet.Shared.Models.FriendEntry friend, LabPet.Shared.Models.PetAppearance appearance)
@@ -332,7 +276,8 @@ public partial class App : Application
 
         _messageRouter = null;
 
-        CloseInviteCardWindow();
+        _inviteCard?.Dispose();
+        _inviteCard = null;
         _serviceProvider?.GetService<IHubNavigationService>()?.CloseIfOpen();
 
         foreach (var visitor in _visitorWindows.Values.ToList())
