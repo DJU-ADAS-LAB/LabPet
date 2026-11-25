@@ -56,6 +56,9 @@ public static partial class Win32WindowHelper
     [LibraryImport("user32.dll")]
     private static partial IntPtr MonitorFromWindow(IntPtr window, uint flags);
 
+    [LibraryImport("user32.dll")]
+    private static partial IntPtr MonitorFromPoint(NativePoint point, uint flags);
+
     [LibraryImport("user32.dll", EntryPoint = "GetMonitorInfoW")]
     [return: MarshalAs(UnmanagedType.Bool)]
     private static partial bool GetMonitorInfo(IntPtr monitor, ref NativeMonitorInfo info);
@@ -69,7 +72,18 @@ public static partial class Win32WindowHelper
         bounds = Rect.Empty;
         var handle = new WindowInteropHelper(window).Handle;
         if (!IsValidWindowHandle(handle)) return false;
-        var monitor = MonitorFromWindow(handle, 2);
+        return TryGetMonitorBounds(MonitorFromWindow(handle, 2), out bounds);
+    }
+
+    internal static bool TryGetMonitorBoundsAt(Point point, out Rect bounds)
+    {
+        var pixel = new NativePoint { X = (int)Math.Floor(point.X), Y = (int)Math.Floor(point.Y) };
+        return TryGetMonitorBounds(MonitorFromPoint(pixel, 0), out bounds);
+    }
+
+    private static bool TryGetMonitorBounds(IntPtr monitor, out Rect bounds)
+    {
+        bounds = Rect.Empty;
         var info = new NativeMonitorInfo { Size = Marshal.SizeOf<NativeMonitorInfo>() };
         if (monitor == IntPtr.Zero || !GetMonitorInfo(monitor, ref info)) return false;
         var rect = info.Monitor;

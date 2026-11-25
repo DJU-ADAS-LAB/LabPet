@@ -181,13 +181,15 @@ public partial class App : Application
         _petWindow.SpeechBubbleLayoutChanged += (_, _) => _inviteCard?.RequestUpdate();
         _petWindow.InitializeWithProfile(profile);
         _petWindow.Show();
+        _snowballs = _serviceProvider.GetRequiredService<SnowballInteractionService>();
         _snowballScene = new SnowballDesktopScene(
             _petWindow,
             _serviceProvider.GetRequiredService<IPetMeshFactory>(),
-            petId => _visitorWindows.GetValueOrDefault(petId));
+            petId => _visitorWindows.GetValueOrDefault(petId),
+            _snowballs.Outgoing);
         social.StateChanged += OnSnowballSocialStateChanged;
-        _snowballs = _serviceProvider.GetRequiredService<SnowballInteractionService>();
         _snowballs.Received += OnSnowballReceived;
+        _snowballs.OutgoingReady += OnSnowballOutgoingReady;
         _snowballs.InteractionRejected += (_, msg) => Dispatcher.BeginInvoke(() => petVm.ShowBubble(msg, 2400));
 
         var pomodoro = _serviceProvider.GetRequiredService<PomodoroTimerService>();
@@ -202,6 +204,8 @@ public partial class App : Application
 
     internal bool TryReceiveSnowball(Guid senderPetId, Guid eventId, LabPet.Shared.Models.PetAppearance appearance)
         => _snowballScene?.TryReceive(senderPetId, eventId, appearance) == true;
+
+    private void OnSnowballOutgoingReady(object? sender, EventArgs e) => _snowballScene?.WakeOutgoing();
 
     private void OnSnowballReceived(object? sender, SnowballReceivedEventArgs e)
     {
@@ -295,6 +299,7 @@ public partial class App : Application
 
         _visitorWindows[friend.PetId] = visitor;
         visitor.Show();
+        _snowballScene?.PromoteVisitor(friend.PetId, visitor);
         visitor.ShowVisitorBubble("놀러 왔어!", 2200);
         petVm.NotifyVisitorStateChanged();
     }
@@ -355,7 +360,11 @@ public partial class App : Application
 
         _messageRouter = null;
 
-        if (_snowballs is not null) _snowballs.Received -= OnSnowballReceived;
+        if (_snowballs is not null)
+        {
+            _snowballs.Received -= OnSnowballReceived;
+            _snowballs.OutgoingReady -= OnSnowballOutgoingReady;
+        }
         _snowballs = null;
         _snowballScene?.Dispose();
         _snowballScene = null;

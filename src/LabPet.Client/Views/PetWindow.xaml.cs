@@ -758,25 +758,39 @@ public partial class PetWindow : Window, IMessageBubbleTarget
 
     /// <summary>UI 스레드 전용. 현재 몸통 중심을 화면 물리 픽셀로 반환한다.</summary>
     internal double SnowballPetScale => _viewModel.PetScale;
+    private bool _snowballSceneOwnsPose;
+    internal bool IsSnowballThrowBlocked => _isDraggingWindow || _animator.IsSnowballThrowBlocked;
+    internal bool IsReactingToSnowball => _animator.IsReactingToSnowball;
 
     internal bool TryGetSnowballTargetPhysical(out Point targetPhysical)
     {
         targetPhysical = default;
-        if (!Dispatcher.CheckAccess() || Dispatcher.HasShutdownStarted ||
-            _isClosingOrClosed || !IsVisible || _currentRig is not { } rig ||
-            PresentationSource.FromVisual(PetViewport) is null) return false;
-        var bounds = rig.BodyBounds;
-        if (bounds.IsEmpty || bounds.SizeX <= 0 || bounds.SizeY <= 0) return false;
-        var center = new Point3D(bounds.X + bounds.SizeX * 0.5,
-            bounds.Y + bounds.SizeY * 0.5, bounds.Z + bounds.SizeZ * 0.5);
-        center = rig.BodyTransform?.Transform(center) ?? center;
-        if (!PetDisplayLayoutHelper.TryProjectPointToViewport(
-            PetViewport, PetVisual, center, out var viewportDip)) return false;
-        var physical = PetViewport.PointToScreen(viewportDip);
-        if (!double.IsFinite(physical.X) || !double.IsFinite(physical.Y) ||
-            Math.Abs(physical.X) > 10000000 || Math.Abs(physical.Y) > 10000000) return false;
-        targetPhysical = physical;
-        return true;
+        return Dispatcher.CheckAccess() && !Dispatcher.HasShutdownStarted && IsAvailableForMessages
+            && PetDisplayLayoutHelper.TryGetSnowballBodyPhysical(PetViewport, PetVisual, _currentRig, out targetPhysical);
+    }
+
+    internal bool TryGetSnowballHandPhysical(out Point hand) =>
+        PetDisplayLayoutHelper.TryGetSnowballHandPhysical(PetViewport, PetVisual, _currentRig, out hand);
+
+    internal void AdvanceOutgoingSnowballPose(Vector? direction, SnowballThrowPose? pose, bool laughing, double seconds)
+    {
+        _snowballSceneOwnsPose = true;
+        _animator.SetOutgoingSnowballPose(pose);
+        _animator.SetSnowballLaughing(laughing);
+        if (direction is { } aim)
+        {
+            _animator.UpdateFrame(seconds, aim.X, aim.Y, _viewModel.IsBubbleVisible);
+            return;
+        }
+        ComputeNormalizedLookDirection(out var lookX, out var lookY);
+        _animator.UpdateFrame(seconds, lookX, lookY, _viewModel.IsBubbleVisible);
+    }
+
+    internal void ReleaseOutgoingSnowballPose()
+    {
+        if (!_snowballSceneOwnsPose) return;
+        _snowballSceneOwnsPose = false;
+        _animator.CancelSnowballInteraction(preserveHit: true);
     }
 
     /// <summary>공용 눈덩이 연출 관리자가 명중 시 UI 스레드에서 호출한다.</summary>
@@ -857,6 +871,7 @@ public partial class PetWindow : Window, IMessageBubbleTarget
         }
 
         _lastFrameSeconds = now;
+        if (_snowballSceneOwnsPose) return;
         ComputeNormalizedLookDirection(out var lookX, out var lookY);
         _animator.UpdateFrame(dt, lookX, lookY, _viewModel.IsBubbleVisible);
     }

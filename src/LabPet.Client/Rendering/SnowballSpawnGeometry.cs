@@ -24,12 +24,7 @@ internal readonly record struct SnowballSpawnGeometry(Point Edge, Vector Inward,
             || !double.IsFinite(unit) || unit < 0 || unit > 1) return false;
         var w = monitor.Width;
         var h = monitor.Height;
-        var distance = (unit == 1 ? 0 : unit) * (2 * (w + h));
-        Point edge;
-        if (distance < w) edge = new(monitor.Left + distance, monitor.Top);
-        else if ((distance -= w) < h) edge = new(monitor.Right, monitor.Top + distance);
-        else if ((distance -= h) < w) edge = new(monitor.Right - distance, monitor.Bottom);
-        else edge = new(monitor.Left, monitor.Bottom - (distance - w));
+        var edge = PerimeterPoint(monitor, unit);
         // 인접 모서리 반경에서는 두 안쪽 법선을 혼합해 대각선으로 진입한다.
         var nx = Math.Max(0, 1 - (edge.X - monitor.Left) / (pet.Width / 2))
             - Math.Max(0, 1 - (monitor.Right - edge.X) / (pet.Width / 2));
@@ -87,4 +82,29 @@ internal readonly record struct SnowballSpawnGeometry(Point Edge, Vector Inward,
     }
 
     private static bool Finite(double value) => double.IsFinite(value) && Math.Abs(value) <= 10000000;
+
+    internal static Point PerimeterPoint(Rect monitor, double unit)
+    {
+        var w = monitor.Width;
+        var h = monitor.Height;
+        var distance = (unit == 1 ? 0 : unit) * (2 * (w + h));
+        if (distance < w) return new(monitor.Left + distance, monitor.Top);
+        if ((distance -= w) < h) return new(monitor.Right, monitor.Top + distance);
+        if ((distance -= h) < w) return new(monitor.Right - distance, monitor.Bottom);
+        return new(monitor.Left, monitor.Bottom - (distance - w));
+    }
+
+    internal static Point BeyondMonitor(Rect monitor, Point origin, Point last, double margin)
+    {
+        var travel = last - origin;
+        if (travel.LengthSquared < 1) travel = new(1, 0);
+        var dx = travel.X > 0 ? monitor.Right - last.X : last.X - monitor.Left;
+        var dy = travel.Y > 0 ? monitor.Bottom - last.Y : last.Y - monitor.Top;
+        var tx = travel.X == 0 ? double.PositiveInfinity : dx / Math.Abs(travel.X);
+        var ty = travel.Y == 0 ? double.PositiveInfinity : dy / Math.Abs(travel.Y);
+        var edge = last + travel * Math.Max(0, Math.Min(tx, ty));
+        return tx <= ty
+            ? edge + new Vector(Math.Sign(travel.X) * margin, 0)
+            : edge + new Vector(0, Math.Sign(travel.Y) * margin);
+    }
 }

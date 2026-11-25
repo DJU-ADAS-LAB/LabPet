@@ -1,5 +1,6 @@
 using System.Windows;
 using System.Windows.Media;
+using System.Windows.Threading;
 using LabPet.Client.Diagnostics;
 using LabPet.Client.Interop;
 using LabPet.Client.Rendering;
@@ -13,16 +14,21 @@ internal sealed class SnowballDesktopScene : IDisposable
     private readonly PetWindow _pet;
     private readonly IPetMeshFactory _factory;
     private readonly Func<string, VisitorPetWindow?> _findVisitor;
+    private readonly SnowballOutgoingQueue? _outgoingQueue;
+    private readonly Dictionary<Rect, SnowballOverlayWindow> _otherOverlays = [];
     private SnowballOverlayWindow? _overlay;
     private SnowballSceneController? _scene;
     private Rect _monitor;
     private bool _disposed;
+    private bool _wakeQueued;
 
-    internal SnowballDesktopScene(PetWindow pet, IPetMeshFactory factory, Func<string, VisitorPetWindow?> findVisitor)
+    internal SnowballDesktopScene(PetWindow pet, IPetMeshFactory factory, Func<string, VisitorPetWindow?> findVisitor,
+        SnowballOutgoingQueue? outgoingQueue = null)
     {
         _pet = pet;
         _factory = factory;
         _findVisitor = findVisitor;
+        _outgoingQueue = outgoingQueue;
         pet.IsVisibleChanged += OnPetVisibilityChanged;
         pet.Closing += OnPetClosing;
     }
@@ -35,8 +41,7 @@ internal sealed class SnowballDesktopScene : IDisposable
             || !Win32WindowHelper.TryGetNearestMonitorBounds(_pet, out var monitor)) return false;
         try
         {
-            if (monitor != _monitor) Reset();
-            if (_scene is null && !TryOpen(monitor)) return false;
+            if (!TryUseMonitor(monitor)) return false;
             var scene = _scene!;
             var snapshot = appearance.Clone();
             var accepted = scene.TryReceive(senderId, eventId, id => CreateActor(senderId, id, snapshot));
@@ -51,9 +56,41 @@ internal sealed class SnowballDesktopScene : IDisposable
         }
     }
 
+    internal void WakeOutgoing()
+    {
+        _pet.Dispatcher.VerifyAccess();
+        if (_disposed || _wakeQueued || _pet.Dispatcher.HasShutdownStarted) return;
+        _wakeQueued = true;
+        _pet.Dispatcher.BeginInvoke(DispatcherPriority.Background, new Action(() =>
+        {
+            _wakeQueued = false;
+            if (_disposed || _outgoingQueue is not { Count: > 0 }) return;
+            try
+            {
+                if (_pet.TryGetSnowballTargetPhysical(out _) && Win32WindowHelper.TryGetNearestMonitorBounds(_pet, out var monitor)
+                    && TryUseMonitor(monitor))
+                {
+                    _scene!.WakeOutgoing();
+                    return;
+                }
+            }
+            catch (Exception ex)
+            {
+                CrashLogWriter.Write("SnowballDesktopScene.Outgoing", ex);
+            }
+            _outgoingQueue.Clear();
+            if (_scene?.HasWork != true) Reset();
+        }));
+    }
+
     internal void RemoveVisitor(string petId)
     {
         if (Guid.TryParse(petId, out var id)) _scene?.RemoveVisitor(id);
+    }
+
+    internal void PromoteVisitor(string petId, VisitorPetWindow visitor)
+    {
+        if (Guid.TryParse(petId, out var id)) _scene?.PromoteVisitor(id, visitor);
     }
 
     internal void RemoveOfflineSenders(IEnumerable<string> onlinePetIds)
@@ -77,8 +114,48 @@ internal sealed class SnowballDesktopScene : IDisposable
         }
         _monitor = monitor;
         _scene = new SnowballSceneController(_overlay);
-        _ = new SnowballSceneLoop(_overlay, _scene, GetTarget, _ => _pet.TryTriggerSnowballHit(), Reset);
+        if (_outgoingQueue is { } queue)
+            _scene.AttachOutgoing(new SnowballOutgoingActor(_pet, queue, _overlay, () => _monitor,
+                id => _findVisitor(id.ToString("D")), _scene.FindTemporary, PlaceFlight));
+        _ = new SnowballSceneLoop(_overlay, _scene, GetTarget, _ => _pet.TryTriggerSnowballHit(),
+            () =>
+            {
+                Reset();
+                // 장면 종료와 같은 프레임에 전송이 완료된 경우 다시 시작한다.
+                if (_outgoingQueue is { Count: > 0 }) WakeOutgoing();
+            });
         return true;
+    }
+
+    private bool TryUseMonitor(Rect monitor)
+    {
+        if (_scene is null) return TryOpen(monitor);
+        if (monitor == _monitor) return true;
+        _scene.CancelReceiving();
+        if (!_overlay!.TryShowWithinMonitor(monitor, monitor)) return false;
+        if (_otherOverlays.Remove(monitor, out var duplicate)) duplicate.Dispose();
+        _monitor = monitor;
+        return true;
+    }
+
+    private SnowballFlightPlacement? PlaceFlight(Point point, Rect? lockedMonitor)
+    {
+        var probe = lockedMonitor is { } clip
+            ? new Point(clip.Left + clip.Width / 2, clip.Top + clip.Height / 2) : point;
+        if (!Win32WindowHelper.TryGetMonitorBoundsAt(probe, out var monitor)
+            || (lockedMonitor is { } locked && locked != monitor)) return null;
+        var overlay = _overlay!;
+        if (monitor != _monitor && !_otherOverlays.TryGetValue(monitor, out overlay!))
+        {
+            overlay = new SnowballOverlayWindow();
+            if (!overlay.TryShowWithinMonitor(monitor, monitor))
+            {
+                overlay.Dispose();
+                return null;
+            }
+            _otherOverlays.Add(monitor, overlay);
+        }
+        return overlay.TryScreenPhysicalToSceneDip(point, out var local) ? new(overlay.Scene, local) : null;
     }
 
     private ISnowballActor CreateActor(Guid senderId, Guid eventId, PetAppearance appearance)
@@ -104,13 +181,30 @@ internal sealed class SnowballDesktopScene : IDisposable
         }
     }
 
-    private Point? GetTarget() =>
-        Win32WindowHelper.TryGetNearestMonitorBounds(_pet, out var monitor) && monitor == _monitor
-        && _pet.TryGetSnowballTargetPhysical(out var target) ? target : null;
+    private Point? GetTarget()
+    {
+        if (!_pet.TryGetSnowballTargetPhysical(out var target)
+            || !Win32WindowHelper.TryGetNearestMonitorBounds(_pet, out var monitor)
+            || !TryUseMonitor(monitor)) return null;
+        if (_otherOverlays.Count > 0)
+        {
+            foreach (var pair in _otherOverlays.ToArray())
+            {
+                if (pair.Value.Scene.Children.Count > 0) continue;
+                _otherOverlays.Remove(pair.Key);
+                pair.Value.Dispose();
+            }
+        }
+        return target;
+    }
 
     private void OnPetVisibilityChanged(object sender, DependencyPropertyChangedEventArgs e)
     {
-        if (!_pet.IsVisible) Reset();
+        if (!_pet.IsVisible)
+        {
+            _outgoingQueue?.Clear();
+            Reset();
+        }
     }
 
     private void OnPetClosing(object? sender, System.ComponentModel.CancelEventArgs e) => Dispose();
@@ -124,6 +218,8 @@ internal sealed class SnowballDesktopScene : IDisposable
         _monitor = Rect.Empty;
         scene?.Dispose();
         overlay?.Dispose();
+        foreach (var spare in _otherOverlays.Values) spare.Dispose();
+        _otherOverlays.Clear();
     }
 
     public void Dispose()
@@ -133,6 +229,7 @@ internal sealed class SnowballDesktopScene : IDisposable
         _disposed = true;
         _pet.IsVisibleChanged -= OnPetVisibilityChanged;
         _pet.Closing -= OnPetClosing;
+        _outgoingQueue?.Clear();
         Reset();
     }
 }

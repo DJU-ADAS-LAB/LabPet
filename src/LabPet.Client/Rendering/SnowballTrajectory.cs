@@ -14,6 +14,7 @@ internal sealed class SnowballTrajectory
 
     public Point Position { get; private set; }
     public Vector Velocity { get; private set; }
+    internal Point Destination => _target;
     public double RemainingSeconds => Math.Max(0, _segmentDuration - _segmentElapsed);
     public bool IsComplete => RemainingSeconds == 0;
 
@@ -37,13 +38,18 @@ internal sealed class SnowballTrajectory
     public bool TryRetarget(Point target)
     {
         if (!IsValid(target) || RemainingSeconds <= 0.08 || target == _target) return false;
-        var remaining = RemainingSeconds;
+        Redirect(target, RemainingSeconds);
+        return true;
+    }
+
+    /// <summary>유효 대상을 잃으면 현재 위치·속도를 유지한 새 비행 구간으로 이어 간다.</summary>
+    internal void Redirect(Point target, double seconds)
+    {
         _start = Position;
         _startVelocity = Velocity;
         _target = target;
-        _segmentDuration = remaining;
+        _segmentDuration = seconds;
         _segmentElapsed = 0;
-        return true;
     }
 
     /// <summary>공용 갱신 루프에서 호출. 완료 이후 재호출해도 명중을 다시 반환하지 않는다.</summary>

@@ -93,6 +93,8 @@ internal sealed class SnowballOverlayWindow : Window, IDisposable
         _flights?.CancelSender(senderId);
     }
 
+    internal void AdvanceOutgoingFlights(double seconds) => _flights?.AdvancePhysical(seconds);
+
     protected override void OnSourceInitialized(EventArgs e)
     {
         base.OnSourceInitialized(e);

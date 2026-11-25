@@ -344,6 +344,7 @@ public sealed class PomodoroFocusAndUiTests : IDisposable
             var snowballResult = await snowballsA.SendDetailedAsync(friendBForA);
             Assert.False(snowballResult.Succeeded);
             Assert.True(snowballResult.IsPomodoroFocusBlocked);
+            Assert.Equal(0, snowballsA.Outgoing.Count);
             Assert.Contains(FriendOperationErrorCodes.PomodoroFocusMessage, snowballRejectedMessages);
 
             var musicResult = await socialA.ToggleMusicFollowDetailedAsync(friendBForA);

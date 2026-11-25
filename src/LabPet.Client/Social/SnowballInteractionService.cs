@@ -2,6 +2,7 @@ using System.Windows.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using LabPet.Client.Diagnostics;
+using LabPet.Client.Rendering;
 using LabPet.Shared.Models;
 using LabPet.Shared.Transport;
 
@@ -24,6 +25,8 @@ public sealed class SnowballInteractionService : IDisposable
     private volatile bool _disposed;
 
     internal event EventHandler<SnowballReceivedEventArgs>? Received;
+    internal event EventHandler? OutgoingReady;
+    internal SnowballOutgoingQueue Outgoing { get; }
     public event EventHandler<string>? InteractionRejected;
 
     public SnowballInteractionService(ISocialTransport transport, SocialCoordinatorService? social = null)
@@ -37,6 +40,7 @@ public sealed class SnowballInteractionService : IDisposable
         _social = social;
         _dispatcher = dispatcher;
         _clock = clock;
+        Outgoing = new SnowballOutgoingQueue(clock);
         _stopping = _stop.Token;
         _transport.PeersChanged += OnPeersChanged;
         _transport.SnowballReceived += OnReceived;
@@ -88,19 +92,28 @@ public sealed class SnowballInteractionService : IDisposable
             return TransportSendResult.Fail(FriendOperationErrorCodes.PomodoroFocusBlocked);
         }
         if (GetCooldownRemaining(friend.PetId) > TimeSpan.Zero
-            || GetStatus(friend.PetId) != SnowballPeerStatus.Available)
+            || GetStatus(friend.PetId) != SnowballPeerStatus.Available
+            || !Guid.TryParse(friend.PetId, out var targetId) || targetId == Guid.Empty)
             return TransportSendResult.Fail();
-        _lastSend[friend.PetId] = Timestamp;
+        var id = Guid.NewGuid();
+        if (!Outgoing.TryReserve(id))
+        {
+            InteractionRejected?.Invoke(this, "눈덩이 투척이 너무 많이 대기 중입니다. 잠시 후 다시 시도해 주세요.");
+            return TransportSendResult.Fail();
+        }
+        var sentAt = Timestamp;
+        _lastSend[friend.PetId] = sentAt;
         using var attempt = CancellationTokenSource.CreateLinkedTokenSource(_stopping);
         attempt.CancelAfter(TimeSpan.FromSeconds(8));
         try
         {
-            var result = await _transport.SendSnowballDetailedAsync(friend, Guid.NewGuid(), attempt.Token);
+            var result = await _transport.SendSnowballDetailedAsync(friend, id, attempt.Token);
             if (result.IsPomodoroFocusBlocked)
             {
                 InteractionRejected?.Invoke(this, FriendOperationErrorCodes.PomodoroFocusMessage);
             }
 
+            if (!_disposed && result.Succeeded) Outgoing.Complete(id, targetId, sentAt);
             return result;
         }
         catch (OperationCanceledException) when (attempt.IsCancellationRequested)
@@ -111,6 +124,15 @@ public sealed class SnowballInteractionService : IDisposable
         {
             CrashLogWriter.Write("SnowballInteraction.Send", ex);
             return TransportSendResult.Fail();
+        }
+        finally
+        {
+            Outgoing.Release(id);
+            if (!_disposed && Outgoing.Count > 0)
+            {
+                try { OutgoingReady?.Invoke(this, EventArgs.Empty); }
+                catch (Exception ex) { CrashLogWriter.Write("SnowballInteraction.Outgoing", ex); }
+            }
         }
     }
 
@@ -165,6 +187,7 @@ public sealed class SnowballInteractionService : IDisposable
     {
         if (_disposed) return;
         _disposed = true;
+        Outgoing.Clear();
         _transport.PeersChanged -= OnPeersChanged;
         _transport.SnowballReceived -= OnReceived;
         if (_social is not null)

@@ -179,4 +179,54 @@ public sealed class SnowballActorTimelineTests
         Assert.Equal(SnowballActorPhase.Entering, other.Phase);
         Assert.Equal(0, other.VisibilityProgress);
     }
+
+    [Fact]
+    public void CountershotsOnlyHoldExitAndCannotExtendTheFirstDeadline()
+    {
+        var id = Guid.NewGuid();
+        var actor = new SnowballActorTimeline(id, isVisitor: false);
+        var launched = new List<Guid>();
+        actor.Advance(1.3, launched.Add, holdExit: () => true);
+        Assert.Equal(id, Assert.Single(launched));
+        actor.NotifyImpact(id);
+        actor.Advance(1.0, launched.Add);
+        Assert.Equal(SnowballActorPhase.Exiting, actor.Phase);
+        var before = actor.VisibilityProgress;
+        actor.Advance(0.7, launched.Add, holdExit: () => true);
+        Assert.Equal(before, actor.VisibilityProgress);
+
+        actor.Advance(0.05, launched.Add, holdExit: () => false);
+        var released = actor.VisibilityProgress;
+        Assert.True(released < before);
+        actor.Advance(0.70, launched.Add, holdExit: () => true);
+        Assert.Equal(released, actor.VisibilityProgress);
+        actor.Advance(0.5, launched.Add, holdExit: () => true);
+        Assert.Equal(SnowballActorPhase.Complete, actor.Phase);
+        Assert.Single(launched);
+    }
+
+    [Theory]
+    [InlineData(0.25)]
+    [InlineData(0.60)]
+    [InlineData(1.15)]
+    public void PromotedActorKeepsItsReleaseAndDoesNotExitAgain(double elapsed)
+    {
+        var first = Guid.NewGuid();
+        var next = Guid.NewGuid();
+        var actor = new SnowballActorTimeline(first, isVisitor: false);
+        var launched = new List<Guid>();
+        actor.Advance(elapsed, launched.Add);
+        var throwElapsed = actor.ThrowElapsed;
+        Assert.True(actor.TryEnqueue(next));
+        actor.PromoteToVisitor();
+        Assert.Equal(1, actor.VisibilityProgress);
+        Assert.Equal(throwElapsed, actor.ThrowElapsed, 10);
+        actor.Advance(1.9, launched.Add);
+        Assert.Equal(new[] { first, next }, launched);
+        actor.NotifyImpact(first);
+        actor.NotifyImpact(next);
+        actor.Advance(1.0, launched.Add);
+        Assert.Equal(SnowballActorPhase.Complete, actor.Phase);
+        Assert.Equal(1, actor.VisibilityProgress);
+    }
 }

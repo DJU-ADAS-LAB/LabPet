@@ -87,6 +87,30 @@ internal sealed class SnowballPetVisual : Grid, IDisposable
         return true;
     }
 
+    internal bool TryGetVisibleBodyPhysical(Rect monitor, out Point point)
+    {
+        point = default;
+        var body = _rig.BodyBounds;
+        if (_disposed || body.IsEmpty || PresentationSource.FromVisual(_viewport) is null) return false;
+        // 투영된 몸통 사각형과 실제 클리핑 영역이 겹치는 부분을 조준한다.
+        var projected = Rect.Empty;
+        for (var corner = 0; corner < 8; corner++)
+        {
+            var model = new Point3D(
+                body.X + ((corner & 1) == 0 ? 0 : body.SizeX),
+                body.Y + ((corner & 2) == 0 ? 0 : body.SizeY),
+                body.Z + ((corner & 4) == 0 ? 0 : body.SizeZ));
+            model = _rig.BodyTransform?.Transform(model) ?? model;
+            if (!PetDisplayLayoutHelper.TryProjectPointToViewport(_viewport, _model, model, out var local)) return false;
+            projected.Union(_viewport.PointToScreen(local));
+        }
+        var visible = Rect.Intersect(projected, monitor);
+        if (visible.IsEmpty || visible.Width < 7 || visible.Height < 7
+            || visible.Width * visible.Height < projected.Width * projected.Height * 0.18) return false;
+        point = visible.TopLeft + new Vector(visible.Width / 2, visible.Height / 2);
+        return true;
+    }
+
     private Canvas? _heldLayer;
     private System.Windows.Shapes.Ellipse? _heldSnowball;
     internal Point? HeldSnowballPosition { get; private set; }

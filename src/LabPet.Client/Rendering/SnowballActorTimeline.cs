@@ -12,7 +12,8 @@ internal sealed class SnowballActorTimeline
     private const double EdgeSeconds = 0.4;
     private const double LaughSeconds = 0.9;
     private const double PendingLifetimeSeconds = 2;
-    private readonly bool _visitor;
+    internal const double MaximumExitHoldSeconds = 1.5;
+    private bool _visitor;
     private readonly HashSet<Guid> _seen = [];
     private readonly Queue<Guid> _seenOrder = [];
     private readonly HashSet<Guid> _inFlight = [];
@@ -23,6 +24,7 @@ internal sealed class SnowballActorTimeline
     private double _elapsed;
     private double _entryStart;
     private bool _released;
+    private double? _exitHoldUntil;
 
     internal SnowballActorPhase Phase { get; private set; }
     internal int PendingCount => _pending.HasValue ? 1 : 0;
@@ -85,9 +87,23 @@ internal sealed class SnowballActorTimeline
 
     internal void NotifyImpact(Guid eventId) => _inFlight.Remove(eventId);
 
+    internal void PromoteToVisitor()
+    {
+        _visitor = true;
+        if (Phase == SnowballActorPhase.Entering)
+        {
+            if (!_released) SetPhase(SnowballActorPhase.Throwing);
+            else if (!StartPending()) SetPhase(SnowballActorPhase.WaitingForImpact);
+        }
+        else if (Phase == SnowballActorPhase.Exiting)
+        {
+            SetPhase(SnowballActorPhase.Complete);
+        }
+    }
+
     // 단계별 관절 갱신은 발사 콜백보다 먼저 수행한다. 콜백에서 시간표로 재진입하지 않는다.
     internal void Advance(double deltaSeconds, Action<Guid> launch,
-        Action<SnowballActorPhase, double, double>? advanceVisual = null)
+        Action<SnowballActorPhase, double, double>? advanceVisual = null, Func<bool>? holdExit = null)
     {
         ArgumentNullException.ThrowIfNull(launch);
         if (!double.IsFinite(deltaSeconds) || deltaSeconds <= 0
@@ -106,6 +122,18 @@ internal sealed class SnowballActorTimeline
                     return;
                 }
                 SetPhase(SnowballActorPhase.Laughing);
+            }
+            if (Phase == SnowballActorPhase.Exiting && holdExit?.Invoke() == true)
+            {
+                var now = _clock - remaining;
+                _exitHoldUntil ??= now + MaximumExitHoldSeconds;
+                var pause = Math.Min(remaining, _exitHoldUntil.Value - now);
+                if (pause > 0)
+                {
+                    advanceVisual?.Invoke(Phase, _elapsed, pause);
+                    remaining -= pause;
+                    if (remaining <= 0) return;
+                }
             }
             var duration = Phase switch
             {

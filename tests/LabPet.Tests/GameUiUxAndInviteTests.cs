@@ -577,6 +577,214 @@ public sealed class GameUiUxAndInviteTests : IAsyncLifetime
         });
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task SnowballDesktopScene_SendsFromLiveRigAndHitsMovingVisitorWhileReceiving(bool useOtherMonitor)
+    {
+        await WpfTestHost.RunAsync(async () =>
+        {
+            _hostTransport.HandleDiscoveryHello(new DiscoveryHelloPacket
+            {
+                PetId = _guestProfile.PetId, PetName = _guestProfile.PetName,
+                TcpPort = _guestTransport.BoundTcpPort, AppVersion = "0.3.15"
+            }, IPAddress.Loopback.ToString(), CancellationToken.None);
+            using var snowballs = new SnowballInteractionService(_hostTransport);
+            var factory = new BlenderAssetPetMeshFactory(new ProceduralPetMeshFactory());
+            var vm = new PetWindowViewModel(_hostStore, _hostSocial, snowballs);
+            using var audio = new TestAudioAnalyzer();
+            using var hook = new GlobalActivityHookService();
+            var animator = new PetAnimationController();
+            var pet = new PetWindow(vm, factory, new PetPortraitRenderer(factory), animator, audio,
+                hook, new SoloProgressionService(), new PomodoroTimerService(), _hostSocial)
+            {
+                Left = 400, Top = 350, ShowActivated = false
+            };
+            var visit = new VisitorPetWindow(_guestAsFriend, _guestAsFriend.CachedAppearance, factory, audio, _hostSocial)
+            {
+                Left = 650, Top = 350, ShowActivated = false
+            };
+            var guest = Guid.Parse(_guestProfile.PetId);
+            using var scene = new SnowballDesktopScene(pet, factory,
+                id => id == _guestProfile.PetId && visit.IsVisible ? visit : null, snowballs.Outgoing);
+            snowballs.OutgoingReady += (_, _) => scene.WakeOutgoing();
+            vm.ApplyProfile(_hostProfile);
+            pet.Show();
+            visit.Show();
+
+            IEnumerable<SnowballFlightVisual> Flights() => Application.Current.Windows.OfType<SnowballOverlayWindow>()
+                .SelectMany(window => window.Scene.Children.OfType<SnowballFlightVisual>());
+            static bool HasImpact(SnowballFlightVisual flight) => flight.Children.OfType<SnowballImpactVisual>().Any();
+
+            try
+            {
+                visit.OpenChatComposer();
+                visit.ChatComposerInputText = "보내지 않은 메시지";
+                Assert.True(Win32WindowHelper.TryGetNearestMonitorBounds(pet, out var sourceMonitor));
+                var destinationMonitor = sourceMonitor;
+                if (useOtherMonitor)
+                {
+                    var center = sourceMonitor.TopLeft + new Vector(sourceMonitor.Width / 2, sourceMonitor.Height / 2);
+                    foreach (var sample in new[] { new Point(sourceMonitor.Left - 10, center.Y),
+                        new Point(sourceMonitor.Right + 10, center.Y), new Point(center.X, sourceMonitor.Top - 10),
+                        new Point(center.X, sourceMonitor.Bottom + 10) })
+                    {
+                        if (!Win32WindowHelper.TryGetMonitorBoundsAt(sample, out var other)) continue;
+                        destinationMonitor = other;
+                        Assert.True(Win32WindowHelper.MoveWindowPhysical(visit,
+                            (int)(other.Left + other.Width / 2), (int)(other.Top + other.Height / 3)));
+                        break;
+                    }
+                }
+                await WpfTestHost.FlushAsync();
+                Assert.True(await snowballs.SendAsync(_guestAsFriend));
+                Assert.False(await snowballs.SendAsync(_guestAsFriend));
+                Assert.True(scene.TryReceive(guest, Guid.NewGuid(), _guestAsFriend.CachedAppearance));
+                var absent = Guid.NewGuid();
+                Assert.True(snowballs.Outgoing.TryReserve(absent));
+                Assert.True(snowballs.Outgoing.Complete(absent, Guid.NewGuid(), TimeProvider.System.GetTimestamp()));
+                scene.WakeOutgoing();
+
+                await WaitForSnowballAsync(() => Flights().Any(flight => flight.IsPhysical));
+                var outgoing = Assert.Single(Flights(), flight => flight.IsPhysical);
+                Assert.True(pet.TryGetSnowballHandPhysical(out var hand));
+                Assert.InRange((outgoing.Position - hand).Length, 0, 80);
+                visit.Left += 95;
+                var visitorLocation = new Point(visit.Left, visit.Top);
+                var sawHitDuringThrow = false;
+                var sawOppositeFlights = false;
+                var offscreenHadImpact = false;
+                SnowballFlightVisual? offscreen = null;
+                await WaitForSnowballAsync(() =>
+                {
+                    sawHitDuringThrow |= animator.IsThrowingSnowball && animator.IsReactingToSnowball;
+                    sawOppositeFlights |= Flights().Any(flight => !flight.IsPhysical) && Flights().Contains(outgoing);
+                    offscreen ??= Flights().FirstOrDefault(flight => flight.IsPhysical && !ReferenceEquals(flight, outgoing));
+                    offscreenHadImpact |= offscreen is not null && HasImpact(offscreen);
+                    return HasImpact(outgoing);
+                });
+                Assert.True(visit.TryGetSnowballTargetPhysical(out var target));
+                Assert.InRange((outgoing.Position - target).Length, 0, 36);
+                Assert.True(destinationMonitor.Contains(outgoing.Position));
+                Assert.True(Win32WindowHelper.TryGetNearestMonitorBounds(visit, out var observedMonitor));
+                Assert.Equal(destinationMonitor, observedMonitor);
+                var hitOverlay = Assert.IsType<SnowballOverlayWindow>(Window.GetWindow(outgoing));
+                Assert.True(Win32WindowHelper.TryGetWindowPhysicalBounds(hitOverlay, out var overlayBounds));
+                Assert.Equal(destinationMonitor, overlayBounds);
+                Assert.True(sawOppositeFlights);
+
+                await WaitForSnowballAsync(() =>
+                {
+                    sawHitDuringThrow |= animator.IsThrowingSnowball && animator.IsReactingToSnowball;
+                    offscreen ??= Flights().FirstOrDefault(flight => flight.IsPhysical && !ReferenceEquals(flight, outgoing));
+                    offscreenHadImpact |= offscreen is not null && HasImpact(offscreen);
+                    return offscreen?.IsComplete == true;
+                });
+                Assert.True(sawHitDuringThrow);
+                Assert.False(offscreenHadImpact);
+                Assert.Equal(visitorLocation, new Point(visit.Left, visit.Top));
+                Assert.True(visit.IsChatComposerOpen);
+                Assert.Equal("보내지 않은 메시지", visit.ChatComposerInputText);
+                await WaitForSnowballAsync(() => !Application.Current.Windows.OfType<SnowballOverlayWindow>().Any());
+            }
+            finally
+            {
+                visit.Close();
+                pet.Close();
+            }
+        });
+
+    }
+
+    private static async Task WaitForSnowballAsync(Func<bool> condition)
+    {
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(6));
+        while (!condition()) await Task.Delay(10, timeout.Token);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task SnowballDesktopScene_CountershotHitsTemporaryPetOrItsPromotedVisitor(bool promoteDuringFlight)
+    {
+        await WpfTestHost.RunAsync(async () =>
+        {
+            var factory = new ProceduralPetMeshFactory();
+            var vm = new PetWindowViewModel(_hostStore, _hostSocial);
+            using var audio = new TestAudioAnalyzer();
+            using var hook = new GlobalActivityHookService();
+            var animator = new PetAnimationController();
+            var pet = new PetWindow(vm, factory, new PetPortraitRenderer(factory), animator, audio, hook,
+                new SoloProgressionService(), new PomodoroTimerService(), _hostSocial) { ShowActivated = false };
+            var visitor = new VisitorPetWindow(_guestAsFriend, _guestAsFriend.CachedAppearance, factory, audio, _hostSocial)
+                { ShowActivated = false, Left = 350, Top = 320 };
+            var guest = Guid.Parse(_guestProfile.PetId);
+            var queue = new SnowballOutgoingQueue(TimeProvider.System);
+            using var scene = new SnowballDesktopScene(pet, factory,
+                id => id == _guestProfile.PetId && visitor.IsVisible ? visitor : null, queue);
+            vm.ApplyProfile(_hostProfile);
+            pet.Show();
+            try
+            {
+                await WpfTestHost.FlushAsync();
+                Assert.True(scene.TryReceive(guest, Guid.NewGuid(), _guestAsFriend.CachedAppearance));
+                var overlay = Assert.Single(Application.Current.Windows.OfType<SnowballOverlayWindow>());
+                var temporary = Assert.Single(overlay.Scene.Children.OfType<SnowballPetVisual>());
+                Assert.True(Win32WindowHelper.TryGetWindowPhysicalBounds(overlay, out var monitor));
+                Assert.True(queue.TryReserve(guest));
+                Assert.True(queue.Complete(guest, guest, TimeProvider.System.GetTimestamp()));
+                scene.WakeOutgoing();
+
+                SnowballFlightVisual? countershot = null;
+                await WaitForSnowballAsync(() =>
+                {
+                    countershot = overlay.Scene.Children.OfType<SnowballFlightVisual>().FirstOrDefault(flight => flight.IsPhysical);
+                    return countershot is not null;
+                });
+                Assert.True(temporary.TryGetVisibleBodyPhysical(monitor, out var exposedBody));
+                Assert.True(monitor.Contains(exposedBody));
+                if (promoteDuringFlight)
+                {
+                    visitor.Show();
+                    scene.PromoteVisitor(_guestProfile.PetId, visitor);
+                    Assert.DoesNotContain(temporary, overlay.Scene.Children.OfType<SnowballPetVisual>());
+                }
+
+                var sawTemporaryHit = false;
+                var sawCountershotImpact = false;
+                var sawOwnHit = false;
+                var sawOverlap = false;
+                await WaitForSnowballAsync(() =>
+                {
+                    sawTemporaryHit |= temporary.Animator.IsReactingToSnowball;
+                    sawCountershotImpact |= countershot!.Children.OfType<SnowballImpactVisual>().Any();
+                    sawOwnHit |= animator.IsReactingToSnowball;
+                    sawOverlap |= countershot.IsFlying && overlay.Scene.Children.OfType<SnowballFlightVisual>()
+                        .Any(flight => !flight.IsPhysical && flight.IsFlying);
+                    return sawCountershotImpact && sawOwnHit;
+                });
+                Assert.True(sawOverlap);
+                if (promoteDuringFlight)
+                {
+                    Assert.True(visitor.TryGetSnowballTargetPhysical(out var visitorBody));
+                    Assert.InRange((visitorBody - countershot!.Position).Length, 0, 36);
+                    Assert.False(sawTemporaryHit);
+                }
+                else
+                {
+                    Assert.True(sawTemporaryHit);
+                    Assert.InRange((exposedBody - countershot!.Position).Length, 0, 85);
+                }
+                await WaitForSnowballAsync(() => !Application.Current.Windows.OfType<SnowballOverlayWindow>().Any());
+            }
+            finally
+            {
+                visitor.Close();
+                pet.Close();
+            }
+        });
+    }
+
     [Fact]
     public async Task InviteCardWindow_DoesNotStealFocus_AllowsClickEvenDuringClickThroughMode()
     {

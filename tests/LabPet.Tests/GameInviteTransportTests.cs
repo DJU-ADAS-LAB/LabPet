@@ -115,6 +115,18 @@ public sealed class GameInviteTransportTests
                     Assert.Equal(0, guestFriend.Intimacy);
                     Assert.Equal(0, hostFriend.Intimacy);
                 }
+                using (var sendingSnowballs = new SnowballInteractionService(hostTransport))
+                using (var receivingSnowballs = new SnowballInteractionService(guestTransport))
+                {
+                    var delivered = new TaskCompletionSource<Guid>(TaskCreationOptions.RunContinuationsAsynchronously);
+                    receivingSnowballs.Received += (_, e) => delivered.TrySetResult(e.EventId);
+                    Assert.True(await sendingSnowballs.SendAsync(guestFriend));
+                    Assert.True(sendingSnowballs.Outgoing.TryTake(out var outgoing));
+                    Assert.Equal(await delivered.Task.WaitAsync(TimeSpan.FromSeconds(4)), outgoing.EventId);
+                    Assert.Equal(Guid.Parse(guestFriend.PetId), outgoing.TargetPetId);
+                    Assert.False(await sendingSnowballs.SendAsync(guestFriend));
+                    Assert.Equal(0, sendingSnowballs.Outgoing.Count);
+                }
 
                 using var a = new CoinGamesViewModel(hostStore, new SoloProgressionService(), hostSocial);
                 using var b = new CoinGamesViewModel(guestStore, new SoloProgressionService(), guestSocial);

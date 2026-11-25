@@ -14,6 +14,7 @@ internal sealed class SnowballVisitorActor : ISnowballActor
     private readonly SnowballActorTimeline _timeline;
     private Ellipse? _held;
     private bool _disposed;
+    private bool _resumeThrow;
 
     public SnowballOverlayWindow Overlay { get; }
     public SnowballActorPhase Phase => _timeline.Phase;
@@ -21,10 +22,16 @@ internal sealed class SnowballVisitorActor : ISnowballActor
         ? bounds : Rect.Empty;
 
     internal SnowballVisitorActor(SnowballOverlayWindow overlay, VisitorPetWindow visitor, Guid eventId)
+        : this(overlay, visitor, new SnowballActorTimeline(eventId, isVisitor: true))
+    {
+    }
+
+    internal SnowballVisitorActor(SnowballOverlayWindow overlay, VisitorPetWindow visitor, SnowballActorTimeline timeline)
     {
         Overlay = overlay;
         _visitor = visitor;
-        _timeline = new SnowballActorTimeline(eventId, isVisitor: true);
+        _timeline = timeline;
+        _resumeThrow = timeline.ThrowElapsed > 0;
         if (!visitor.TryUseSnowballPose())
             throw new InvalidOperationException("방문 펫의 투척 자세를 시작할 수 없습니다.");
     }
@@ -35,6 +42,13 @@ internal sealed class SnowballVisitorActor : ISnowballActor
     public void Advance(double seconds, double lookX, double lookY, Action<Guid, Point> launch)
     {
         if (_disposed) return;
+        if (_visitor.IsSnowballThrowBlocked)
+        {
+            HideHeld();
+            if (!_visitor.AdvanceSnowballPose(SnowballActorPhase.Throwing, null, seconds, lookX, lookY))
+                throw new InvalidOperationException("방문 펫의 대기 자세를 갱신할 수 없습니다.");
+            return;
+        }
         _timeline.Advance(seconds, id =>
         {
             HideHeld();
@@ -43,8 +57,10 @@ internal sealed class SnowballVisitorActor : ISnowballActor
             launch(id, hand);
         }, (phase, before, step) =>
         {
-            if (!_visitor.AdvanceSnowballPose(phase, phase == SnowballActorPhase.Throwing && before == 0, step, lookX, lookY))
+            double? startFrom = phase == SnowballActorPhase.Throwing && (before == 0 || _resumeThrow) ? before : null;
+            if (!_visitor.AdvanceSnowballPose(phase, startFrom, step, lookX, lookY))
                 throw new InvalidOperationException("방문 펫의 투척 자세를 갱신할 수 없습니다.");
+            _resumeThrow = false;
 
             if (phase == SnowballActorPhase.Throwing && _timeline.ThrowElapsed < SnowballThrowPose.ReleaseSeconds
                 && _visitor.TryGetSnowballHandPhysical(out var hand)

@@ -1,6 +1,8 @@
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Media;
 using System.Windows.Media.Media3D;
+using LabPet.Client.Rendering;
 using LabPet.Shared.Models;
 
 namespace LabPet.Client.Views;
@@ -105,6 +107,33 @@ internal static class PetDisplayLayoutHelper
             !double.IsFinite(projected.X) || !double.IsFinite(projected.Y)) return false;
         pointDip = projected;
         return true;
+    }
+
+    internal static bool TryGetSnowballBodyPhysical(Viewport3D viewport, ModelVisual3D model,
+        PetRigHandle? rig, out Point position)
+    {
+        position = default;
+        if (rig is null || rig.BodyBounds.IsEmpty) return false;
+        var bounds = rig.BodyBounds;
+        var center = new Point3D(bounds.X + bounds.SizeX / 2, bounds.Y + bounds.SizeY / 2, bounds.Z + bounds.SizeZ / 2);
+        return TryProjectPhysical(viewport, model, rig.BodyTransform?.Transform(center) ?? center, out position);
+    }
+
+    internal static bool TryGetSnowballHandPhysical(Viewport3D viewport, ModelVisual3D model,
+        PetRigHandle? rig, out Point position)
+    {
+        position = default;
+        return rig is not null && rig.TryGetRightHandPosition(out var hand)
+            && TryProjectPhysical(viewport, model, hand, out position);
+    }
+
+    private static bool TryProjectPhysical(Viewport3D viewport, ModelVisual3D model, Point3D point, out Point position)
+    {
+        position = default;
+        if (PresentationSource.FromVisual(viewport) is null
+            || !TryProjectPointToViewport(viewport, model, point, out var local)) return false;
+        position = viewport.PointToScreen(local);
+        return double.IsFinite(position.X) && double.IsFinite(position.Y);
     }
 
     public static bool TryComputeNameplateOffsetY(

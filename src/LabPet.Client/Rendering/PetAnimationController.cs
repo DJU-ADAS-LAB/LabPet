@@ -118,7 +118,16 @@ public sealed class PetAnimationController
         || (_snackSeconds > 0 && _rig?.Skin?.Asset.Clips is not null) || HasActiveParticles();
 
     private double _snowballThrowSeconds = SnowballThrowPose.DurationSeconds;
-    internal bool IsThrowingSnowball => _snowballThrowSeconds < SnowballThrowPose.DurationSeconds;
+    private SnowballThrowPose? _outgoingSnowballPose;
+    private double _outgoingSnowballWeight;
+    internal bool IsThrowingSnowball => _outgoingSnowballPose.HasValue || _snowballThrowSeconds < SnowballThrowPose.DurationSeconds;
+    internal bool IsSnowballThrowBlocked => _isGrabbed || _grabWeight > 0.01 || _gameReactionTime > 0;
+
+    internal void SetOutgoingSnowballPose(SnowballThrowPose? pose)
+    {
+        _rig?.RootModel.Dispatcher.VerifyAccess();
+        _outgoingSnowballPose = pose;
+    }
 
     private bool _snowballLaughRequested;
     private bool _snowballLaughExpressionActive;
@@ -189,19 +198,19 @@ public sealed class PetAnimationController
     }
 
     /// <summary>UI 스레드에서 시작한다. 진행 중인 투척은 초기화하지 않고 호출자 대기열에 남긴다.</summary>
-    internal bool TryStartSnowballThrow()
+    internal bool TryStartSnowballThrow(double elapsedSeconds = 0)
     {
         var rig = _rig;
         if (rig is null) return false;
         rig.RootModel.Dispatcher.VerifyAccess();
-        if (IsThrowingSnowball || _isGrabbed || _grabWeight > 0.01 || _gameReactionTime > 0)
+        if (IsThrowingSnowball || IsSnowballThrowBlocked)
             return false;
-        _snowballThrowSeconds = 0;
+        _snowballThrowSeconds = elapsedSeconds;
         return true;
     }
 
     /// <summary>숨김·연결 종료 시 눈던지기 상태만 정리한다. 수면·음악·게임 상태는 유지한다.</summary>
-    internal void CancelSnowballInteraction()
+    internal void CancelSnowballInteraction(bool preserveHit = false)
     {
         var rig = _rig;
         rig?.RootModel.Dispatcher.VerifyAccess();
@@ -214,8 +223,9 @@ public sealed class PetAnimationController
         _snowballLaughRequested = false;
         _snowballLaughWeight = 0;
         _snowballLaughPhase = 0;
-        _snowballHitRemaining = 0;
-        _snowballHitPhase = 0;
+        if (!preserveHit) _snowballHitRemaining = _snowballHitPhase = 0;
+        _outgoingSnowballPose = null;
+        _outgoingSnowballWeight = 0;
         _snowballThrowSeconds = SnowballThrowPose.DurationSeconds;
         SnowballReleasedThisFrame = false;
     }
@@ -409,7 +419,12 @@ public sealed class PetAnimationController
 
         deltaSeconds = Math.Clamp(deltaSeconds, 0.001, 0.06);
         _elapsedSeconds += deltaSeconds;
-        if (IsThrowingSnowball)
+        var throwBlocked = IsSnowballThrowBlocked;
+        var outgoingThrow = !throwBlocked && _outgoingSnowballPose.HasValue;
+        var throwTarget = outgoingThrow ? 1.0 : 0.0;
+        _outgoingSnowballWeight += (throwTarget - _outgoingSnowballWeight) * (1.0 - Math.Exp(-18 * deltaSeconds));
+        var outgoingWeight = throwBlocked ? 0 : _outgoingSnowballWeight;
+        if (!throwBlocked && _snowballThrowSeconds < SnowballThrowPose.DurationSeconds)
         {
             var previous = _snowballThrowSeconds;
             _snowballThrowSeconds = Math.Min(SnowballThrowPose.DurationSeconds, previous + deltaSeconds);
@@ -479,7 +494,7 @@ public sealed class PetAnimationController
         var stanceTarget = _typingStanceHoldTime > 0 ? 1.0 : 0.0;
         var stanceDamp = stanceTarget > _typingStanceWeight ? 14.0 : 5.5;
         _typingStanceWeight += (stanceTarget - _typingStanceWeight) * (1.0 - Math.Exp(-stanceDamp * deltaSeconds));
-        var stance = _typingStanceWeight;
+        var stance = _typingStanceWeight * (1 - outgoingWeight);
 
         _leftPawTapTime = Math.Max(0, _leftPawTapTime - deltaSeconds);
         _rightPawTapTime = Math.Max(0, _rightPawTapTime - deltaSeconds);
@@ -538,7 +553,7 @@ public sealed class PetAnimationController
         }
 
         // 수면 비중 보간 (잠들 때는 느긋하게, 깨어날 때는 재빠르게 전환)
-        var targetSleeping = _isSleeping && !_isGrabbed;
+        var targetSleeping = _isSleeping && !_isGrabbed && !outgoingThrow;
         var sleepTarget = targetSleeping ? 1.0 : 0.0;
         var sleepSpeed = targetSleeping ? 2.8 : 14.0;
         _sleepWeight = Math.Clamp(
@@ -549,7 +564,7 @@ public sealed class PetAnimationController
         var awakeFactor = 1.0 - sleepWeight;
 
         // 음악 비중(_musicWeight)에 따라 대기(Idle) <-> 댄스 블렌딩 후 수면 포즈 혼합 및 관성 감쇠 적용
-        var targetPose = PetPose.Lerp(in idlePose, in blendedDancePose, _musicWeight);
+        var targetPose = PetPose.Lerp(in idlePose, in blendedDancePose, _musicWeight * (1 - outgoingWeight));
         if (sleepWeight > 0.001)
         {
             var breath = Math.Sin(_elapsedSeconds * 1.45);
@@ -622,9 +637,10 @@ public sealed class PetAnimationController
             {
                 bounce *= 1.0 - PetMotionClips.SmoothStep((t - 0.8) / 0.2);
             }
-            scaleY += bounce * 0.20;
-            offsetY += Math.Max(0, Math.Sin(t * Math.PI)) * 0.24;
-            headRollExtra += Math.Sin(t * Math.PI * 3.0) * 9.0;
+            var socialWeight = 1 - outgoingWeight;
+            scaleY += bounce * 0.20 * socialWeight;
+            offsetY += Math.Max(0, Math.Sin(t * Math.PI)) * 0.24 * socialWeight;
+            headRollExtra += Math.Sin(t * Math.PI * 3.0) * 9.0 * socialWeight;
             emissiveStrength = Math.Max(emissiveStrength, (1.0 - t) * 0.16);
         }
 
@@ -789,7 +805,7 @@ public sealed class PetAnimationController
             peekRightArm.Angle = Math.Clamp(peekRightArm.Angle + peekY * 8, -65, 65);
 
         // 기존 자세는 계속 갱신하고 투척 팔에만 가중 합성하여 종료 시 현재 자세로 복귀한다.
-        var throwPose = SnowballThrowPose.Evaluate(_snowballThrowSeconds);
+        var throwPose = throwBlocked ? default : _outgoingSnowballPose ?? SnowballThrowPose.Evaluate(_snowballThrowSeconds);
         if (throwPose.Weight > 0)
         {
             var baseWeight = 1 - throwPose.Weight;
@@ -803,6 +819,9 @@ public sealed class PetAnimationController
                 throwingPaw.OffsetZ = throwingPaw.OffsetZ * baseWeight - throwPose.ArmPitch / 110.0;
             }
         }
+        bodyYawExtra += _currentLookX * 28 * outgoingWeight;
+        bodyPitchExtra += _currentLookY * 10 * outgoingWeight;
+        headYawExtra += _currentLookX * 14 * outgoingWeight;
 
         // 피격은 기존 수면·춤 상태를 바꾸지 않는 짧은 반동으로 합성한다.
         // 연속 명중 시 위상은 유지하고 끝부분만 연장하여 첫 움찔을 반복하지 않는다.
@@ -813,17 +832,19 @@ public sealed class PetAnimationController
             var hitWeight = PetMotionClips.SmoothStep(_snowballHitPhase / 0.045)
                 * PetMotionClips.SmoothStep(_snowballHitRemaining / 0.12);
             if (_isGrabbed || grabWeight > 0.01 || gameReactionThisFrame) hitWeight = 0;
+            var eyeWeight = IsThrowingSnowball ? hitWeight * 0.42 : hitWeight;
+            if (IsThrowingSnowball) hitWeight = 0;
             var recoil = Math.Sin(_snowballHitPhase * 24) * hitWeight;
             scaleY -= hitWeight * 0.045;
             bodyPitchExtra -= recoil * 6;
             headPitchExtra -= hitWeight * 8;
             headRollExtra += recoil * 4;
             if (rig.EyeBlinkScale is { } hitEyes)
-                hitEyes.ScaleY += (1.12 - hitEyes.ScaleY) * hitWeight;
+                hitEyes.ScaleY += (1.12 - hitEyes.ScaleY) * eyeWeight;
         }
 
         // 웃음은 기존 자세에 합성하고 새 투척·드래그·게임 반응에는 부드럽게 양보한다.
-        var laughTarget = _snowballLaughRequested && !IsThrowingSnowball
+        var laughTarget = _snowballLaughRequested && !IsThrowingSnowball && !IsReactingToSnowball
             && !_isGrabbed && grabWeight <= 0.01 && !gameReactionThisFrame ? 1.0 : 0.0;
         _snowballLaughWeight = laughTarget > _snowballLaughWeight
             ? Math.Min(laughTarget, _snowballLaughWeight + deltaSeconds * 8.0)
@@ -877,10 +898,11 @@ public sealed class PetAnimationController
         var waveTime = _petReactionTime > 0 && !_isSleeping && !IsWakingUp ? PetReactionDuration - _petReactionTime : -1;
 
         // 단발 클립은 기존 반응 시간 안에 마지막 자세까지 재생한 뒤 다음 상태로 넘긴다.
-        (string Clip, float? Progress) motion = _isSleeping ? ("sleep", null)
-            : wakeThisFrame ? ("jump", MotionProgress(IsWakingUp ? _wakeUpReactionTime : 0, WakeUpReactionDuration))
-            : gameReactionThisFrame ? (_gameWon ? "happy" : "sit", MotionProgress(_gameReactionTime, _gameWon ? GameWinDuration : GameLossDuration))
+        (string Clip, float? Progress) motion = gameReactionThisFrame ? (_gameWon ? "happy" : "sit", MotionProgress(_gameReactionTime, _gameWon ? GameWinDuration : GameLossDuration))
             : _isGrabbed ? ("run", null)
+            : outgoingThrow ? ("idle", null)
+            : _isSleeping ? ("sleep", null)
+            : wakeThisFrame ? ("jump", MotionProgress(IsWakingUp ? _wakeUpReactionTime : 0, WakeUpReactionDuration))
             : snackThisFrame ? ("eat", MotionProgress(_snackSeconds, SnackDuration))
             : waveThisFrame ? ("wave", MotionProgress(_petReactionTime, PetReactionDuration))
             : speaking ? ("talk", null)

@@ -6,6 +6,7 @@ using System.Net.Sockets;
 using System.Security.Cryptography;
 using System.Text.Json;
 using LabPet.Client.Network;
+using LabPet.Client.Social;
 using LabPet.Client.Storage;
 using LabPet.Server;
 using LabPet.Server.Options;
@@ -418,7 +419,7 @@ public sealed class GcpServerAndHybridTests : IAsyncLifetime
         lanA.HandleDiscoveryHello(new DiscoveryHelloPacket
         {
             ProtocolVersion = ProtocolConstants.CurrentProtocolVersion,
-            AppVersion = "0.2.2",
+            AppVersion = "0.3.15",
             PetId = profileB.PetId,
             OwnerName = profileB.OwnerName,
             PetName = profileB.PetName,
@@ -447,6 +448,25 @@ public sealed class GcpServerAndHybridTests : IAsyncLifetime
         Assert.True(await routerA.SendBubbleMessageAsync(friendB, "LAN실패후자동GCP폴백"));
         Assert.Equal(2, gcpMessagesOnB.Count);
         Assert.Contains("LAN실패후자동GCP폴백", routerMessagesOnB);
+
+        await WpfTestHost.RunAsync(async () =>
+        {
+            using var sendSnowball = new SnowballInteractionService(routerA);
+            var relayed = new TaskCompletionSource<Guid>(TaskCreationOptions.RunContinuationsAsynchronously);
+            void OnRelayed(object? sender, SnowballReceivedEventArgs e) => relayed.TrySetResult(e.EventId);
+            gcpB.SnowballReceived += OnRelayed;
+            try
+            {
+                Assert.True(await sendSnowball.SendAsync(friendB));
+                Assert.True(sendSnowball.Outgoing.TryTake(out var request));
+                Assert.Equal(await relayed.Task.WaitAsync(TimeSpan.FromSeconds(4)), request.EventId);
+                Assert.False(sendSnowball.Outgoing.TryTake(out _));
+            }
+            finally
+            {
+                gcpB.SnowballReceived -= OnRelayed;
+            }
+        });
 
         // 5. 서버 중단 중에는 LAN 유지, 서버 재시작 후 자동 재연결 및 송수신 복구 검증
         await lanB.StartAsync(profileB, [friendA]);

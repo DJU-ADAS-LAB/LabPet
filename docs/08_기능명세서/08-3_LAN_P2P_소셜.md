@@ -28,6 +28,15 @@ related:
 - LAN과 로컬 SignalR 중계에서 전달, 중복 제거, 구버전 LAN 및 미확인 유형, 보상 미적립을 검사한다. 실기기 혼합 DPI·운영 GCP·CPU/GPU·메모리는 별도 측정이 필요하다. GCP 서버 코드는 기존 암호문 중계를 사용한다.
 - [공유 버튼 상태 및 전송](../../src/LabPet.Client/Social/SnowballInteractionService.cs), [혼합 전송](../../src/LabPet.Client/Network/HybridTransportRouter.cs), [데스크톱 장면](../../src/LabPet.Client/Views/SnowballDesktopScene.cs)
 
+## 송신자 측 투척과 양방향 반격
+
+- 전송 성공 응답을 받은 이벤트 ID만 송신 연출에 등록한다. 전송 전에 대기와 진행 중인 전송을 합쳐 256개까지 예약하며, 한도에 도달하면 추가 전송 전에 기존 안내 말풍선으로 알린다. 성공한 요청의 상대나 개수를 병합하지 않으며 요청 순서대로 발사한다.
+- 다음 투척이 시작될 때 대기 수 0~1, 2~3, 4~5, 6개 이상에 각각 1배, 1.5배, 2배, 2.5배를 적용한다. 대기 9개 이상이거나 대기 6개 이상에서 가장 오래 기다린 요청이 1.6초를 넘으면, 비슷한 방향으로 최대 3개를 한 투척 구간에서 순차 발사한다. 대기 3개 이하에서 일반 배속 선택으로 복귀한다. 날아가는 눈덩이와 눈 입자의 시간은 별도로 유지한다.
+- 방문 펫, 충분히 노출된 임시 펫, 현재 모니터의 무작위 둘레 좌표 순서로 준비와 발사 시점에 대상을 다시 확인한다. 비행은 독립된 목표를 갱신한다. 대상이 사라지면 마지막 유효 위치를 기준으로 모니터 밖으로 이어 날아가며 명중 효과를 내지 않는다.
+- 준비 중이거나 비행 중인 반격만 임시 펫의 퇴장을 보류한다. 보류 가능한 기간은 최초 보류부터 1.5초다. 관련 비행이 끝나면 그 전에 퇴장을 재개할 수 있다. 방문 펫으로 전환될 때는 수신 투척 진행과 이미 비행 중인 송신 눈덩이를 같은 펫 ID로 연결한다.
+- 각 펫의 투척은 서로 독립이다. 드래그와 게임 자세 동안 내 펫의 투척 진행을 일시 중지한다. 투척 중 피격은 눈 입자와 제한된 표정 반응을 표시한다. 연속 투척 후 한 번 웃고 기존 상태로 복귀한다. 로컬 반격 연출은 별도의 네트워크 요청을 만들지 않는다.
+- 관련 구현과 검증은 [송신 시간표](../../src/LabPet.Client/Rendering/SnowballOutgoingTimeline.cs), [송신 연출](../../src/LabPet.Client/Rendering/SnowballOutgoingActor.cs), [임시 펫 시간표](../../src/LabPet.Client/Rendering/SnowballActorTimeline.cs), [대상별 비행 검증](../../tests/LabPet.Tests/SnowballFlightLayerTests.cs)을 참조한다.
+
 ## 눈던지기 기반 구현 당시 기록 (2026-11-25)
 
 - 임시 펫 연결 후속 구현: [SnowballTemporaryActor.cs](../../src/LabPet.Client/Rendering/SnowballTemporaryActor.cs)가 시간표·관절·배치를 연결하여 연속 투척 중 같은 펫과 등장 위치를 유지한다. [SnowballOverlayWindow.cs](../../src/LabPet.Client/Views/SnowballOverlayWindow.cs)는 손·대상·포물선 높이를 물리 픽셀에서 DIP로 변환해 실제 비행 계층에 전달하고, 이동 대상에 대한 명중 ID를 반환한다. 자체 창이나 타이머를 투척마다 생성하지 않는다.

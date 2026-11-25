@@ -22,7 +22,7 @@ namespace LabPet.Client.Views;
 /// <summary>
 /// 내 바탕화면 펫 옆에 친구의 3D 펫을 함께 띄워주는 경량 방문 창.
 /// </summary>
-public partial class VisitorPetWindow : Window, IMessageBubbleTarget
+public partial class VisitorPetWindow : Window, IMessageBubbleTarget, ISnowballTarget
 {
     private static readonly TimeSpan ActiveInterval = TimeSpan.FromMilliseconds(16);
     private static readonly TimeSpan IdleInterval = TimeSpan.FromMilliseconds(45);
@@ -1372,11 +1372,28 @@ public partial class VisitorPetWindow : Window, IMessageBubbleTarget
         return true;
     }
 
-    internal bool AdvanceSnowballPose(SnowballActorPhase phase, bool beginThrow, double seconds, double lookX, double lookY)
+    internal bool IsSnowballThrowBlocked => _animator.IsSnowballThrowBlocked;
+
+    internal bool TryGetSnowballTargetPhysical(out Point target)
+    {
+        target = default;
+        return IsAvailableForMessages
+            && PetDisplayLayoutHelper.TryGetSnowballBodyPhysical(VisitorViewport, VisitorPetVisual, _currentRig, out target);
+    }
+
+    internal void TriggerSnowballHit()
+    {
+        if (IsAvailableForMessages) _animator.TriggerSnowballHit();
+    }
+
+    bool ISnowballTarget.TryGetSnowballTargetPhysical(out Point target) => TryGetSnowballTargetPhysical(out target);
+    void ISnowballTarget.TriggerSnowballHit() => TriggerSnowballHit();
+
+    internal bool AdvanceSnowballPose(SnowballActorPhase phase, double? startThrowFrom, double seconds, double lookX, double lookY)
     {
         Dispatcher.VerifyAccess();
         if (!_snowballSceneOwnsPose || !IsAvailableForMessages || _currentRig is null
-            || (beginThrow && !_animator.TryStartSnowballThrow())) return false;
+            || (startThrowFrom is { } elapsed && !_animator.TryStartSnowballThrow(elapsed))) return false;
         _animator.SetSnowballLaughing(phase == SnowballActorPhase.Laughing);
         _animator.UpdateFrame(seconds, lookX, lookY, VisitorBubblePopup.IsOpen);
         return true;
@@ -1386,11 +1403,8 @@ public partial class VisitorPetWindow : Window, IMessageBubbleTarget
     {
         Dispatcher.VerifyAccess();
         hand = default;
-        if (!IsAvailableForMessages || _currentRig is null || PresentationSource.FromVisual(VisitorViewport) is null
-            || !_currentRig.TryGetRightHandPosition(out var handPosition)
-            || !PetDisplayLayoutHelper.TryProjectPointToViewport(VisitorViewport, VisitorPetVisual, handPosition, out var local)) return false;
-        hand = VisitorViewport.PointToScreen(local);
-        return double.IsFinite(hand.X) && double.IsFinite(hand.Y);
+        return IsAvailableForMessages
+            && PetDisplayLayoutHelper.TryGetSnowballHandPhysical(VisitorViewport, VisitorPetVisual, _currentRig, out hand);
     }
 
     internal void ReleaseSnowballPose()
@@ -1398,7 +1412,7 @@ public partial class VisitorPetWindow : Window, IMessageBubbleTarget
         Dispatcher.VerifyAccess();
         if (!_snowballSceneOwnsPose) return;
         _snowballSceneOwnsPose = false;
-        _animator.CancelSnowballInteraction();
+        _animator.CancelSnowballInteraction(preserveHit: true);
     }
 
     private void ComputeNormalizedLookDirection(out double lookX, out double lookY)

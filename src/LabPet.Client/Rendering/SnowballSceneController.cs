@@ -12,6 +12,7 @@ internal sealed partial class SnowballSceneController : IDisposable
     private readonly Dictionary<Guid, Guid> _flightOwners = [];
     private bool _disposed;
     private bool _advancing;
+    private SnowballOutgoingActor? _outgoing;
     internal int ActorCount => _actors.Count;
     internal int MaximumActors { get; }
 
@@ -20,7 +21,8 @@ internal sealed partial class SnowballSceneController : IDisposable
         get
         {
             _overlay.Dispatcher.VerifyAccess();
-            return !_disposed && (_actors.Count > 0 || _pending.Count > 0 || _overlay.HasActiveFlights);
+            return !_disposed && (_actors.Count > 0 || _pending.Count > 0 || _overlay.HasActiveFlights
+                || _outgoing?.HasWork == true);
         }
     }
 
@@ -37,6 +39,27 @@ internal sealed partial class SnowballSceneController : IDisposable
     }
 
     private SnowballSceneLoop? _loop;
+    internal void AttachOutgoing(SnowballOutgoingActor actor) => _outgoing = actor;
+    internal void WakeOutgoing() => _loop?.Wake();
+    internal SnowballTemporaryActor? FindTemporary(Guid petId) =>
+        !_disposed && _actors.TryGetValue(petId, out var actor) ? actor as SnowballTemporaryActor : null;
+
+    internal void PromoteVisitor(Guid petId, VisitorPetWindow visitor)
+    {
+        _overlay.Dispatcher.VerifyAccess();
+        if (FindTemporary(petId) is not { } temporary) return;
+        try
+        {
+            var timeline = temporary.TransferToVisitor();
+            if (timeline.Phase == SnowballActorPhase.Complete) CancelSender(petId);
+            else _actors[petId] = new SnowballVisitorActor(_overlay, visitor, timeline);
+        }
+        catch (Exception ex)
+        {
+            CrashLogWriter.Write("SnowballScene.PromoteVisitor", ex);
+            CancelSender(petId);
+        }
+    }
 
     internal bool TryAttachLoop(SnowballOverlayWindow overlay, SnowballSceneLoop loop)
     {
@@ -109,6 +132,7 @@ internal sealed partial class SnowballSceneController : IDisposable
         {
             // 한 프레임의 발사 이후 잔여 시간만 비행에 적용하도록 작은 공용 구간으로 나눈다.
             var remaining = Math.Min(seconds, 0.25);
+            AdvanceOutgoing(remaining);
             while (remaining > 0 && !_disposed)
             {
                 var step = Math.Min(remaining, 0.01);
@@ -155,6 +179,34 @@ internal sealed partial class SnowballSceneController : IDisposable
         DrainPending();
     }
 
+    private void AdvanceOutgoing(double seconds)
+    {
+        _overlay.AdvanceOutgoingFlights(seconds);
+        if (_outgoing is not { HasWork: true } actor) return;
+        try
+        {
+            // 긴 프레임도 발사 경계를 넘기기 전에 실제 투척 자세를 적용한다.
+            while (seconds > 0 && actor.HasWork)
+            {
+                var step = Math.Min(seconds, 0.05);
+                actor.Advance(step);
+                seconds -= step;
+            }
+        }
+        catch (Exception ex)
+        {
+            CrashLogWriter.Write("SnowballScene.Outgoing", ex);
+            actor.Cancel();
+            _overlay.CancelSenderFlights(Guid.Empty);
+        }
+    }
+
+    internal void CancelReceiving()
+    {
+        _pending.Clear();
+        foreach (var sender in _actors.Keys.ToArray()) CancelSender(sender);
+    }
+
     internal void RemoveOfflineSenders(IReadOnlySet<Guid> online)
     {
         _overlay.Dispatcher.VerifyAccess();
@@ -194,6 +246,8 @@ internal sealed partial class SnowballSceneController : IDisposable
         _disposed = true;
         _pending.Clear();
         _loop?.Dispose();
+        _outgoing?.Dispose();
+        _outgoing = null;
         _overlay.Closed -= OnOverlayClosed;
         foreach (var id in _actors.Keys.ToArray()) CancelSender(id);
         _flightOwners.Clear();

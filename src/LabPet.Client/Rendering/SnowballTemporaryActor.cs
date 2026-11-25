@@ -1,4 +1,5 @@
 using System.Windows;
+using LabPet.Client.Interop;
 using LabPet.Client.Views;
 
 namespace LabPet.Client.Rendering;
@@ -14,18 +15,42 @@ internal interface ISnowballActor : IDisposable
     void Advance(double seconds, double lookX, double lookY, Action<Guid, Point> launch);
 }
 
+internal interface ISnowballTarget
+{
+    bool TryGetSnowballTargetPhysical(out Point target);
+    void TriggerSnowballHit();
+}
+
 /// <summary>임시 리그, 진입 위치, 투척 시간표를 연결한다.</summary>
-internal sealed class SnowballTemporaryActor : ISnowballActor
+internal sealed class SnowballTemporaryActor : ISnowballActor, ISnowballTarget
 {
     private readonly SnowballOverlayWindow _overlay;
     private readonly SnowballPetVisual _visual;
     private readonly SnowballSpawnGeometry _spawn;
     private readonly SnowballActorTimeline _timeline;
     private bool _disposed;
+    private int _countershots;
+    private Rect _monitor = Rect.Empty;
 
     public SnowballOverlayWindow Overlay => _overlay;
     public SnowballActorPhase Phase => _timeline.Phase;
     public Rect OccupiedBounds => _spawn.VisibleBounds;
+
+    public bool TryGetSnowballTargetPhysical(out Point target)
+    {
+        target = default;
+        if (_disposed || Phase == SnowballActorPhase.Complete) return false;
+        if (_monitor.IsEmpty && !Win32WindowHelper.TryGetWindowPhysicalBounds(_overlay, out _monitor)) return false;
+        return _visual.TryGetVisibleBodyPhysical(_monitor, out target);
+    }
+
+    public void TriggerSnowballHit()
+    {
+        if (!_disposed) _visual.Animator.TriggerSnowballHit();
+    }
+
+    internal void HoldForCountershot() { if (!_disposed) _countershots++; }
+    internal void ReleaseCountershot() { if (_countershots > 0) _countershots--; }
 
     internal SnowballTemporaryActor(SnowballOverlayWindow overlay, SnowballPetVisual visual,
         SnowballSpawnGeometry spawn, Guid firstEventId)
@@ -86,16 +111,29 @@ internal sealed class SnowballTemporaryActor : ISnowballActor
             _overlay.UpdateLayout();
             _visual.SetSnowballHeld(phase == SnowballActorPhase.Throwing
                 && _timeline.ThrowElapsed < SnowballThrowPose.ReleaseSeconds);
-        });
+        }, () => _countershots > 0 && TryGetSnowballTargetPhysical(out _));
         if (_timeline.Phase == SnowballActorPhase.Complete) Dispose();
+    }
+
+    internal SnowballActorTimeline TransferToVisitor()
+    {
+        _timeline.PromoteToVisitor();
+        ReleaseVisual();
+        return _timeline;
     }
 
     public void Dispose()
     {
         _overlay.Dispatcher.VerifyAccess();
         if (_disposed) return;
-        _disposed = true;
         _timeline.Cancel();
+        ReleaseVisual();
+    }
+
+    private void ReleaseVisual()
+    {
+        _disposed = true;
+        _countershots = 0;
         _overlay.Scene.Children.Remove(_visual);
         _visual.Dispose();
     }

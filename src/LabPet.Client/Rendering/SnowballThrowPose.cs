@@ -35,5 +35,13 @@ internal readonly record struct SnowballThrowPose(double ArmPitch, double ArmRol
         => double.IsFinite(previousSeconds) && double.IsFinite(currentSeconds)
             && previousSeconds >= 0 && previousSeconds < ReleaseSeconds && currentSeconds >= ReleaseSeconds;
 
+    internal static SnowballThrowPose Blend(SnowballThrowPose from, SnowballThrowPose to, double progress)
+    {
+        var weight = Smooth(Math.Clamp(progress, 0, 1));
+        return new(from.ArmPitch + (to.ArmPitch - from.ArmPitch) * weight,
+            from.ArmRoll + (to.ArmRoll - from.ArmRoll) * weight,
+            from.Weight + (to.Weight - from.Weight) * weight);
+    }
+
     private static double Smooth(double value) => value * value * (3 - 2 * value);
 }
