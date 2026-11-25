@@ -13,8 +13,7 @@ public sealed class TerminalChristmasTreeTests
     {
         var defaultService = new TerminalChristmasTreeService(new JsonAppDataStore(new StateMigrator()));
         var expectedRoamingScript = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-            "LabPet",
+            AppDataPaths.ResolveDefaultDataDirectory(),
             TerminalChristmasTreeService.ScriptsDirectoryName,
             TerminalChristmasTreeService.ScriptFileName);
 

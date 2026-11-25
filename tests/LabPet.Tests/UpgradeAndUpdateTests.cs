@@ -42,11 +42,9 @@ public sealed class UpgradeAndUpdateTests
     [Fact]
     public async Task AppDataStore_UsesRoamingAppDataOutsideBaseDirectoryAndPreservesAcrossReinstantiation()
     {
-        // 기본 생성자 경로가 설치 폴더(AppContext.BaseDirectory)와 완전히 분리된 %AppData%\LabPet인지 검증
+        // 기본 생성자가 빌드 구성별 저장 경로를 사용하고 설치 폴더와 분리되는지 확인한다.
         var defaultStore = new JsonAppDataStore(new StateMigrator());
-        var expectedRoaming = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-            "LabPet");
+        var expectedRoaming = AppDataPaths.ResolveDefaultDataDirectory();
 
         Assert.Equal(expectedRoaming, defaultStore.DataDirectory);
         Assert.False(
