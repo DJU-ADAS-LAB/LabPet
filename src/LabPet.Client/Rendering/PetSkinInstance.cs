@@ -8,6 +8,7 @@ namespace LabPet.Client.Rendering;
 internal sealed class PetSkinInstance(CharacterSkin asset)
 {
     private const float Radians = MathF.PI / 180;
+    private const float AuthoredTransitionSeconds = 0.24f;
     private readonly Matrix4x4[] _palette = new Matrix4x4[asset.Bones.Length];
     private readonly Quaternion[] _rotations = Enumerable.Repeat(Quaternion.Identity, asset.Bones.Length).ToArray();
     private readonly float[] _lag = new float[asset.Bones.Length];
@@ -20,20 +21,25 @@ internal sealed class PetSkinInstance(CharacterSkin asset)
     internal MatrixTransform3D HeadSocket { get; } = new();
     private string _clip = "";
     private float _time;
+    private float? _lastProgress;
+    private float _transitionElapsed = AuthoredTransitionSeconds;
+    private readonly AuthoredPetClips.BonePose[] _authoredPose = asset.Clips is null ? [] : new AuthoredPetClips.BonePose[asset.Bones.Length];
+    private readonly AuthoredPetClips.BonePose[] _transitionStart = asset.Clips is null ? [] : new AuthoredPetClips.BonePose[asset.Bones.Length];
     private readonly Matrix4x4[] _world = new Matrix4x4[asset.Bones.Length];
 
     internal CharacterSkin Asset => asset;
+    internal bool IsAuthoredTransitioning => _transitionElapsed < AuthoredTransitionSeconds;
 
     internal void Bind(ObjSubMesh part, GeometryModel3D model) =>
         _surfaces.Add(new(model, part.Geometry, asset.Surfaces[part]));
 
-    internal void Update(PetRigHandle rig, float dt, float stride, float typing, float leftStrike, float rightStrike, float waveTime, float step, string clip = "idle")
+    internal void Update(PetRigHandle rig, float dt, float stride, float typing, float leftStrike, float rightStrike,
+        float waveTime, float step, string clip = "idle", float? progress = null)
     {
         if (asset.Clips is { } authored)
         {
-            _time = _clip == clip ? _time + dt : 0;
-            _clip = clip;
-            authored.Apply(clip, _time, rig, typing, leftStrike, rightStrike, _world, _palette, HeadSocket);
+            UpdateAuthoredPose(authored, clip, dt, progress);
+            authored.Apply(_authoredPose, rig, typing, leftStrike, rightStrike, _world, _palette, HeadSocket);
             Array.Fill(_changed, true);
             foreach (var surface in _surfaces) surface.Apply(_palette, _changed);
             return;
@@ -172,6 +178,38 @@ internal sealed class PetSkinInstance(CharacterSkin asset)
             _palette[i] = matrix;
         }
         foreach (var surface in _surfaces) surface.Apply(_palette, _changed);
+    }
+
+    private void UpdateAuthoredPose(AuthoredPetClips authored, string clip, float dt, float? progress)
+    {
+        if (_clip != clip || progress < _lastProgress)
+        {
+            if (_clip.Length > 0)
+            {
+                // 보간 중 다시 바뀌면 직전에 화면에 반영한 자세에서 이어 간다.
+                _authoredPose.CopyTo(_transitionStart, 0);
+                _transitionElapsed = 0;
+            }
+
+            _clip = clip;
+            _time = 0;
+        }
+        else
+        {
+            _time += dt;
+            _transitionElapsed = Math.Min(AuthoredTransitionSeconds, _transitionElapsed + dt);
+        }
+
+        _lastProgress = progress;
+        authored.Sample(clip, _time, progress, _authoredPose);
+        if (IsAuthoredTransitioning)
+        {
+            var weight = (float)PetMotionClips.SmoothStep(_transitionElapsed / AuthoredTransitionSeconds);
+            for (var i = 0; i < _authoredPose.Length; i++)
+            {
+                _authoredPose[i] = AuthoredPetClips.BonePose.Blend(_transitionStart[i], _authoredPose[i], weight);
+            }
+        }
     }
 
     private static void SolveChain(Vector3 root, Vector3 hinge, Vector3 end, Vector3 goal, float tipPitchRad,

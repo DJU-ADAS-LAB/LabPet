@@ -47,9 +47,11 @@ public sealed class PetAnimationController
     private double _currentLookY;
 
     // 상호작용·수면·기상 반응 상태
+    private const double PetReactionDuration = 0.90;
     private const double WakeUpReactionDuration = 0.95;
     private const double GameWinDuration = 1.35;
     private const double GameLossDuration = 2.10;
+    private const double SnackDuration = 2.0;
     private const double SleepEyeClosedScale = 0.07;
 
     private double _petReactionTime;
@@ -111,10 +113,11 @@ public sealed class PetAnimationController
         || (_sleepWeight > 0.01 && _sleepWeight < 0.99)
         || _typingStanceHoldTime > 0
         || _typingStanceWeight > 0.01 || Volatile.Read(ref _pendingPawTaps) > 0
-        || _musicWeight > 0.02 || HasActiveParticles();
+        || _musicWeight > 0.02 || _rig?.Skin?.IsAuthoredTransitioning == true
+        || (_snackSeconds > 0 && _rig?.Skin?.Asset.Clips is not null) || HasActiveParticles();
 
     private double _snackSeconds;
-    internal void StartBreakSnack() => _snackSeconds = 2;
+    internal void StartBreakSnack() => _snackSeconds = SnackDuration;
 
     public void AttachRig(PetRigHandle rig, string accentHex)
     {
@@ -208,7 +211,7 @@ public sealed class PetAnimationController
     public void TriggerPetReaction()
     {
         if (_isSleeping || IsWakingUp) return;
-        _petReactionTime = 0.90;
+        _petReactionTime = PetReactionDuration;
         EmitReactionStarBurst(count: 3);
     }
 
@@ -481,12 +484,18 @@ public sealed class PetAnimationController
         // 자연스러운 자동 눈 깜빡임 / 수면 감김 / 깜짝 기상 눈 번쩍 뜨기
         UpdateAutoBlink(rig, deltaSeconds);
 
+        var usesAuthoredClips = rig.Skin?.Asset.Clips is not null;
         // 쓰다듬기/기쁨 반응 오버레이
-        if (_petReactionTime > 0)
+        var waveThisFrame = _petReactionTime > 0;
+        if (waveThisFrame)
         {
             _petReactionTime = Math.Max(0, _petReactionTime - deltaSeconds);
-            var t = 1.0 - (_petReactionTime / 0.90);
+            var t = 1.0 - (_petReactionTime / PetReactionDuration);
             var bounce = Math.Sin(t * Math.PI * 2.5) * Math.Exp(-t * 2.2);
+            if (usesAuthoredClips)
+            {
+                bounce *= 1.0 - PetMotionClips.SmoothStep((t - 0.8) / 0.2);
+            }
             scaleY += bounce * 0.20;
             offsetY += Math.Max(0, Math.Sin(t * Math.PI)) * 0.24;
             headRollExtra += Math.Sin(t * Math.PI * 3.0) * 9.0;
@@ -507,6 +516,7 @@ public sealed class PetAnimationController
         // 깜짝 놀라며 깨어나는 기상 모션 오버레이 (화들짝 점프 → 착지 스쿼시·좌우 두리번거림 → 안착)
         var wakeEarBoost = 0.0;
         var wakeArmBoost = 0.0;
+        var wakeThisFrame = IsWakingUp;
         if (_wakeUpReactionTime > 0)
         {
             _wakeUpReactionTime = Math.Max(0, _wakeUpReactionTime - deltaSeconds);
@@ -525,7 +535,7 @@ public sealed class PetAnimationController
             else if (pWake < 0.72)
             {
                 var u = (pWake - 0.28) / 0.44;
-                var settle = 1.0 - u * 0.5;
+                var settle = 1.0 - (usesAuthoredClips ? PetMotionClips.SmoothStep(u) : u * 0.5);
                 var squash = Math.Sin(u * Math.PI) * (1.0 - u * 0.4);
                 var lookAround = Math.Sin(u * Math.PI * 2.5) * settle;
                 scaleY -= 0.11 * squash;
@@ -553,7 +563,8 @@ public sealed class PetAnimationController
         headRollExtra -= grabSwing * 6.0;
 
         var gameArmLift = 0.0;
-        if (_gameReactionTime > 0)
+        var gameReactionThisFrame = _gameReactionTime > 0;
+        if (gameReactionThisFrame)
         {
             _gameReactionTime = Math.Max(0, _gameReactionTime - deltaSeconds);
             var duration = _gameWon ? GameWinDuration : GameLossDuration;
@@ -620,7 +631,7 @@ public sealed class PetAnimationController
         // 미니 팔/날개 (모션 클립 + 쓰다듬기/깜짝 기상 반응 + 타이핑 타건)
         if (rig.LeftArmRotation is not null && rig.RightArmRotation is not null)
         {
-            var reactionLift = 18.0 * (_petReactionTime / 0.90) + gameArmLift + grabWeight * 16.0;
+            var reactionLift = 18.0 * (_petReactionTime / PetReactionDuration) + gameArmLift + grabWeight * 16.0;
             var stanceInward = activeStance * 28.0;
             rig.LeftArmRotation.Angle = p.LeftArmRoll * (1.0 - activeStance * 0.7) + reactionLift + stanceInward - leftStrike * 26.0 * awakeFactor + wakeArmBoost + leftKick * 24.0;
             rig.RightArmRotation.Angle = p.RightArmRoll * (1.0 - activeStance * 0.7) - reactionLift - stanceInward + rightStrike * 26.0 * awakeFactor - wakeArmBoost - rightKick * 24.0;
@@ -659,17 +670,25 @@ public sealed class PetAnimationController
         rig.HeadPitch.Angle = _currentLookY * 12.0 * awakeFactor + headPitchExtra;
         rig.HeadRoll.Angle = Math.Clamp(headRollExtra, -22.0, 22.0);
 
+        var snackThisFrame = _snackSeconds > 0;
         _snackSeconds = Math.Max(0, _snackSeconds - deltaSeconds);
         var stride = Math.Sin(_dancePhase * 2) * (14 * bass + 7 * mid) * awakeFactor * (1 - activeStance);
         var walk = _smoothedPose.StepWeight * awakeFactor * (1 - activeStance);
         stride += Math.Sin(_dancePhase * 2) * walk * 18;
-        var waveTime = _petReactionTime > 0 && !_isSleeping && !IsWakingUp ? 0.90 - _petReactionTime : -1;
+        var waveTime = _petReactionTime > 0 && !_isSleeping && !IsWakingUp ? PetReactionDuration - _petReactionTime : -1;
+
+        // 단발 클립은 기존 반응 시간 안에 마지막 자세까지 재생한 뒤 다음 상태로 넘긴다.
+        (string Clip, float? Progress) motion = _isSleeping ? ("sleep", null)
+            : wakeThisFrame ? ("jump", MotionProgress(IsWakingUp ? _wakeUpReactionTime : 0, WakeUpReactionDuration))
+            : gameReactionThisFrame ? (_gameWon ? "happy" : "sit", MotionProgress(_gameReactionTime, _gameWon ? GameWinDuration : GameLossDuration))
+            : _isGrabbed ? ("run", null)
+            : snackThisFrame ? ("eat", MotionProgress(_snackSeconds, SnackDuration))
+            : waveThisFrame ? ("wave", MotionProgress(_petReactionTime, PetReactionDuration))
+            : speaking ? ("talk", null)
+            : _musicWeight > 0.15 ? (_currentClip == PetMotionClipKind.Walk ? "walk" : "dance", null)
+            : ("idle", null);
         rig.Skin?.Update(rig, (float)deltaSeconds, (float)stride, (float)activeStance,
-            (float)(leftStrike * awakeFactor), (float)(rightStrike * awakeFactor), (float)waveTime, (float)walk,
-            _isSleeping ? "sleep" : IsWakingUp ? "jump" : _gameReactionTime > 0 ? (_gameWon ? "happy" : "sit")
-            : _isGrabbed ? "run" : _snackSeconds > 0 ? "eat" : _petReactionTime > 0 ? "wave"
-            : speaking ? "talk" : _musicWeight > 0.15
-                ? (_currentClip == PetMotionClipKind.Walk ? "walk" : "dance") : "idle");
+            (float)(leftStrike * awakeFactor), (float)(rightStrike * awakeFactor), (float)waveTime, (float)walk, motion.Clip, motion.Progress);
 
         if (rig.AuraRotation is not null)
         {
@@ -687,6 +706,8 @@ public sealed class PetAnimationController
         var b = (byte)(_emissiveAccentColor.B * emissiveStrength);
         rig.BodyEmissiveBrush.Color = Color.FromRgb(r, g, b);
     }
+
+    private static float MotionProgress(double remaining, double duration) => (float)(1.0 - remaining / duration);
 
     private void UpdateMotionClipSelection(
         double dt,

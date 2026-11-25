@@ -37,6 +37,92 @@ public sealed class BlenderAssetPipelineTests
         });
     }
 
+    [Fact]
+    public void Joey_TransitionsFromTheDisplayedPoseWhenInterrupted()
+    {
+        RunOnSta(() =>
+        {
+            const float frame = 1f / 60;
+            var factory = new BlenderAssetPetMeshFactory(new ProceduralPetMeshFactory());
+            var rig = factory.BuildPetRig(new PetAppearance { SpeciesId = PetSpeciesIds.Joey });
+            var skin = Assert.IsType<PetSkinInstance>(rig.Skin);
+            var models = GeometryModels(rig.RootModel).ToArray();
+
+            void Update(string clip, float? progress = null) => skin.Update(rig, frame, 0, 0, 0, 0, -1, 0, clip, progress);
+            Point3D[] Snapshot() => models.SelectMany(m => ((MeshGeometry3D)m.Geometry).Positions).ToArray();
+            double Movement(Point3D[] previous) => Snapshot().Zip(previous, (a, b) => (a - b).Length).Max();
+
+            Update("idle");
+            var idle = Snapshot();
+            Update("sleep");
+            Assert.True(skin.IsAuthoredTransitioning);
+            Assert.InRange(Movement(idle), 0, 0.00001);
+            for (var i = 0; i < 5; i++) Update("sleep");
+            Assert.True(skin.IsAuthoredTransitioning);
+            Assert.True(Movement(idle) > 0.01);
+
+            var fallingAsleep = Snapshot();
+            Update("wave", 0.05f);
+            Assert.InRange(Movement(fallingAsleep), 0, 0.00001);
+            for (var i = 1; i <= 8; i++) Update("wave", i / 16f);
+            var waving = Snapshot();
+            Update("wave", 0.05f);
+            Assert.InRange(Movement(waving), 0, 0.00001);
+            for (var i = 1; i <= 20; i++) Update("wave", i / 20f);
+            Assert.False(skin.IsAuthoredTransitioning);
+            Assert.True(Movement(waving) > 0.01);
+
+            var finished = Snapshot();
+            Update("wave", 1);
+            Assert.InRange(Movement(finished), 0, 0.00001);
+            Update("idle");
+            Assert.InRange(Movement(finished), 0, 0.00001);
+            for (var i = 0; i < 20; i++) Update("idle");
+            Assert.False(skin.IsAuthoredTransitioning);
+            Assert.True(Movement(finished) > 0.001);
+        });
+    }
+
+    [Fact]
+    public void Joey_ControllerKeepsWaveSleepAndWakeTransitionsContinuous()
+    {
+        RunOnSta(() =>
+        {
+            const double frame = 1.0 / 60;
+            var factory = new BlenderAssetPetMeshFactory(new ProceduralPetMeshFactory());
+            var appearance = new PetAppearance { SpeciesId = PetSpeciesIds.Joey };
+            var rig = factory.BuildPetRig(appearance);
+            var controller = new PetAnimationController();
+            controller.AttachRig(rig, appearance.AccentColorHex);
+            var models = GeometryModels(rig.RootModel).ToArray();
+            Point3D[] Snapshot() => models.SelectMany(m => ((MeshGeometry3D)m.Geometry).Positions).ToArray();
+            double Advance()
+            {
+                var previous = Snapshot();
+                controller.UpdateFrame(frame, 0, 0);
+                return Snapshot().Zip(previous, (a, b) => (a - b).Length).Max();
+            }
+
+            Advance();
+            controller.TriggerPetReaction();
+            for (var i = 0; i < 52; i++) Advance();
+            for (var i = 0; i < 20; i++) Assert.InRange(Advance(), 0, 0.10);
+
+            controller.SetSleeping(true);
+            var sleepEntry = Enumerable.Range(0, 20).Select(_ => Advance()).ToArray();
+            Assert.All(sleepEntry, displacement => Assert.InRange(displacement, 0, 0.10));
+            Assert.True(sleepEntry.Max() > 0.01);
+
+            for (var i = 0; i < 60; i++) Advance();
+            controller.SetSleeping(false);
+            var wake = Enumerable.Range(0, 80).Select(_ => Advance()).ToArray();
+            Assert.All(wake, displacement => Assert.InRange(displacement, 0, 0.12));
+            Assert.True(wake.Max() > 0.01);
+            Assert.False(controller.IsWakingUp);
+            controller.DetachRig();
+        });
+    }
+
     [Theory]
     [InlineData(PetSpeciesIds.MochiSpirit)]
     [InlineData(PetSpeciesIds.ChibiCat)]

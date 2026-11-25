@@ -4,16 +4,38 @@ using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Media.Media3D;
 using SharpGLTF.Schema2;
+using Quaternion = System.Numerics.Quaternion;
 
 namespace LabPet.Client.Rendering;
 
 internal sealed class AuthoredPetClips
 {
     internal static readonly Matrix4x4 Fit = Matrix4x4.CreateScale(.73f) * Matrix4x4.CreateTranslation(0, -.94f, 0);
-    private readonly Dictionary<string, (float Duration, Matrix4x4[][] Frames)> _clips = [];
+    private readonly Dictionary<string, (float Duration, BonePose[][] Frames)> _clips = [];
     private readonly (Node Joint, Matrix4x4 InverseBindMatrix)[] _bones;
     private readonly int[] _parents;
     internal Dictionary<string, System.Windows.Media.Media3D.Material> Materials { get; } = [];
+
+    internal readonly record struct BonePose(Vector3 Scale, Quaternion Rotation, Vector3 Translation)
+    {
+        internal static BonePose FromMatrix(Matrix4x4 matrix)
+        {
+            if (!Matrix4x4.Decompose(matrix, out var scale, out var rotation, out var translation))
+            {
+                throw new InvalidDataException("캐릭터 클립의 관절 변환을 분해할 수 없습니다.");
+            }
+
+            return new(scale, rotation, translation);
+        }
+
+        internal static BonePose Blend(BonePose from, BonePose to, float weight) => new(
+            Vector3.Lerp(from.Scale, to.Scale, weight),
+            Quaternion.Slerp(from.Rotation, to.Rotation, weight),
+            Vector3.Lerp(from.Translation, to.Translation, weight));
+
+        internal Matrix4x4 ToMatrix()
+            => Matrix4x4.CreateScale(Scale) * Matrix4x4.CreateFromQuaternion(Rotation) * Matrix4x4.CreateTranslation(Translation);
+    }
 
     internal static PetModelMetadata Metadata() => new()
     {
@@ -27,10 +49,13 @@ internal sealed class AuthoredPetClips
         _parents = _bones.Select(b => Array.FindIndex(_bones, p => p.Joint == b.Joint.VisualParent)).ToArray();
         foreach (var clip in model.LogicalAnimations)
         {
-            int steps = Math.Max(1, (int)Math.Round(clip.Duration * 30));
-            var frames = new Matrix4x4[steps+1][];
-            for (int i=0; i<=steps; i++)
-                frames[i] = _bones.Select(b => b.Joint.GetLocalTransform(clip, clip.Duration*i/steps).Matrix).ToArray();
+            var steps = Math.Max(1, (int)Math.Round(clip.Duration * 30));
+            var frames = new BonePose[steps + 1][];
+            for (var i = 0; i <= steps; i++)
+            {
+                var time = clip.Duration * i / steps;
+                frames[i] = _bones.Select(b => BonePose.FromMatrix(b.Joint.GetLocalTransform(clip, time).Matrix)).ToArray();
+            }
             _clips.Add(clip.Name, (clip.Duration, frames));
         }
         foreach (var material in model.LogicalMaterials)
@@ -54,15 +79,24 @@ internal sealed class AuthoredPetClips
         }
     }
 
-    internal void Apply(string name, float time, PetRigHandle rig, float typing, float left, float right,
-        Matrix4x4[] world, Matrix4x4[] palette, MatrixTransform3D head)
+    internal void Sample(string name, float time, float? progress, Span<BonePose> pose)
     {
         var clip = _clips[name];
-        var position = time % clip.Duration / clip.Duration * (clip.Frames.Length-1);
-        var frame = Math.Min((int)position,clip.Frames.Length-2);
-        for (int i=0; i<_bones.Length; i++)
+        var phase = progress ?? (clip.Duration > 0 ? time % clip.Duration / clip.Duration : 0);
+        var position = Math.Clamp(phase, 0, 1) * (clip.Frames.Length - 1);
+        var frame = Math.Min((int)position, clip.Frames.Length - 2);
+        for (var i = 0; i < _bones.Length; i++)
         {
-            var local = Matrix4x4.Lerp(clip.Frames[frame][i],clip.Frames[frame+1][i],position-frame);
+            pose[i] = BonePose.Blend(clip.Frames[frame][i], clip.Frames[frame + 1][i], position - frame);
+        }
+    }
+
+    internal void Apply(ReadOnlySpan<BonePose> pose, PetRigHandle rig, float typing, float left, float right,
+        Matrix4x4[] world, Matrix4x4[] palette, MatrixTransform3D head)
+    {
+        for (var i = 0; i < _bones.Length; i++)
+        {
+            var local = pose[i].ToMatrix();
             var bone = _bones[i];
             if (bone.Joint.Name == "Head")
                 local = Matrix4x4.CreateFromYawPitchRoll((float)rig.HeadYaw.Angle*MathF.PI/180,
