@@ -1242,6 +1242,221 @@ public sealed class VisitorPetBubbleTests
     }
 
     [Fact]
+    public async Task VisitorPopups_KeepBodyInsideWorkAreaAndTailUnclippedOnHeadOutsideWorkArea()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), "LabPet_VisitorOutsideTail_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempDir);
+
+        try
+        {
+            var crashDir = Path.Combine(tempDir, "logs");
+            var store = new JsonAppDataStore(new StateMigrator(), tempDir);
+            await using var transport = new LanP2pTransport(udpDiscoveryPort: 0, udpMusicPort: 0, tcpControlPort: 0);
+            await using var social = new SocialCoordinatorService(transport, store, new SoloProgressionService());
+            using var audio = new NullAudioAnalyzer();
+
+            await WpfTestHost.RunAsync(async () =>
+            {
+                var friend = new FriendEntry { PetId = "outside-tail", OwnerName = "유라", PetName = "구름" };
+                var window = new VisitorPetWindow(friend, friend.CachedAppearance, new ProceduralPetMeshFactory(), audio, social)
+                {
+                    CrashLogDirectory = crashDir,
+                    ShowActivated = false,
+                    Left = 300,
+                    Top = 300
+                };
+
+                try
+                {
+                    window.Show();
+                    await FlushUiAsync();
+
+                    Assert.True(Win32WindowHelper.TryGetNearestWorkArea(window, out var area));
+                    var viewport = Assert.IsType<Viewport3D>(window.FindName("VisitorViewport"));
+                    var surface = Assert.IsType<Canvas>(window.FindName("VisitorBubbleSurface"));
+                    var content = Assert.IsType<DockPanel>(window.FindName("VisitorBubbleContent"));
+                    var tail = Assert.IsType<BubblePath>(window.FindName("VisitorBubbleTail"));
+                    var dpi = VisualTreeHelper.GetDpi(viewport);
+
+                    Assert.True(window.ShowChatMessage("이전 메시지입니다."));
+                    Assert.True(window.ShowChatMessage("작업영역 밖 꼬리 확인"));
+                    await FlushUiAsync();
+
+                    // 작업영역 내부 기준 본문 측정 크기를 기록해 꼬리 위치 변화가 본문 측정에 영향을 주지 않는지 확인한다.
+                    var baselineContentDesired = content.DesiredSize;
+                    Assert.True(baselineContentDesired.Width > 0 && baselineContentDesired.Height > 0);
+
+                    // 멀티모니터 환경에서 인접 모니터로 넘어가지 않도록 전체 가상 화면 외곽(상·하·좌·우·대각선)을 대상으로 검증한다.
+                    var virtualLeft = SystemParameters.VirtualScreenLeft * dpi.DpiScaleX;
+                    var virtualRight = (SystemParameters.VirtualScreenLeft + SystemParameters.VirtualScreenWidth) * dpi.DpiScaleX;
+                    var outsideTargets = new[]
+                    {
+                        new Point(virtualLeft - 42 * dpi.DpiScaleX, area.Top + area.Height * 0.5),
+                        new Point(virtualRight + 42 * dpi.DpiScaleX, area.Top + area.Height * 0.5),
+                        new Point(area.Left + area.Width * 0.5, area.Top - 32 * dpi.DpiScaleY),
+                        new Point(area.Left + area.Width * 0.5, area.Bottom + 32 * dpi.DpiScaleY),
+                        new Point(virtualLeft - 36 * dpi.DpiScaleX, area.Top - 28 * dpi.DpiScaleY),
+                        new Point(virtualRight + 36 * dpi.DpiScaleX, area.Bottom + 28 * dpi.DpiScaleY)
+                    };
+
+                    foreach (var targetHead in outsideTargets)
+                    {
+                        Assert.True(Win32WindowHelper.TryGetWindowPhysicalBounds(window, out var winBounds));
+                        var currentHead = window.GetPopupHeadPhysical();
+                        Assert.True(Win32WindowHelper.MoveWindowPhysical(
+                            window,
+                            (int)Math.Round(winBounds.Left + targetHead.X - currentHead.X),
+                            (int)Math.Round(winBounds.Top + targetHead.Y - currentHead.Y)));
+                        await FlushUiAsync();
+                        await FlushUiAsync();
+
+                        var actualHead = window.GetPopupHeadPhysical();
+                        Assert.True(Win32WindowHelper.TryGetNearestWorkArea(window, out var currentArea));
+                        Assert.False(currentArea.Contains(actualHead),
+                            $"테스트 대상 머리 좌표({actualHead})가 작업영역({currentArea}) 밖에 있어야 합니다.");
+
+                        var cards = Assert.IsType<StackPanel>(window.FindName("VisitorChatCards"));
+                        foreach (var card in cards.Children.OfType<Border>())
+                        {
+                            var cardBounds = GetScreenBounds(card);
+                            Assert.True(currentArea.Contains(cardBounds),
+                                $"메시지 본문 카드({cardBounds})가 작업영역({currentArea}) 내부에 유지되어야 합니다.");
+                        }
+
+                        // 실제 팝업 HWND 위치가 WPF 화면 경계 보정으로 밀려나지 않고 계산된 물리 좌표와 일치해야 한다.
+                        Assert.True(Win32WindowHelper.TryGetVisualWindowPhysicalBounds(surface, out var hwndBounds));
+                        var expectedBounds = window.CurrentBubblePhysicalBounds;
+                        Assert.InRange(Math.Abs(hwndBounds.Left - expectedBounds.Left), 0, 1.5);
+                        Assert.InRange(Math.Abs(hwndBounds.Top - expectedBounds.Top), 0, 1.5);
+
+                        // 화살표 꼬리 끝점은 작업영역 밖 실제 캐릭터 머리를 가리키며 Canvas 경계 안에서 잘리지 않아야 한다.
+                        var geometry = Assert.IsType<PathGeometry>(tail.Data);
+                        var figure = Assert.Single(geometry.Figures);
+                        var localTip = Assert.IsType<LineSegment>(figure.Segments[0]).Point;
+                        var screenTip = tail.PointToScreen(localTip);
+                        Assert.InRange((screenTip - actualHead).Length, 0, 1.5);
+                        Assert.InRange(localTip.X, 0, surface.ActualWidth);
+                        Assert.InRange(localTip.Y, 0, surface.ActualHeight);
+
+                        // 꼬리 좌표 변화가 본문 측정 크기에 영향을 주지 않아야 한다.
+                        Assert.InRange(Math.Abs(content.DesiredSize.Width - baselineContentDesired.Width), 0, 0.5);
+                        Assert.InRange(Math.Abs(content.DesiredSize.Height - baselineContentDesired.Height), 0, 0.5);
+                    }
+
+                    Assert.False(Directory.Exists(crashDir));
+                }
+                finally
+                {
+                    if (window.IsLoaded || window.IsVisible)
+                    {
+                        window.Close();
+                    }
+                }
+            }).WaitAsync(TimeSpan.FromSeconds(15));
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir))
+            {
+                Directory.Delete(tempDir, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
+    public async Task VisitorPetWindow_RapidMoveAndOpenCloseCycles_DoNotLoopOrCrashAfterClose()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), "LabPet_VisitorRapidCycles_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempDir);
+
+        try
+        {
+            var crashDir = Path.Combine(tempDir, "logs");
+            var store = new JsonAppDataStore(new StateMigrator(), tempDir);
+            await using var transport = new LanP2pTransport(udpDiscoveryPort: 0, udpMusicPort: 0, tcpControlPort: 0);
+            await using var social = new SocialCoordinatorService(transport, store, new SoloProgressionService());
+            using var audio = new NullAudioAnalyzer();
+
+            await WpfTestHost.RunAsync(async () =>
+            {
+                var friend = new FriendEntry { PetId = "rapid-cycles", OwnerName = "보미", PetName = "구름이" };
+                var window = new VisitorPetWindow(friend, friend.CachedAppearance, new ProceduralPetMeshFactory(), audio, social)
+                {
+                    CrashLogDirectory = crashDir,
+                    ShowActivated = false,
+                    Left = 360,
+                    Top = 300
+                };
+
+                try
+                {
+                    window.Show();
+                    await FlushUiAsync();
+                    Assert.True(Win32WindowHelper.TryGetNearestWorkArea(window, out var area));
+                    var popup = Assert.IsType<Popup>(window.FindName("VisitorBubblePopup"));
+
+                    // 1) 반복 열기/닫기 및 작업영역 안/밖 빠른 왕복 이동
+                    for (var cycle = 0; cycle < 4; cycle++)
+                    {
+                        window.ShowVisitorBubble($"상태 {cycle}", 40);
+                        Assert.True(window.ShowChatMessage($"반복 메시지 {cycle}", 60));
+                        await WaitUntilAsync(() => popup.IsOpen && !window.CurrentBubblePhysicalBounds.IsEmpty);
+
+                        foreach (var dx in new[] { -50, 0, 50 })
+                        {
+                            Assert.True(Win32WindowHelper.TryGetWindowPhysicalBounds(window, out var b));
+                            var targetX = dx < 0 ? (int)(area.Left - 30) : dx > 0 ? (int)(area.Right - 40) : (int)(area.Left + 320);
+                            Assert.True(Win32WindowHelper.MoveWindowPhysical(window, targetX, (int)b.Top));
+                        }
+
+                        await FlushUiAsync();
+                        AssertBubbleHeadAlignment(window);
+
+                        await WaitUntilAsync(() => !window.HasStatusBubble && !window.ChatBubbleStack.HasItems);
+                        await WaitUntilAsync(() => !popup.IsOpen);
+                    }
+
+                    // 2) 동일 위치에서 재진입 루프 없이 수렴하는지 확인
+                    Assert.True(window.ShowChatMessage("수렴 확인 메시지", 5000));
+                    await WaitUntilAsync(() => popup.IsOpen && !window.CurrentBubblePhysicalBounds.IsEmpty);
+                    await FlushUiAsync();
+                    var countAfterStable = window.BubbleLayoutApplyCount;
+                    await Task.Delay(80);
+                    await FlushUiAsync();
+                    Assert.Equal(countAfterStable, window.BubbleLayoutApplyCount);
+
+                    // 3) 배율 변경 + 이동 직후 대기 콜백이 남아 있는 상태에서 창 닫기 → 예외/크래시 없어야 함
+                    window.ApplyDisplaySettings(1.3, 0.85);
+                    window.Left += 12;
+                    window.ShowVisitorBubble("종료 직전 알림", 1000);
+                    window.Close();
+                    await FlushUiAsync();
+                    await Task.Delay(60);
+                    await FlushUiAsync();
+
+                    Assert.False(window.IsAvailableForMessages);
+                    Assert.True(window.CurrentBubblePhysicalBounds.IsEmpty);
+                    Assert.False(Directory.Exists(crashDir));
+                }
+                finally
+                {
+                    if (window.IsLoaded || window.IsVisible)
+                    {
+                        window.Close();
+                    }
+                }
+            }).WaitAsync(TimeSpan.FromSeconds(15));
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir))
+            {
+                Directory.Delete(tempDir, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
     public async Task VisitorPetWindow_StatusExpiresBeforeFriendMessage_ReopensPopupWithoutExceptionAndAlignsTail()
     {
         var tempDir = Path.Combine(Path.GetTempPath(), "LabPet_VisitorReopen_" + Guid.NewGuid().ToString("N"));

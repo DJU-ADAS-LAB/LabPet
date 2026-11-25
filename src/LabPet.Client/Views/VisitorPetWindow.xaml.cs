@@ -27,9 +27,45 @@ public partial class VisitorPetWindow : Window, IMessageBubbleTarget
     private static readonly TimeSpan IdleInterval = TimeSpan.FromMilliseconds(45);
     internal const int DefaultChatMessageDurationMs = 8000;
     private const double DragThresholdPixels = 5.0;
-    private const double BubbleShadowInsetDip = 8;
+    private const double LayoutDiffEpsilon = 0.01;
     private const int WmSettingChange = 0x001A;
     private const int WmDisplayChange = 0x007E;
+
+    private readonly record struct AppliedBubbleLayout(
+        Rect RootBounds,
+        Point BodyOrigin,
+        double ScaleX,
+        double ScaleY,
+        double SurfaceWidth,
+        double SurfaceHeight,
+        Point TailBaseLeft,
+        Point TailTip,
+        Point TailBaseRight,
+        Brush? TailFill,
+        Brush? TailStroke,
+        double Opacity)
+    {
+        public bool IsCloseTo(AppliedBubbleLayout other)
+            => Math.Abs(RootBounds.Left - other.RootBounds.Left) < LayoutDiffEpsilon
+               && Math.Abs(RootBounds.Top - other.RootBounds.Top) < LayoutDiffEpsilon
+               && Math.Abs(RootBounds.Width - other.RootBounds.Width) < LayoutDiffEpsilon
+               && Math.Abs(RootBounds.Height - other.RootBounds.Height) < LayoutDiffEpsilon
+               && Math.Abs(BodyOrigin.X - other.BodyOrigin.X) < LayoutDiffEpsilon
+               && Math.Abs(BodyOrigin.Y - other.BodyOrigin.Y) < LayoutDiffEpsilon
+               && Math.Abs(ScaleX - other.ScaleX) < 0.0005
+               && Math.Abs(ScaleY - other.ScaleY) < 0.0005
+               && Math.Abs(SurfaceWidth - other.SurfaceWidth) < LayoutDiffEpsilon
+               && Math.Abs(SurfaceHeight - other.SurfaceHeight) < LayoutDiffEpsilon
+               && Math.Abs(TailBaseLeft.X - other.TailBaseLeft.X) < LayoutDiffEpsilon
+               && Math.Abs(TailBaseLeft.Y - other.TailBaseLeft.Y) < LayoutDiffEpsilon
+               && Math.Abs(TailTip.X - other.TailTip.X) < LayoutDiffEpsilon
+               && Math.Abs(TailTip.Y - other.TailTip.Y) < LayoutDiffEpsilon
+               && Math.Abs(TailBaseRight.X - other.TailBaseRight.X) < LayoutDiffEpsilon
+               && Math.Abs(TailBaseRight.Y - other.TailBaseRight.Y) < LayoutDiffEpsilon
+               && ReferenceEquals(TailFill, other.TailFill)
+               && ReferenceEquals(TailStroke, other.TailStroke)
+               && Math.Abs(Opacity - other.Opacity) < 0.001;
+    }
 
     private readonly IPetMeshFactory _meshFactory;
     private readonly IAudioAnalyzer _audioAnalyzer;
@@ -54,9 +90,16 @@ public partial class VisitorPetWindow : Window, IMessageBubbleTarget
     private bool _popupLayoutQueued;
     private bool _composerNeedsPlacement;
     private bool _composerPositionQueued;
+    private bool _bubblePositionQueued;
     private bool _chatItemsChanged;
     private bool _bubbleBelowHead;
     private bool _isOpeningBubblePopup;
+    private AppliedBubbleLayout? _lastAppliedBubbleLayout;
+    private HwndSource? _windowHwndSource;
+    private DispatcherOperation? _pendingPopupLayoutOperation;
+    private DispatcherOperation? _pendingBubblePositionOperation;
+    private DispatcherOperation? _pendingComposerPositionOperation;
+    private int _bubbleLayoutApplyCount;
     private long _lastReceivedOrder;
     private bool _wasComposerOpenOnMouseDown;
     private bool _isSendingComposerMessage;
@@ -94,6 +137,7 @@ public partial class VisitorPetWindow : Window, IMessageBubbleTarget
     internal bool ShowsSleepingPose => _animator.IsSleeping;
     internal string? CrashLogDirectory { get; set; }
     internal Action? BeforeLayoutBubbleForTest { get; set; }
+    internal int BubbleLayoutApplyCount => _bubbleLayoutApplyCount;
 
     internal VisitorPetWindow(
         FriendEntry friend,
@@ -118,54 +162,20 @@ public partial class VisitorPetWindow : Window, IMessageBubbleTarget
         VisitorBubblePopup.CustomPopupPlacementCallback = GetVisitorBubblePlacements;
         VisitorChatComposerPopup.CustomPopupPlacementCallback = GetVisitorChatComposerPlacements;
 
-        VisitorBubblePopup.Opened += (_, _) =>
-        {
-            try
-            {
-                Win32WindowHelper.SetPopupClickThrough(VisitorBubbleSurface);
-                _popupOrder.UpdateBubble(VisitorBubblePopup, _lastReceivedOrder);
-                if (!_isOpeningBubblePopup
-                    && PresentationSource.FromVisual(VisitorBubbleSurface) is not null
-                    && PresentationSource.FromVisual(VisitorViewport) is not null
-                    && !VisualTreeHelper.GetDpi(VisitorBubbleSurface).Equals(VisualTreeHelper.GetDpi(VisitorViewport)))
-                {
-                    QueuePopupLayout();
-                }
-            }
-            catch (Exception ex)
-            {
-                HandleBubbleLayoutFailure("VisitorBubblePopup.Opened", ex);
-            }
-        };
-        VisitorChatComposerPopup.Opened += (_, _) =>
-        {
-            try
-            {
-                ApplyComposerScreenPosition();
-                _popupOrder.OpenComposer(VisitorChatComposerPopup);
-                QueuePopupLayout(includeComposer: true);
-            }
-            catch (Exception ex)
-            {
-                CrashLogWriter.Write("VisitorChatComposerPopup.Opened", ex, BuildBubbleFailureContext(), CrashLogDirectory);
-            }
-        };
+        VisitorBubblePopup.Opened += OnBubblePopupOpened;
+        VisitorChatComposerPopup.Opened += OnComposerPopupOpened;
 
         LightsVisual.Content = _meshFactory.CreateStudioLights();
         ApplyFriendState(friend, initialAppearance);
         var initialPeer = _social.DiscoveredPeers.FirstOrDefault(p => string.Equals(p.PetId, friend.PetId, StringComparison.OrdinalIgnoreCase));
         ApplyFriendSleepState(initialPeer?.IsSleeping ?? true);
 
-        SourceInitialized += (_, _) =>
-        {
-            Win32WindowHelper.ApplyToolWindowStyle(this);
-            (PresentationSource.FromVisual(this) as HwndSource)?.AddHook(HandleDisplaySettingsChange);
-        };
-        Loaded += (_, _) => UpdatePetOverlayLayout();
-        LocationChanged += (_, _) => QueuePopupLayout(includeComposer: true);
-        DpiChanged += (_, _) => UpdatePetOverlayLayout();
-        VisitorViewport.SizeChanged += (_, _) => UpdatePetOverlayLayout();
-        VisitorNameplate.SizeChanged += (_, _) => QueuePopupLayout(includeComposer: true);
+        SourceInitialized += OnWindowSourceInitialized;
+        Loaded += OnWindowLoaded;
+        LocationChanged += OnWindowLocationChanged;
+        DpiChanged += OnWindowDpiChanged;
+        VisitorViewport.SizeChanged += OnVisitorViewportSizeChanged;
+        VisitorNameplate.SizeChanged += OnVisitorNameplateSizeChanged;
         _social.StateChanged += OnSocialStateChanged;
 
         _frameTimer = new DispatcherTimer(DispatcherPriority.Render)
@@ -181,38 +191,143 @@ public partial class VisitorPetWindow : Window, IMessageBubbleTarget
         };
         _dismissHideTimer.Tick += OnDismissHideTick;
         _composerCloseTimer = new DispatcherTimer { Interval = QuickMessageInputBehavior.DismissDelay };
-        _composerCloseTimer.Tick += (_, _) =>
+        _composerCloseTimer.Tick += OnComposerCloseTick;
+
+        Closing += OnWindowClosing;
+        Closed += OnWindowClosed;
+    }
+
+    private void OnBubblePopupOpened(object? sender, EventArgs e)
+    {
+        if (_isClosingOrClosed)
         {
-            _composerCloseTimer.Stop();
-            if (!_isActivatingComposer && !QuickMessageInputBehavior.IsActive(VisitorChatComposerCard)
-                && !VisitorViewport.IsMouseOver && !VisitorViewport.IsMouseCaptureWithin)
+            return;
+        }
+
+        try
+        {
+            Win32WindowHelper.SetPopupClickThrough(VisitorBubbleSurface);
+            ApplyBubbleScreenPosition();
+            _popupOrder.UpdateBubble(VisitorBubblePopup, _lastReceivedOrder);
+            if (!_isOpeningBubblePopup
+                && PresentationSource.FromVisual(VisitorBubbleSurface) is not null
+                && PresentationSource.FromVisual(VisitorViewport) is not null
+                && !VisualTreeHelper.GetDpi(VisitorBubbleSurface).Equals(VisualTreeHelper.GetDpi(VisitorViewport)))
             {
-                CloseChatComposer();
+                QueuePopupLayout();
             }
-        };
-
-        Closing += (_, _) =>
+        }
+        catch (Exception ex)
         {
-            _isClosingOrClosed = true;
+            HandleBubbleLayoutFailure("VisitorBubblePopup.Opened", ex);
+        }
+    }
+
+    private void OnComposerPopupOpened(object? sender, EventArgs e)
+    {
+        if (_isClosingOrClosed)
+        {
+            return;
+        }
+
+        try
+        {
+            ApplyComposerScreenPosition();
+            _popupOrder.OpenComposer(VisitorChatComposerPopup);
+            QueuePopupLayout(includeComposer: true);
+        }
+        catch (Exception ex)
+        {
+            CrashLogWriter.Write("VisitorChatComposerPopup.Opened", ex, BuildBubbleFailureContext(), CrashLogDirectory);
+        }
+    }
+
+    private void OnWindowSourceInitialized(object? sender, EventArgs e)
+    {
+        Win32WindowHelper.ApplyToolWindowStyle(this);
+        _windowHwndSource = PresentationSource.FromVisual(this) as HwndSource;
+        _windowHwndSource?.AddHook(HandleDisplaySettingsChange);
+    }
+
+    private void OnWindowLoaded(object sender, RoutedEventArgs e) => UpdatePetOverlayLayout();
+    private void OnWindowLocationChanged(object? sender, EventArgs e) => QueuePopupLayout(includeComposer: true);
+    private void OnWindowDpiChanged(object sender, DpiChangedEventArgs e) => UpdatePetOverlayLayout();
+    private void OnVisitorViewportSizeChanged(object sender, SizeChangedEventArgs e) => UpdatePetOverlayLayout();
+    private void OnVisitorNameplateSizeChanged(object sender, SizeChangedEventArgs e) => QueuePopupLayout(includeComposer: true);
+
+    private void OnComposerCloseTick(object? sender, EventArgs e)
+    {
+        _composerCloseTimer.Stop();
+        if (!_isClosingOrClosed && !_isActivatingComposer && !QuickMessageInputBehavior.IsActive(VisitorChatComposerCard)
+            && !VisitorViewport.IsMouseOver && !VisitorViewport.IsMouseCaptureWithin)
+        {
             CloseChatComposer();
-            CloseBubblePopup();
-        };
+        }
+    }
 
-        Closed += (_, _) =>
+    private void OnWindowClosing(object? sender, System.ComponentModel.CancelEventArgs e)
+    {
+        _isClosingOrClosed = true;
+        CancelPendingPopupOperations();
+        CloseChatComposer();
+        CloseBubblePopup();
+    }
+
+    private void OnWindowClosed(object? sender, EventArgs e)
+    {
+        _isClosingOrClosed = true;
+        CancelPendingPopupOperations();
+        _frameTimer.Stop();
+        _frameTimer.Tick -= OnFrameTick;
+        _dismissHideTimer.Stop();
+        _dismissHideTimer.Tick -= OnDismissHideTick;
+        _composerCloseTimer.Stop();
+        _composerCloseTimer.Tick -= OnComposerCloseTick;
+
+        SourceInitialized -= OnWindowSourceInitialized;
+        Loaded -= OnWindowLoaded;
+        LocationChanged -= OnWindowLocationChanged;
+        DpiChanged -= OnWindowDpiChanged;
+        Closing -= OnWindowClosing;
+        Closed -= OnWindowClosed;
+        VisitorViewport.SizeChanged -= OnVisitorViewportSizeChanged;
+        VisitorNameplate.SizeChanged -= OnVisitorNameplateSizeChanged;
+        VisitorBubblePopup.Opened -= OnBubblePopupOpened;
+        VisitorChatComposerPopup.Opened -= OnComposerPopupOpened;
+        VisitorBubblePopup.CustomPopupPlacementCallback = null;
+        VisitorChatComposerPopup.CustomPopupPlacementCallback = null;
+
+        if (_windowHwndSource is { IsDisposed: false } hwndSource)
         {
-            _isClosingOrClosed = true;
-            _frameTimer.Stop();
-            _dismissHideTimer.Stop();
-            _composerCloseTimer.Stop();
-            _social.StateChanged -= OnSocialStateChanged;
-            _chatBubbleStack.Changed -= OnChatBubbleStackChanged;
-            _chatBubbleStack.Dispose();
-            CancelAndDisposeStatusBubbleCts();
-            _animator.DetachRig();
-            VisitorPetVisual.Content = null;
-            LightsVisual.Content = null;
-            _currentRig = null;
-        };
+            hwndSource.RemoveHook(HandleDisplaySettingsChange);
+        }
+
+        _windowHwndSource = null;
+
+        _social.StateChanged -= OnSocialStateChanged;
+        _chatBubbleStack.Changed -= OnChatBubbleStackChanged;
+        _chatBubbleStack.Dispose();
+        CancelAndDisposeStatusBubbleCts();
+        _animator.DetachRig();
+        VisitorPetVisual.Content = null;
+        LightsVisual.Content = null;
+        _currentRig = null;
+    }
+
+    private void CancelPendingPopupOperations()
+    {
+        _pendingPopupLayoutOperation?.Abort();
+        _pendingPopupLayoutOperation = null;
+        _popupLayoutQueued = false;
+        _composerNeedsPlacement = false;
+
+        _pendingBubblePositionOperation?.Abort();
+        _pendingBubblePositionOperation = null;
+        _bubblePositionQueued = false;
+
+        _pendingComposerPositionOperation?.Abort();
+        _pendingComposerPositionOperation = null;
+        _composerPositionQueued = false;
     }
 
     /// <summary>
@@ -542,10 +657,11 @@ public partial class VisitorPetWindow : Window, IMessageBubbleTarget
         }
 
         _popupLayoutQueued = true;
-        Dispatcher.BeginInvoke(DispatcherPriority.Render, () =>
+        _pendingPopupLayoutOperation = Dispatcher.BeginInvoke(DispatcherPriority.Render, () =>
         {
+            _pendingPopupLayoutOperation = null;
             _popupLayoutQueued = false;
-            if (_isClosingOrClosed)
+            if (_isClosingOrClosed || Dispatcher.HasShutdownStarted)
             {
                 return;
             }
@@ -582,6 +698,10 @@ public partial class VisitorPetWindow : Window, IMessageBubbleTarget
 
     private void CloseBubblePopup()
     {
+        _pendingBubblePositionOperation?.Abort();
+        _pendingBubblePositionOperation = null;
+        _bubblePositionQueued = false;
+
         if (VisitorBubblePopup.IsOpen)
         {
             VisitorBubblePopup.IsOpen = false;
@@ -596,6 +716,7 @@ public partial class VisitorPetWindow : Window, IMessageBubbleTarget
         VisitorBubbleSurface.Height = 0;
         VisitorBubbleSurface.Opacity = _petOpacity;
         _currentBubblePhysicalBounds = Rect.Empty;
+        _lastAppliedBubbleLayout = null;
         _lastReceivedOrder = 0;
         _chatItemsChanged = true;
     }
@@ -735,18 +856,9 @@ public partial class VisitorPetWindow : Window, IMessageBubbleTarget
 
         var tail = VisitorBubblePlacementCalculator.CalculateTailPlacement(placement, cardBounds, ownerDpi);
 
-        // 말풍선 본체와 꼬리를 한 HWND에 담고 화면 안쪽의 그림자 여백만 포함한다.
-        var rootBounds = placement.Body;
-        if (double.IsFinite(tail.Tip.X) && double.IsFinite(tail.Tip.Y))
-        {
-            rootBounds.Union(tail.Tip);
-        }
-
-        rootBounds.Inflate(BubbleShadowInsetDip * ownerDpi.DpiScaleX, BubbleShadowInsetDip * ownerDpi.DpiScaleY);
-        var snappedBounds = new Rect(
-            new Point(Math.Floor(rootBounds.Left), Math.Floor(rootBounds.Top)),
-            new Point(Math.Ceiling(rootBounds.Right), Math.Ceiling(rootBounds.Bottom)));
-        rootBounds = Rect.Intersect(workArea, snappedBounds);
+        // 말풍선 본체(작업영역 안쪽 그림자 여백 포함)와 작업영역 밖까지 뻗는 꼬리 전체를 한 HWND에 담는다.
+        var rootBounds = VisitorBubblePlacementCalculator.CalculateBubbleSurfaceBounds(
+            placement, tail, workArea, ownerDpi);
         if (rootBounds.IsEmpty || !IsFinitePositive(rootBounds))
         {
             CloseBubblePopup();
@@ -776,6 +888,27 @@ public partial class VisitorPetWindow : Window, IMessageBubbleTarget
             return;
         }
 
+        var nextLayout = new AppliedBubbleLayout(
+            rootBounds,
+            bodyOrigin,
+            scaleX,
+            scaleY,
+            surfaceWidth,
+            surfaceHeight,
+            tailBaseLeft,
+            tailTip,
+            tailBaseRight,
+            card.Background,
+            card.BorderBrush,
+            _petOpacity);
+
+        // 직전과 동일한 배치 결과이면 도형 재생성과 팝업 왕복 재배치를 생략한다.
+        if (_lastAppliedBubbleLayout is { } previous && previous.IsCloseTo(nextLayout) && VisitorBubblePopup.IsOpen)
+        {
+            ApplyBubbleScreenPosition();
+            return;
+        }
+
         Canvas.SetLeft(VisitorBubbleContent, bodyOrigin.X);
         Canvas.SetTop(VisitorBubbleContent, bodyOrigin.Y);
         VisitorBubbleScale.ScaleX = scaleX;
@@ -795,7 +928,10 @@ public partial class VisitorPetWindow : Window, IMessageBubbleTarget
 
         VisitorBubbleSurface.Opacity = _petOpacity;
         _currentBubblePhysicalBounds = rootBounds;
+        _lastAppliedBubbleLayout = nextLayout;
+        _bubbleLayoutApplyCount++;
         RepositionPopup(VisitorBubblePopup);
+        ApplyBubbleScreenPosition();
     }
 
     private Size MeasureBubbleContent()
@@ -988,11 +1124,12 @@ public partial class VisitorPetWindow : Window, IMessageBubbleTarget
                 nameplate, popupSize, dpi);
 
             // WPF가 화면 경계에 맞춰 팝업을 밀어낸 뒤에도, 실제 창은 이름표 아래에 둔다.
-            if (!_composerPositionQueued)
+            if (!_composerPositionQueued && !_isClosingOrClosed && !Dispatcher.HasShutdownStarted)
             {
                 _composerPositionQueued = true;
-                Dispatcher.BeginInvoke(DispatcherPriority.Render, () =>
+                _pendingComposerPositionOperation = Dispatcher.BeginInvoke(DispatcherPriority.Render, () =>
                 {
+                    _pendingComposerPositionOperation = null;
                     _composerPositionQueued = false;
                     ApplyComposerScreenPosition();
                 });
@@ -1022,8 +1159,42 @@ public partial class VisitorPetWindow : Window, IMessageBubbleTarget
         }
     }
 
+    private void ApplyBubbleScreenPosition()
+    {
+        try
+        {
+            if (!_isClosingOrClosed && VisitorBubblePopup.IsOpen && IsFinitePositive(_currentBubblePhysicalBounds))
+            {
+                Win32WindowHelper.MovePopupPhysical(VisitorBubbleSurface, _currentBubblePhysicalBounds.TopLeft);
+            }
+        }
+        catch (Exception ex)
+        {
+            CrashLogWriter.Write("VisitorPetWindow.ApplyBubbleScreenPosition", ex, BuildBubbleFailureContext(), CrashLogDirectory);
+        }
+    }
+
     private CustomPopupPlacement[] GetVisitorBubblePlacements(Size popupSize, Size targetSize, Point offset)
-        => _currentBubblePhysicalBounds.IsEmpty ? [] : RelativePopupPlacement(_currentBubblePhysicalBounds.TopLeft);
+    {
+        if (_currentBubblePhysicalBounds.IsEmpty)
+        {
+            return [];
+        }
+
+        // 꼬리가 작업영역 밖으로 뻗어 WPF가 팝업 창을 모니터 안으로 밀어낸 뒤에도 실제 물리 좌표에 고정한다.
+        if (!_bubblePositionQueued && !_isClosingOrClosed && !Dispatcher.HasShutdownStarted)
+        {
+            _bubblePositionQueued = true;
+            _pendingBubblePositionOperation = Dispatcher.BeginInvoke(DispatcherPriority.Render, () =>
+            {
+                _pendingBubblePositionOperation = null;
+                _bubblePositionQueued = false;
+                ApplyBubbleScreenPosition();
+            });
+        }
+
+        return RelativePopupPlacement(_currentBubblePhysicalBounds.TopLeft);
+    }
 
     private CustomPopupPlacement[] RelativePopupPlacement(Point physicalOrigin)
     {

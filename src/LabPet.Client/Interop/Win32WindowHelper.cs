@@ -153,6 +153,8 @@ public static partial class Win32WindowHelper
     internal static void MovePopupPhysical(Visual visual, Point origin)
     {
         if (!double.IsFinite(origin.X) || !double.IsFinite(origin.Y)
+            || origin.X < int.MinValue + 1 || origin.X > int.MaxValue - 1
+            || origin.Y < int.MinValue + 1 || origin.Y > int.MaxValue - 1
             || PresentationSource.FromVisual(visual) is not HwndSource { IsDisposed: false, Handle: var handle }
             || !IsValidWindowHandle(handle)
             || !GetWindowRect(handle, out var bounds))
@@ -167,6 +169,27 @@ public static partial class Win32WindowHelper
         {
             System.Diagnostics.Debug.WriteLine($"팝업 화면 좌표 적용 실패 ({Marshal.GetLastPInvokeError()})");
         }
+    }
+
+    internal static bool TryGetVisualWindowPhysicalBounds(Visual visual, out Rect bounds)
+    {
+        bounds = Rect.Empty;
+        if (PresentationSource.FromVisual(visual) is not HwndSource { IsDisposed: false, Handle: var handle }
+            || !IsValidWindowHandle(handle)
+            || !GetWindowRect(handle, out var rect))
+        {
+            return false;
+        }
+
+        var width = rect.Right - rect.Left;
+        var height = rect.Bottom - rect.Top;
+        if (width < 0 || height < 0)
+        {
+            return false;
+        }
+
+        bounds = new Rect(rect.Left, rect.Top, width, height);
+        return true;
     }
 
     internal static void SetPopupClickThrough(Visual visual)
