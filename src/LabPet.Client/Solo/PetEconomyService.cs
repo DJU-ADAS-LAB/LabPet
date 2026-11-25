@@ -17,7 +17,8 @@ public enum LevelUpFailureReason
 {
     None,
     MaxLevelReached,
-    InsufficientCoins
+    InsufficientCoins,
+    GrowthRecoveryRequired
 }
 
 /// <summary>수동 레벨업 시도 결과.</summary>
@@ -63,6 +64,7 @@ public readonly record struct LevelUpCompletedEventArgs(
 /// </summary>
 public sealed class PetEconomyService
 {
+    public const string GrowthRecoveryMessage = "성장 데이터 복구가 필요합니다.";
     public const int MinLevel = SoloProgress.MinLevel;
     public const int MaxLevel = SoloProgress.MaxLevel;
     public const long LevelUpBaseCost = 100L;
@@ -129,6 +131,7 @@ public sealed class PetEconomyService
 
     public static void NormalizeProgress(PetProfile profile)
     {
+        if (profile.RequiresGrowthRecovery) return;
         var p = profile.SoloProgress;
         p.Level = NormalizeLevel(p.Level);
         p.Xp = 0;
@@ -141,8 +144,9 @@ public sealed class PetEconomyService
 
     public int GetDailySocialCoinsEarned(PetProfile profile)
     {
-        lock (profile.SoloProgress)
+        lock (profile.GrowthSync)
         {
+            if (profile.RequiresGrowthRecovery) return 0;
             EnsureDailySocialBucket(profile.SoloProgress);
             return profile.SoloProgress.DailySocialRewardCoinsEarned;
         }
@@ -150,8 +154,9 @@ public sealed class PetEconomyService
 
     public bool CanLevelUp(PetProfile profile, out long costCoins, out long shortfallCoins)
     {
-        lock (profile.SoloProgress)
+        lock (profile.GrowthSync)
         {
+            if (profile.RequiresGrowthRecovery) { costCoins = shortfallCoins = 0; return false; }
             NormalizeProgress(profile);
             var level = profile.SoloProgress.Level;
             if (level >= MaxLevel)
@@ -180,8 +185,9 @@ public sealed class PetEconomyService
         int currentLevel;
         int dailySocial;
 
-        lock (profile.SoloProgress)
+        lock (profile.GrowthSync)
         {
+            if (profile.RequiresGrowthRecovery) { result = new(false, 0, 0, 0, 0, 0, LevelUpFailureReason.GrowthRecoveryRequired); return false; }
             NormalizeProgress(profile);
             var p = profile.SoloProgress;
             EnsureDailySocialBucket(p);
@@ -223,8 +229,9 @@ public sealed class PetEconomyService
         int currentLevel;
         int dailySocial;
 
-        lock (profile.SoloProgress)
+        lock (profile.GrowthSync)
         {
+            if (profile.RequiresGrowthRecovery) return default;
             NormalizeProgress(profile);
             var p = profile.SoloProgress;
             EnsureDailySocialBucket(p);
@@ -262,8 +269,9 @@ public sealed class PetEconomyService
         int currentLevel;
         int dailySocial;
 
-        lock (profile.SoloProgress)
+        lock (profile.GrowthSync)
         {
+            if (profile.RequiresGrowthRecovery) return default;
             NormalizeProgress(profile);
             var p = profile.SoloProgress;
             EnsureDailySocialBucket(p);
@@ -301,8 +309,9 @@ public sealed class PetEconomyService
         int currentLevel;
         int dailySocial;
 
-        lock (profile.SoloProgress)
+        lock (profile.GrowthSync)
         {
+            if (profile.RequiresGrowthRecovery) return default;
             NormalizeProgress(profile);
             var p = profile.SoloProgress;
             EnsureDailySocialBucket(p);
@@ -340,8 +349,9 @@ public sealed class PetEconomyService
         int currentLevel;
         int dailySocial;
 
-        lock (profile.SoloProgress)
+        lock (profile.GrowthSync)
         {
+            if (profile.RequiresGrowthRecovery) return default;
             NormalizeProgress(profile);
             var p = profile.SoloProgress;
             EnsureDailySocialBucket(p);
@@ -378,8 +388,9 @@ public sealed class PetEconomyService
         var cooldownBlocked = false;
         var nowUtc = _timeProvider.GetUtcNow();
 
-        lock (profile.SoloProgress)
+        lock (profile.GrowthSync)
         {
+            if (profile.RequiresGrowthRecovery) return new SocialCoinRewardResult(0, 0, DailySocialCoinCap, false, false);
             NormalizeProgress(profile);
             var p = profile.SoloProgress;
             EnsureDailySocialBucket(p);
@@ -443,8 +454,9 @@ public sealed class PetEconomyService
         int currentLevel;
         int dailySocial;
 
-        lock (profile.SoloProgress)
+        lock (profile.GrowthSync)
         {
+            if (profile.RequiresGrowthRecovery) return false;
             NormalizeProgress(profile);
             var p = profile.SoloProgress;
             EnsureDailySocialBucket(p);
@@ -474,8 +486,9 @@ public sealed class PetEconomyService
         int currentLevel;
         int dailySocial;
 
-        lock (profile.SoloProgress)
+        lock (profile.GrowthSync)
         {
+            if (profile.RequiresGrowthRecovery) return;
             NormalizeProgress(profile);
             var p = profile.SoloProgress;
             EnsureDailySocialBucket(p);
@@ -509,8 +522,9 @@ public sealed class PetEconomyService
         int currentLevel;
         int dailySocial;
 
-        lock (profile.SoloProgress)
+        lock (profile.GrowthSync)
         {
+            if (profile.RequiresGrowthRecovery) return false;
             NormalizeProgress(profile);
             var p = profile.SoloProgress;
             EnsureDailySocialBucket(p);
@@ -547,8 +561,9 @@ public sealed class PetEconomyService
         int currentLevel;
         int dailySocial;
 
-        lock (profile.SoloProgress)
+        lock (profile.GrowthSync)
         {
+            if (profile.RequiresGrowthRecovery) return false;
             NormalizeProgress(profile);
             var p = profile.SoloProgress;
             EnsureDailySocialBucket(p);
@@ -584,8 +599,9 @@ public sealed class PetEconomyService
         int currentLevel;
         int dailySocial;
 
-        lock (profile.SoloProgress)
+        lock (profile.GrowthSync)
         {
+            if (profile.RequiresGrowthRecovery) return false;
             NormalizeProgress(profile);
             var p = profile.SoloProgress;
             EnsureDailySocialBucket(p);
@@ -616,8 +632,9 @@ public sealed class PetEconomyService
             return true;
         }
 
-        lock (profile.SoloProgress)
+        lock (profile.GrowthSync)
         {
+            if (profile.RequiresGrowthRecovery) return false;
             return profile.SoloProgress.Coins >= requiredCoins;
         }
     }
@@ -629,8 +646,9 @@ public sealed class PetEconomyService
             return 0;
         }
 
-        lock (profile.SoloProgress)
+        lock (profile.GrowthSync)
         {
+            if (profile.RequiresGrowthRecovery) return requiredCoins;
             return Math.Max(0L, requiredCoins - profile.SoloProgress.Coins);
         }
     }
@@ -641,8 +659,9 @@ public sealed class PetEconomyService
         int currentLevel;
         int dailySocial;
 
-        lock (profile.SoloProgress)
+        lock (profile.GrowthSync)
         {
+            if (profile.RequiresGrowthRecovery) return;
             NormalizeProgress(profile);
             EnsureDailySocialBucket(profile.SoloProgress);
             currentCoins = profile.SoloProgress.Coins;

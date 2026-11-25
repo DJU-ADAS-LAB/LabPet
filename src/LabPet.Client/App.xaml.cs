@@ -29,6 +29,7 @@ public partial class App : Application
     private FriendMessageRouter? _messageRouter;
     private PetWindow? _petWindow;
     private GameInviteCardPresenter? _inviteCard;
+    private JsonAppDataStore? _profileStore;
     private SnowballDesktopScene? _snowballScene;
     private SnowballInteractionService? _snowballs;
     private readonly Dictionary<string, VisitorPetWindow> _visitorWindows = new(StringComparer.OrdinalIgnoreCase);
@@ -66,15 +67,15 @@ public partial class App : Application
         }
         catch (Exception ex) when (ex is System.IO.IOException or UnauthorizedAccessException)
         {
-            CrashLogWriter.Write("App.LoadProtectedProfile", ex);
-            MessageBox.Show("코인과 레벨 데이터의 보호 상태를 확인할 수 없습니다. 기존 파일을 보존했습니다. 같은 Windows 계정에서 정상 백업을 복원한 뒤 다시 실행해 주세요.",
+            CrashLogWriter.Write("App.LoadProfileIoError", ex);
+            MessageBox.Show("프로필 파일이 다른 프로그램에서 사용 중이거나 접근할 수 없습니다. 기존 파일을 보존했습니다. 잠시 후 다시 실행해 주세요.",
                 "LabPet", MessageBoxButton.OK, MessageBoxImage.Warning);
             Shutdown();
             return;
         }
 
         // 최초 실행 시 온보딩 마법사 진행
-        if (!profile.IsOnboardingCompleted)
+        if (!profile.IsOnboardingCompleted && !profile.RequiresGrowthRecovery)
         {
             var onboardingVm = _serviceProvider.GetRequiredService<OnboardingViewModel>();
             onboardingVm.LoadFromProfile(profile, isEditMode: false);
@@ -181,6 +182,10 @@ public partial class App : Application
         _petWindow.SpeechBubbleLayoutChanged += (_, _) => _inviteCard?.RequestUpdate();
         _petWindow.InitializeWithProfile(profile);
         _petWindow.Show();
+        if (profile.RequiresGrowthRecovery)
+            petVm.ShowBubble("성장 데이터 복구가 필요해요. 설정에서 백업 복구를 시도할 수 있어요.", 6500);
+        _profileStore = store as JsonAppDataStore;
+        if (_profileStore is not null) _profileStore.GrowthRecoveryEntered += OnGrowthRecoveryEntered;
         _snowballs = _serviceProvider.GetRequiredService<SnowballInteractionService>();
         _snowballScene = new SnowballDesktopScene(
             _petWindow,
@@ -204,6 +209,19 @@ public partial class App : Application
 
     internal bool TryReceiveSnowball(Guid senderPetId, Guid eventId, LabPet.Shared.Models.PetAppearance appearance)
         => _snowballScene?.TryReceive(senderPetId, eventId, appearance) == true;
+
+    private void OnGrowthRecoveryEntered(object? sender, LabPet.Shared.Models.PetProfile profile)
+    {
+        if (Dispatcher.HasShutdownStarted) return;
+        Dispatcher.BeginInvoke(() =>
+        {
+            var petVm = _serviceProvider?.GetService<PetWindowViewModel>();
+            if (petVm is null || !ReferenceEquals(petVm.CurrentProfile, profile) || !profile.RequiresGrowthRecovery) return;
+            petVm.ApplyProfile(profile);
+            _serviceProvider?.GetService<CoinGamesViewModel>()?.BindProfile(profile);
+            petVm.ShowBubble("성장 데이터 복구가 필요해요. 설정에서 백업 복구를 시도할 수 있어요.", 6500);
+        });
+    }
 
     private void OnSnowballOutgoingReady(object? sender, EventArgs e) => _snowballScene?.WakeOutgoing();
 
@@ -350,6 +368,7 @@ public partial class App : Application
 
     protected override void OnExit(ExitEventArgs e)
     {
+        if (_profileStore is not null) _profileStore.GrowthRecoveryEntered -= OnGrowthRecoveryEntered;
         if (_social is not null)
         {
             _social.StateChanged -= OnSnowballSocialStateChanged;

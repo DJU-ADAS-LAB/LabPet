@@ -2,6 +2,7 @@ using System.IO;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using LabPet.Client.Diagnostics;
 using LabPet.Shared.Models;
 using LabPet.Shared.Protocol;
 
@@ -16,25 +17,41 @@ public sealed class JsonAppDataStore : IAppDataStore, IAsyncDisposable
     private const string ProfileFileName = "profile.json";
     private const string FriendsFileName = "friends.json";
     private const string ProfileProtectionMarker = "profile.protection-v1";
+    private const string RecoverySettingsFileName = "profile.settings-recovery.json";
     private const string ProtectedProgressProperty = "protectedProgressV1";
+    private const string ProtectionVaultFlagProperty = "protected";
     private const int MigrationResetLevel = 50;
     private const long MigrationResetCoins = 50_000;
+    private const int FileIoMaxAttempts = 5;
+    private const int ErrorSharingViolationHResult = unchecked((int)0x80070020);
+    private const int ErrorLockViolationHResult = unchecked((int)0x80070021);
 
-    private static readonly Version MigrationResetRelease = new(0, 3, 15, 0);
+    internal const string MigrationResetRelease = "0.3.16";
     private static readonly byte[] ProgressEntropy = Encoding.UTF8.GetBytes("LabPet.ProfileProgress.v1");
 
-    private sealed record ProtectedProgress(string PetId, SoloProgress Progress);
-    private sealed record ProfileRead(PetProfile? Profile, bool RequiresSave, bool HasProtection, JsonObject? Document);
+    private sealed record ProtectedProgress(string PetId, SoloProgress Progress, string? ResetReceipt = null);
+    private sealed record ProfileRead(PetProfile? Profile, bool RequiresSave, bool HasProtection, JsonObject? Document,
+        string? FailureReason = null, PetProfile? Shell = null);
+    private sealed record ProtectionVaultState(bool Exists, bool HasSealedBlob, ProtectedProgress? Progress,
+        string? FailureReason = null, string? PetId = null);
 
     private readonly AsyncOperationLifetime _operations = new();
     private readonly IStateMigrator _migrator;
     private readonly SemaphoreSlim _ioLock = new(1, 1);
+    private readonly Version? _releaseVersion;
 
     public string DataDirectory { get; }
+    internal event EventHandler<PetProfile>? GrowthRecoveryEntered;
 
     public JsonAppDataStore(IStateMigrator migrator, string? customDataDirectory = null)
+        : this(migrator, customDataDirectory, typeof(JsonAppDataStore).Assembly.GetName().Version)
+    {
+    }
+
+    internal JsonAppDataStore(IStateMigrator migrator, string? customDataDirectory, Version? releaseVersion)
     {
         _migrator = migrator;
+        _releaseVersion = releaseVersion;
         DataDirectory = string.IsNullOrWhiteSpace(customDataDirectory)
             ? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "LabPet")
             : customDataDirectory;
@@ -46,69 +63,98 @@ public sealed class JsonAppDataStore : IAppDataStore, IAsyncDisposable
         await _ioLock.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            var path = Path.Combine(DataDirectory, ProfileFileName);
-            var markerExists = File.Exists(Path.Combine(DataDirectory, ProfileProtectionMarker));
-            var primary = await ReadProfileAsync(path, markerExists, cancellationToken).ConfigureAwait(false);
-            var chosen = primary;
-            if (primary is not { Profile: not null, HasProtection: true })
-            {
-                var backup = await ReadProfileAsync(path + ".bak", markerExists || primary.HasProtection, cancellationToken)
-                    .ConfigureAwait(false);
-                if (backup is { Profile: not null, HasProtection: true }
-                    || (!markerExists && !primary.HasProtection && primary.Profile is null && backup.Profile is not null))
-                    chosen = backup;
-                else if (markerExists || primary.HasProtection || backup.HasProtection)
-                    throw new ProfileProtectionException();
-            }
-
-            var profile = chosen.Profile ?? new PetProfile();
-            var isLegacyImport = !chosen.HasProtection;
-            var needsSave = chosen.RequiresSave || !ReferenceEquals(chosen, primary) || isLegacyImport || !markerExists;
-
-            // 필수 식별자 방어적 보정
-            if (string.IsNullOrWhiteSpace(profile.PetId))
-            {
-                profile.PetId = Guid.NewGuid().ToString("D");
-                needsSave = true;
-            }
-
-            if (string.IsNullOrWhiteSpace(profile.FriendCode))
-            {
-                profile.FriendCode = PetProfile.GenerateFriendCode();
-                needsSave = true;
-            }
-
-            profile.Appearance ??= new PetAppearance();
-            profile.SoloProgress ??= new SoloProgress();
-            profile.SyncMetadata ??= new SyncMetadata();
-            if (NormalizeProfileInvariants(profile))
-            {
-                needsSave = true;
-            }
-
-            // 새 보호 스냅샷을 만드는 최초 이전에서만 두 조건을 함께 검사한다.
-            if (isLegacyImport && ShouldResetLegacyProgress(profile.SoloProgress, typeof(JsonAppDataStore).Assembly.GetName().Version))
-            {
-                profile.SoloProgress.Level = SoloProgress.MinLevel;
-                profile.SoloProgress.Coins = 0;
-                profile.SoloProgress.PendingGameWagers = [];
-                profile.SoloProgress.PendingSoloLadderSession = null;
-            }
-
-            if (needsSave)
-            {
-                var recovering = !ReferenceEquals(chosen, primary);
-                if (recovering && chosen.HasProtection && File.Exists(path))
-                    PreserveRejectedProfile(path);
-                await SaveProtectedProfileAsync(path, profile, markerExists, recovering, cancellationToken)
-                    .ConfigureAwait(false);
-            }
-
-            return profile;
+            return await LoadProfileCoreAsync(cancellationToken).ConfigureAwait(false);
         }
         finally
         {
             _ioLock.Release();
+        }
+    }
+
+    private async Task<PetProfile> LoadProfileCoreAsync(CancellationToken ct, PetProfile? recoverySession = null)
+    {
+        var path = Path.Combine(DataDirectory, ProfileFileName);
+        var markerPath = Path.Combine(DataDirectory, ProfileProtectionMarker);
+        var settingsPath = Path.Combine(DataDirectory, RecoverySettingsFileName);
+        var vault = await ReadProtectionVaultAsync(markerPath, ct).ConfigureAwait(false);
+        var protectionRequired = vault.Exists || File.Exists(settingsPath) || recoverySession is not null;
+        var primary = await ReadProfileAsync(path, protectionRequired, ct, captureShell: true).ConfigureAwait(false);
+        // 원본을 사용할 수 있으면 백업 읽기 실패가 앱 시작을 막지 않는다.
+        var backup = await ReadProfileAsync(path + ".bak", protectionRequired || primary.HasProtection, ct,
+            ignoreTransientReadError: true, captureShell: true).ConfigureAwait(false);
+        var settings = await ReadProfileShellAsync(settingsPath, ct).ConfigureAwait(false);
+        var expectedId = new[] { recoverySession?.PetId, primary.Shell?.PetId, vault.PetId, backup.Shell?.PetId, settings?.PetId }
+            .FirstOrDefault(id => !string.IsNullOrWhiteSpace(id));
+        var source = primary is { Profile: not null, HasProtection: true } && SamePet(primary.Profile.PetId, expectedId)
+            ? primary : backup is { Profile: not null, HasProtection: true } && SamePet(backup.Profile.PetId, expectedId)
+            ? backup : null;
+        var protectedBackup = vault.Progress is { } sealedProgress && SamePet(sealedProgress.PetId, expectedId)
+            ? sealedProgress : null;
+
+        // 검사 전 백업을 다시 넣어도 같은 펫의 검사 완료 스냅샷을 우선 사용한다.
+        var useVault = protectedBackup is not null && (source is null
+            || (source.Profile!.GrowthResetReceipt != MigrationResetRelease && protectedBackup.ResetReceipt == MigrationResetRelease));
+        if (!useVault && source?.Profile?.GrowthResetReceipt != MigrationResetRelease
+            && backup.Profile is { GrowthResetReceipt: MigrationResetRelease } checkedBackup
+            && SamePet(checkedBackup.PetId, expectedId))
+            source = backup;
+
+        var recoverySettings = MatchingShell(settings, expectedId);
+        var shell = recoverySession ?? recoverySettings ?? MatchingShell(primary.Shell, expectedId)
+            ?? MatchingShell(backup.Shell, expectedId);
+        var hasProtectedHistory = protectionRequired || primary.HasProtection || backup.HasProtection;
+        if (source is null && !useVault && !hasProtectedHistory)
+        {
+            if (primary.Profile is not null) source = primary;
+            else if (backup.Profile is not null) source = backup;
+        }
+        var isNewProfile = source is null && !useVault && !hasProtectedHistory
+            && !File.Exists(path) && !File.Exists(path + ".bak");
+        if (source is null && !useVault && !isNewProfile)
+        {
+            if (recoverySession is not null) return recoverySession;
+            return EnterGrowthRecovery(shell ?? CreateRecoveryShell(expectedId),
+                BuildProtectionFailureDetails(primary, backup, vault));
+        }
+
+        var profile = useVault || source?.HasProtection == true
+            ? shell is not null ? CopyProfileShell(shell) : CreateRecoveryShell(expectedId)
+            : source?.Profile ?? new PetProfile();
+        if (useVault)
+        {
+            profile.SoloProgress = protectedBackup!.Progress;
+            profile.GrowthResetReceipt = protectedBackup.ResetReceipt;
+        }
+        else if (source?.HasProtection == true)
+        {
+            profile.SoloProgress = source.Profile!.SoloProgress;
+            profile.GrowthResetReceipt = source.Profile.GrowthResetReceipt;
+        }
+        var requiresSave = NormalizeProfileShell(profile) | NormalizeProfileInvariants(profile);
+        var checkedThisRelease = ApplyGrowthReset(profile, _releaseVersion);
+        var restoring = useVault || !ReferenceEquals(source, primary) || recoverySession is not null || recoverySettings is not null;
+        try
+        {
+            if (requiresSave || checkedThisRelease || restoring || source?.RequiresSave == true || source?.HasProtection != true || !vault.Exists)
+            {
+                if (restoring && primary.Profile is null)
+                    await ArchiveRejectedProfileAsync(path, ct).ConfigureAwait(false);
+                await SaveProtectedProfileAsync(path, profile, vault.Exists, restoring, ct,
+                    refreshBackupFromCurrent: useVault || checkedThisRelease || recoverySession is not null).ConfigureAwait(false);
+            }
+            else if (protectedBackup is null
+                     || (profile.GrowthResetReceipt == MigrationResetRelease && protectedBackup.ResetReceipt != MigrationResetRelease))
+            {
+                await WriteProtectionVaultAsync(markerPath, profile, ct).ConfigureAwait(false);
+            }
+            if (recoverySettings is not null)
+                RemoveRecoverySettings(settingsPath);
+            return profile;
+        }
+        catch (Exception ex) when (ex is ProfileProtectionException || (restoring && ex is IOException or UnauthorizedAccessException))
+        {
+            if (recoverySession is not null) return recoverySession;
+            return EnterGrowthRecovery(profile, ex.Message);
         }
     }
 
@@ -118,13 +164,30 @@ public sealed class JsonAppDataStore : IAppDataStore, IAsyncDisposable
         await _ioLock.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
+            NormalizeProfileShell(profile);
             profile.SchemaVersion = ProtocolConstants.CurrentStorageSchemaVersion;
             profile.UpdatedAtUtc = DateTimeOffset.UtcNow;
-            NormalizeProfileInvariants(profile);
+            if (profile.RequiresGrowthRecovery)
+            {
+                await SaveRecoverySettingsAsync(profile, cancellationToken).ConfigureAwait(false);
+                return;
+            }
+
+            lock (profile.GrowthSync)
+                NormalizeProfileInvariants(profile);
             var path = Path.Combine(DataDirectory, ProfileFileName);
             var markerExists = File.Exists(Path.Combine(DataDirectory, ProfileProtectionMarker));
-            await SaveProtectedProfileAsync(path, profile, markerExists, recovering: false, cancellationToken)
-                .ConfigureAwait(false);
+            try
+            {
+                await SaveProtectedProfileAsync(path, profile, markerExists, recovering: false, cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            catch (ProfileProtectionException ex)
+            {
+                EnterGrowthRecovery(profile, ex.Message);
+                GrowthRecoveryEntered?.Invoke(this, profile);
+                await SaveRecoverySettingsAsync(profile, cancellationToken).ConfigureAwait(false);
+            }
         }
         finally
         {
@@ -132,21 +195,196 @@ public sealed class JsonAppDataStore : IAppDataStore, IAsyncDisposable
         }
     }
 
-    internal static bool ShouldResetLegacyProgress(SoloProgress progress, Version? release) =>
-        release == MigrationResetRelease && progress.Level > MigrationResetLevel && progress.Coins > MigrationResetCoins;
+    public Task<bool> RetryGrowthRecoveryAsync(PetProfile profile, CancellationToken cancellationToken = default) =>
+        RepairGrowthAsync(profile, reset: false, cancellationToken);
+
+    public Task<bool> ResetUnrecoverableGrowthAsync(PetProfile profile, CancellationToken cancellationToken = default) =>
+        RepairGrowthAsync(profile, reset: true, cancellationToken);
+
+    private async Task<bool> RepairGrowthAsync(PetProfile profile, bool reset, CancellationToken ct)
+    {
+        using var operation = _operations.TryBegin() ?? throw new ObjectDisposedException(nameof(JsonAppDataStore));
+        await _ioLock.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            if (!profile.RequiresGrowthRecovery) return false;
+            var recovered = await LoadProfileCoreAsync(ct, profile).ConfigureAwait(false);
+            if (recovered.RequiresGrowthRecovery)
+            {
+                if (!reset) return false;
+                recovered = CopyProfileShell(profile);
+                recovered.GrowthResetReceipt = MigrationResetRelease;
+                var path = Path.Combine(DataDirectory, ProfileFileName);
+                await ArchiveRejectedProfileAsync(path, ct).ConfigureAwait(false);
+                await SaveProtectedProfileAsync(path, recovered, markerExists: true, recovering: true, ct,
+                    refreshBackupFromCurrent: true).ConfigureAwait(false);
+                RemoveRecoverySettings(Path.Combine(DataDirectory, RecoverySettingsFileName));
+            }
+
+            lock (profile.GrowthSync)
+            {
+                profile.SoloProgress = recovered.SoloProgress;
+                profile.GrowthResetReceipt = recovered.GrowthResetReceipt;
+                profile.RequiresGrowthRecovery = false;
+            }
+            return true;
+        }
+        finally
+        {
+            _ioLock.Release();
+        }
+    }
+
+    internal static bool ApplyGrowthReset(PetProfile profile, Version? release)
+    {
+        if (release is null || release.Build < 0 || release.ToString(3) != MigrationResetRelease
+            || profile.GrowthResetReceipt == MigrationResetRelease)
+            return false;
+
+        var progress = profile.SoloProgress;
+        if (progress.Level > MigrationResetLevel)
+            progress.Level = SoloProgress.MinLevel;
+        if (progress.Coins > MigrationResetCoins)
+        {
+            progress.Coins = 0;
+            progress.PendingGameWagers = [];
+            progress.PendingSoloLadderSession = null;
+            progress.PendingKeystrokesForReward = 0;
+            progress.PendingMouseClicksForReward = 0;
+            progress.PendingUptimeMinutesForReward = 0;
+        }
+        profile.GrowthResetReceipt = MigrationResetRelease;
+        return true;
+    }
+
+    private static bool SamePet(string? id, string? expectedId) =>
+        !string.IsNullOrWhiteSpace(id) && string.Equals(id, expectedId, StringComparison.OrdinalIgnoreCase);
+
+    private static PetProfile? MatchingShell(PetProfile? shell, string? id) =>
+        SamePet(shell?.PetId, id) ? shell : null;
+
+    private static PetProfile CreateRecoveryShell(string? petId)
+    {
+        var shell = new PetProfile { IsOnboardingCompleted = true };
+        if (!string.IsNullOrWhiteSpace(petId)) shell.PetId = petId;
+        return shell;
+    }
+
+    private static PetProfile EnterGrowthRecovery(PetProfile profile, string reason)
+    {
+        lock (profile.GrowthSync)
+        {
+            profile.RequiresGrowthRecovery = true;
+            profile.SoloProgress = new SoloProgress();
+            profile.GrowthResetReceipt = null;
+        }
+        NormalizeProfileShell(profile);
+        CrashLogWriter.Write("Storage.GrowthRecovery", new ProfileProtectionException(reason));
+        return profile;
+    }
+
+    private static bool NormalizeProfileShell(PetProfile profile)
+    {
+        var changed = false;
+        if (string.IsNullOrWhiteSpace(profile.PetId))
+        {
+            profile.PetId = Guid.NewGuid().ToString("D");
+            changed = true;
+        }
+        if (string.IsNullOrWhiteSpace(profile.FriendCode))
+        {
+            profile.FriendCode = PetProfile.GenerateFriendCode();
+            changed = true;
+        }
+        profile.Appearance ??= new PetAppearance();
+        profile.SoloProgress ??= new SoloProgress();
+        profile.SyncMetadata ??= new SyncMetadata();
+        return changed;
+    }
+
+    private static JsonObject CreateProfileShellDocument(PetProfile profile)
+    {
+        var document = JsonSerializer.SerializeToNode(profile, ProtocolJson.StorageOptions)!.AsObject();
+        document.Remove("soloProgress");
+        return document;
+    }
+
+    private static PetProfile CopyProfileShell(PetProfile profile) =>
+        CreateProfileShellDocument(profile).Deserialize<PetProfile>(ProtocolJson.StorageOptions)!;
+
+    private async Task SaveRecoverySettingsAsync(PetProfile profile, CancellationToken ct)
+    {
+        var shell = CreateProfileShellDocument(profile);
+        await WriteAtomicCoreAsync(Path.Combine(DataDirectory, RecoverySettingsFileName), shell, ct, keepBackup: false)
+            .ConfigureAwait(false);
+    }
+
+    private static void RemoveRecoverySettings(string path)
+    {
+        try
+        {
+            File.Delete(path);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            CrashLogWriter.Write("Storage.RemoveRecoverySettings", ex);
+        }
+    }
+
+    private async Task<PetProfile?> ReadProfileShellAsync(string path, CancellationToken ct)
+    {
+        var (_, profile, _) = await TryReadAndMigrateAsync<PetProfile>(path, root =>
+        {
+            RemoveGrowthFields(root);
+            return _migrator.MigrateProfile(root);
+        }, ct).ConfigureAwait(false);
+        return profile;
+    }
+
+    private static void RemoveGrowthFields(JsonObject root)
+    {
+        foreach (var name in root.Select(pair => pair.Key).Where(name =>
+            name.Equals("soloProgress", StringComparison.OrdinalIgnoreCase)
+            || name.Equals(ProtectedProgressProperty, StringComparison.OrdinalIgnoreCase)).ToArray())
+            root.Remove(name);
+    }
 
     [System.Reflection.Obfuscation(Exclude = false)]
     private async Task<ProfileRead> ReadProfileAsync(string path, bool requireProtection, CancellationToken ct,
-        bool captureDocument = false)
+        bool captureDocument = false, bool ignoreTransientReadError = false, bool captureShell = false)
     {
         var hasProtection = false;
         JsonObject? document = null;
+        PetProfile? shell = null;
+        string? resetReceipt = null;
+        string? failureReason = null;
         var (ok, profile, migrated) = await TryReadAndMigrateAsync<PetProfile>(path, root =>
         {
             hasProtection = root.TryGetPropertyValue(ProtectedProgressProperty, out var encrypted);
+            if (captureShell)
+            {
+                try
+                {
+                    var shellJson = (JsonObject)root.DeepClone();
+                    RemoveGrowthFields(shellJson);
+                    var knownId = (shellJson["petId"] as JsonValue)?.TryGetValue<string>(out var suppliedId) == true
+                        ? suppliedId : string.Empty;
+                    _migrator.MigrateProfile(shellJson);
+                    shell = shellJson.Deserialize<PetProfile>(ProtocolJson.StorageOptions);
+                    if (shell is not null) shell.PetId = knownId;
+                }
+                catch (Exception ex) when (ex is JsonException or InvalidOperationException or FormatException)
+                {
+                    // 성장 데이터와 무관한 필드도 해석할 수 없으면 다른 프로필 셸을 시도한다.
+                }
+            }
             if (!hasProtection)
             {
-                if (requireProtection) throw new JsonException("보호된 성장 상태가 필요합니다.");
+                if (requireProtection)
+                {
+                    failureReason = "보호된 성장 상태 필드(protectedProgressV1)가 없습니다.";
+                    throw new JsonException(failureReason);
+                }
                 return _migrator.MigrateProfile(root);
             }
 
@@ -154,23 +392,22 @@ public sealed class JsonAppDataStore : IAppDataStore, IAsyncDisposable
             {
                 if (encrypted is not JsonValue value || !value.TryGetValue<string>(out var blob)
                     || string.IsNullOrEmpty(blob))
-                    throw new JsonException("보호된 성장 상태가 비어 있습니다.");
-                var decoded = LocalSecretProtector.UnprotectBytes(Convert.FromBase64String(blob), ProgressEntropy);
-                ProtectedProgress? progress;
-                try
                 {
-                    progress = JsonSerializer.Deserialize<ProtectedProgress>(decoded, ProtocolJson.StorageOptions);
+                    failureReason = "보호된 성장 상태가 비어 있습니다.";
+                    throw new JsonException(failureReason);
                 }
-                finally
-                {
-                    System.Security.Cryptography.CryptographicOperations.ZeroMemory(decoded);
-                }
+
+                var progress = UnprotectProgressBlob(blob);
                 if (progress?.Progress is null || string.IsNullOrEmpty(progress.PetId)
                     || root["petId"] is not JsonValue petId || !petId.TryGetValue<string>(out var id)
                     || !string.Equals(progress.PetId, id, StringComparison.OrdinalIgnoreCase))
-                    throw new JsonException("보호된 성장 상태의 펫 ID가 일치하지 않습니다.");
+                {
+                    failureReason = "보호된 성장 상태의 펫 ID가 일치하지 않습니다.";
+                    throw new JsonException(failureReason);
+                }
 
                 if (captureDocument) document = (JsonObject)root.DeepClone();
+                resetReceipt = progress.ResetReceipt;
 
                 // 평문이나 외부 스키마 번호의 수정이 보호된 성장 상태에 영향을 주지 않게 한다.
                 foreach (var name in root.Select(pair => pair.Key)
@@ -184,49 +421,198 @@ public sealed class JsonAppDataStore : IAppDataStore, IAsyncDisposable
             }
             catch (Exception ex) when (ex is FormatException or InvalidOperationException)
             {
-                throw new JsonException("보호된 성장 상태를 검증할 수 없습니다.", ex);
+                failureReason = $"보호된 성장 상태를 복호화·검증할 수 없습니다({ex.Message}).";
+                throw new JsonException(failureReason, ex);
             }
-        }, ct, requireReadableFile: true).ConfigureAwait(false);
-        return new ProfileRead(ok ? profile : null, migrated, hasProtection, ok ? document : null);
+        }, ct, requireReadableFile: !ignoreTransientReadError).ConfigureAwait(false);
+        if (profile is not null) profile.GrowthResetReceipt = resetReceipt;
+        return new ProfileRead(ok ? profile : null, migrated, hasProtection, ok ? document : null, ok ? null : failureReason, shell);
     }
 
     [System.Reflection.Obfuscation(Exclude = false)]
     private async Task SaveProtectedProfileAsync(string path, PetProfile profile, bool markerExists,
         bool recovering, CancellationToken ct)
+        => await SaveProtectedProfileAsync(path, profile, markerExists, recovering, ct, refreshBackupFromCurrent: false)
+            .ConfigureAwait(false);
+
+    [System.Reflection.Obfuscation(Exclude = false)]
+    private async Task SaveProtectedProfileAsync(string path, PetProfile profile, bool markerExists,
+        bool recovering, CancellationToken ct, bool refreshBackupFromCurrent)
     {
         JsonObject document;
-        lock (profile.SoloProgress)
+        JsonObject vaultDocument;
+        lock (profile.GrowthSync)
         {
-            document = JsonSerializer.SerializeToNode(profile, ProtocolJson.StorageOptions)!.AsObject();
-            document.Remove("soloProgress");
-            var plain = JsonSerializer.SerializeToUtf8Bytes(new ProtectedProgress(profile.PetId, profile.SoloProgress),
-                ProtocolJson.StorageOptions);
-            try
-            {
-                document[ProtectedProgressProperty] = Convert.ToBase64String(
-                    LocalSecretProtector.ProtectBytes(plain, ProgressEntropy, "LabPet Profile Progress"));
-            }
-            catch (InvalidOperationException ex)
-            {
-                throw new ProfileProtectionException(ex);
-            }
-            finally
-            {
-                System.Security.Cryptography.CryptographicOperations.ZeroMemory(plain);
-            }
+            document = CreateProfileShellDocument(profile);
+            var protectedBlob = ProtectProgressBlob(profile.PetId, profile.SoloProgress, profile.GrowthResetReceipt);
+            document[ProtectedProgressProperty] = protectedBlob;
+            vaultDocument = CreateProtectionVaultDocument(profile.PetId, protectedBlob);
         }
 
         // 원본과 성장 상태는 한 스냅샷에서 함께 교체한다. 손상된 원본은 검증된 백업을 덮어쓰지 않는다.
         await WriteAtomicCoreAsync(path, document, ct, BackupValidatedProfileAsync,
-            keepBackup: markerExists && !recovering).ConfigureAwait(false);
+            keepBackup: markerExists && !recovering && !refreshBackupFromCurrent).ConfigureAwait(false);
 
-        if (!markerExists)
+        await WriteAtomicCoreAsync(Path.Combine(DataDirectory, ProfileProtectionMarker), vaultDocument, ct, keepBackup: false)
+            .ConfigureAwait(false);
+
+        if (!markerExists || refreshBackupFromCurrent)
         {
-            // 프로필을 먼저 커밋하므로 이전 중 종료돼도 평문을 다시 적용하지 않는다.
+            await ArchiveIfInvalidBackupAsync(path + ".bak", ct).ConfigureAwait(false);
             await WriteAtomicCoreAsync(path + ".bak", document, ct, keepBackup: false).ConfigureAwait(false);
-            await WriteAtomicCoreAsync(Path.Combine(DataDirectory, ProfileProtectionMarker), true, ct, keepBackup: false)
-                .ConfigureAwait(false);
         }
+    }
+
+    [System.Reflection.Obfuscation(Exclude = false)]
+    private static string ProtectProgressBlob(string petId, SoloProgress soloProgress, string? resetReceipt)
+    {
+        var plain = JsonSerializer.SerializeToUtf8Bytes(new ProtectedProgress(petId, soloProgress, resetReceipt),
+            ProtocolJson.StorageOptions);
+        try
+        {
+            return Convert.ToBase64String(
+                LocalSecretProtector.ProtectBytes(plain, ProgressEntropy, "LabPet Profile Progress"));
+        }
+        catch (InvalidOperationException ex)
+        {
+            throw new ProfileProtectionException(ex);
+        }
+        finally
+        {
+            System.Security.Cryptography.CryptographicOperations.ZeroMemory(plain);
+        }
+    }
+
+    [System.Reflection.Obfuscation(Exclude = false)]
+    private static ProtectedProgress? UnprotectProgressBlob(string blob)
+    {
+        var decoded = LocalSecretProtector.UnprotectBytes(Convert.FromBase64String(blob), ProgressEntropy);
+        try
+        {
+            using var document = JsonDocument.Parse(decoded);
+            var root = document.RootElement;
+            if (root.ValueKind != JsonValueKind.Object
+                || !root.TryGetProperty("progress", out var growth) || growth.ValueKind != JsonValueKind.Object
+                || !growth.TryGetProperty("level", out var level) || level.ValueKind != JsonValueKind.Number || !level.TryGetInt32(out _)
+                || !growth.TryGetProperty("coins", out var coins) || coins.ValueKind != JsonValueKind.Number || !coins.TryGetInt64(out _))
+            {
+                throw new JsonException("봉인 스냅샷에 레벨 또는 코인 필드가 없습니다.");
+            }
+            return root.Deserialize<ProtectedProgress>(ProtocolJson.StorageOptions);
+        }
+        finally
+        {
+            System.Security.Cryptography.CryptographicOperations.ZeroMemory(decoded);
+        }
+    }
+
+    private static JsonObject CreateProtectionVaultDocument(string petId, string protectedBlob) => new()
+    {
+        [ProtectionVaultFlagProperty] = true,
+        ["petId"] = petId,
+        [ProtectedProgressProperty] = protectedBlob
+    };
+
+    [System.Reflection.Obfuscation(Exclude = false)]
+    private async Task WriteProtectionVaultAsync(string markerPath, PetProfile profile, CancellationToken ct)
+    {
+        JsonObject vaultDocument;
+        lock (profile.GrowthSync)
+        {
+            var protectedBlob = ProtectProgressBlob(profile.PetId, profile.SoloProgress, profile.GrowthResetReceipt);
+            vaultDocument = CreateProtectionVaultDocument(profile.PetId, protectedBlob);
+        }
+
+        await WriteAtomicCoreAsync(markerPath, vaultDocument, ct, keepBackup: false).ConfigureAwait(false);
+    }
+
+    [System.Reflection.Obfuscation(Exclude = false)]
+    private async Task<ProtectionVaultState> ReadProtectionVaultAsync(string markerPath, CancellationToken ct)
+    {
+        if (!File.Exists(markerPath))
+        {
+            return new ProtectionVaultState(Exists: false, HasSealedBlob: false, Progress: null);
+        }
+
+        string? savedPetId = null;
+        try
+        {
+            var text = await ReadAllTextWithRetryAsync(markerPath, ct).ConfigureAwait(false);
+            if (string.IsNullOrWhiteSpace(text))
+            {
+                return new ProtectionVaultState(Exists: true, HasSealedBlob: false, Progress: null,
+                    FailureReason: "보호 마커 파일이 비어 있습니다.");
+            }
+
+            var node = JsonNode.Parse(text);
+            if (node is JsonValue boolValue && boolValue.TryGetValue<bool>(out _))
+            {
+                return new ProtectionVaultState(Exists: true, HasSealedBlob: false, Progress: null,
+                    FailureReason: "구버전 보호 마커(true)에는 봉인 스냅샷이 포함되어 있지 않습니다.");
+            }
+
+            if (node is not JsonObject obj)
+            {
+                return new ProtectionVaultState(Exists: true, HasSealedBlob: false, Progress: null,
+                    FailureReason: "보호 마커 형식을 해석할 수 없습니다.");
+            }
+            if (obj["petId"] is JsonValue idValue && idValue.TryGetValue<string>(out var knownId))
+                savedPetId = knownId;
+
+            if (!obj.TryGetPropertyValue(ProtectedProgressProperty, out var encrypted)
+                || encrypted is not JsonValue blobValue
+                || !blobValue.TryGetValue<string>(out var blob)
+                || string.IsNullOrWhiteSpace(blob))
+            {
+                return new ProtectionVaultState(Exists: true, HasSealedBlob: false, Progress: null,
+                    FailureReason: "보호 마커에 봉인된 성장 상태가 없습니다.", PetId: savedPetId);
+            }
+
+            var progress = UnprotectProgressBlob(blob);
+            if (progress?.Progress is null || string.IsNullOrWhiteSpace(progress.PetId))
+            {
+                return new ProtectionVaultState(Exists: true, HasSealedBlob: true, Progress: null,
+                    FailureReason: "봉인 스냅샷의 성장 상태가 비어 있습니다.", PetId: savedPetId);
+            }
+
+            if (obj["petId"] is JsonValue petIdNode
+                && petIdNode.TryGetValue<string>(out var expectedPetId)
+                && !string.IsNullOrWhiteSpace(expectedPetId)
+                && !string.Equals(expectedPetId, progress.PetId, StringComparison.OrdinalIgnoreCase))
+            {
+                return new ProtectionVaultState(Exists: true, HasSealedBlob: true, Progress: null,
+                    FailureReason: "봉인 스냅샷의 펫 ID가 일치하지 않습니다.", PetId: savedPetId);
+            }
+
+            return new ProtectionVaultState(Exists: true, HasSealedBlob: true, Progress: progress, PetId: progress.PetId);
+        }
+        catch (Exception ex) when (ex is JsonException or FormatException or InvalidOperationException)
+        {
+            return new ProtectionVaultState(Exists: true, HasSealedBlob: true, Progress: null,
+                FailureReason: $"봉인 스냅샷을 검증할 수 없습니다({ex.Message}).", PetId: savedPetId);
+        }
+        catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
+        {
+            return new ProtectionVaultState(Exists: false, HasSealedBlob: false, Progress: null);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return new ProtectionVaultState(Exists: true, HasSealedBlob: false, Progress: null, FailureReason: ex.Message, PetId: savedPetId);
+        }
+    }
+
+    private static string BuildProtectionFailureDetails(ProfileRead primary, ProfileRead backup, ProtectionVaultState vault)
+    {
+        var details = new List<string>();
+        if (!string.IsNullOrWhiteSpace(primary.FailureReason))
+            details.Add($"profile.json={primary.FailureReason}");
+        if (!string.IsNullOrWhiteSpace(backup.FailureReason))
+            details.Add($"profile.json.bak={backup.FailureReason}");
+        if (!string.IsNullOrWhiteSpace(vault.FailureReason))
+            details.Add($"profile.protection-v1={vault.FailureReason}");
+        return details.Count > 0
+            ? $"로컬 성장 데이터의 보호 상태를 확인할 수 없습니다. ({string.Join(" / ", details)})"
+            : "로컬 성장 데이터의 보호 상태를 확인할 수 없습니다.";
     }
 
     [System.Reflection.Obfuscation(Exclude = false)]
@@ -237,13 +623,27 @@ public sealed class JsonAppDataStore : IAppDataStore, IAsyncDisposable
         var previous = await ReadProfileAsync(path, requireProtection: true, ct, captureDocument: true)
             .ConfigureAwait(false);
         if (previous.Document is not null)
+        {
+            await ArchiveIfInvalidBackupAsync(backupPath, ct).ConfigureAwait(false);
             await WriteAtomicCoreAsync(backupPath, previous.Document, ct, keepBackup: false).ConfigureAwait(false);
+        }
         else
-            PreserveRejectedProfile(path);
+            await ArchiveRejectedProfileAsync(path, ct).ConfigureAwait(false);
     }
 
-    private static void PreserveRejectedProfile(string path) =>
-        File.Copy(path, path + ".rejected-" + Guid.NewGuid().ToString("N"));
+    private async Task ArchiveIfInvalidBackupAsync(string path, CancellationToken ct)
+    {
+        if (!File.Exists(path)) return;
+        var backup = await ReadProfileAsync(path, requireProtection: true, ct).ConfigureAwait(false);
+        if (backup.Profile is null) await ArchiveRejectedProfileAsync(path, ct).ConfigureAwait(false);
+    }
+
+    private static Task ArchiveRejectedProfileAsync(string path, CancellationToken ct)
+    {
+        if (!File.Exists(path)) return Task.CompletedTask;
+        var archive = path + ".rejected-" + Guid.NewGuid().ToString("N");
+        return ExecuteFileActionWithRetryAsync(() => File.Copy(path, archive), ct);
+    }
 
     public async Task<FriendsStore> LoadFriendsAsync(CancellationToken cancellationToken = default)
     {
@@ -423,7 +823,7 @@ public sealed class JsonAppDataStore : IAppDataStore, IAsyncDisposable
     {
         try
         {
-            var jsonText = await File.ReadAllTextAsync(path, Encoding.UTF8, cancellationToken).ConfigureAwait(false);
+            var jsonText = await ReadAllTextWithRetryAsync(path, cancellationToken).ConfigureAwait(false);
             if (string.IsNullOrWhiteSpace(jsonText))
             {
                 return (false, null, false);
@@ -448,6 +848,48 @@ public sealed class JsonAppDataStore : IAppDataStore, IAsyncDisposable
         }
     }
 
+    private static async Task<string> ReadAllTextWithRetryAsync(string path, CancellationToken cancellationToken)
+    {
+        for (var attempt = 1; ; attempt++)
+        {
+            try
+            {
+                await using var fs = new FileStream(
+                    path,
+                    FileMode.Open,
+                    FileAccess.Read,
+                    FileShare.ReadWrite | FileShare.Delete,
+                    4096,
+                    useAsync: true);
+                using var reader = new StreamReader(fs, Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
+                return await reader.ReadToEndAsync(cancellationToken).ConfigureAwait(false);
+            }
+            catch (IOException ex) when (attempt < FileIoMaxAttempts && IsTransientSharingException(ex))
+            {
+                await Task.Delay(attempt * 40, cancellationToken).ConfigureAwait(false);
+            }
+        }
+    }
+
+    private static async Task ExecuteFileActionWithRetryAsync(Action action, CancellationToken cancellationToken)
+    {
+        for (var attempt = 1; ; attempt++)
+        {
+            try
+            {
+                action();
+                return;
+            }
+            catch (IOException ex) when (attempt < FileIoMaxAttempts && IsTransientSharingException(ex))
+            {
+                await Task.Delay(attempt * 40, cancellationToken).ConfigureAwait(false);
+            }
+        }
+    }
+
+    private static bool IsTransientSharingException(IOException ex)
+        => ex.HResult is ErrorSharingViolationHResult or ErrorLockViolationHResult;
+
     private async Task WriteAtomicCoreAsync<T>(string targetPath, T payload, CancellationToken cancellationToken,
         Func<string, string, CancellationToken, Task>? writeBackup = null, bool keepBackup = true)
     {
@@ -458,12 +900,21 @@ public sealed class JsonAppDataStore : IAppDataStore, IAsyncDisposable
         var json = JsonSerializer.Serialize(payload, ProtocolJson.StorageOptions);
 
         // 1. 임시 파일에 UTF-8 기록 후 디스크 플러시
-        await using (var fs = new FileStream(tempPath, FileMode.Create, FileAccess.Write, FileShare.None, 4096, useAsync: true))
-        await using (var writer = new StreamWriter(fs, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false)))
+        for (var attempt = 1; ; attempt++)
         {
-            await writer.WriteAsync(json.AsMemory(), cancellationToken).ConfigureAwait(false);
-            await writer.FlushAsync(cancellationToken).ConfigureAwait(false);
-            fs.Flush(flushToDisk: true);
+            try
+            {
+                await using var fs = new FileStream(tempPath, FileMode.Create, FileAccess.Write, FileShare.None, 4096, useAsync: true);
+                await using var writer = new StreamWriter(fs, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
+                await writer.WriteAsync(json.AsMemory(), cancellationToken).ConfigureAwait(false);
+                await writer.FlushAsync(cancellationToken).ConfigureAwait(false);
+                fs.Flush(flushToDisk: true);
+                break;
+            }
+            catch (IOException ex) when (attempt < FileIoMaxAttempts && IsTransientSharingException(ex))
+            {
+                await Task.Delay(attempt * 40, cancellationToken).ConfigureAwait(false);
+            }
         }
 
         // 2. 기존 정상 파일이 존재하면 직전 백업(.bak) 1개 갱신
@@ -473,11 +924,13 @@ public sealed class JsonAppDataStore : IAppDataStore, IAsyncDisposable
         }
         else if (keepBackup && File.Exists(targetPath))
         {
-            File.Copy(targetPath, backupPath, overwrite: true);
+            await ExecuteFileActionWithRetryAsync(() => File.Copy(targetPath, backupPath, overwrite: true), cancellationToken)
+                .ConfigureAwait(false);
         }
 
         // 3. 임시 파일을 본 파일로 원자적 교체
-        File.Move(tempPath, targetPath, overwrite: true);
+        await ExecuteFileActionWithRetryAsync(() => File.Move(tempPath, targetPath, overwrite: true), cancellationToken)
+            .ConfigureAwait(false);
     }
 
     public ValueTask DisposeAsync() => new(_operations.DrainAsync());
@@ -515,5 +968,15 @@ public sealed class JsonAppDataStore : IAppDataStore, IAsyncDisposable
     }
 }
 
-internal sealed class ProfileProtectionException(Exception? inner = null)
-    : IOException("로컬 성장 데이터의 보호 상태를 확인할 수 없습니다.", inner);
+internal sealed class ProfileProtectionException : IOException
+{
+    public ProfileProtectionException(Exception? inner = null)
+        : base("로컬 성장 데이터의 보호 상태를 확인할 수 없습니다.", inner)
+    {
+    }
+
+    public ProfileProtectionException(string message, Exception? inner = null)
+        : base(message, inner)
+    {
+    }
+}

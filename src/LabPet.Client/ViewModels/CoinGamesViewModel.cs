@@ -161,8 +161,12 @@ public sealed partial class CoinGamesViewModel : ObservableObject, IDisposable
     public bool CanNavigateBackFromGame => !IsTypingCountdown && !IsTypingRunning;
     public PetEconomyService Economy => _progression.Economy;
     public long CurrentCoins => _profile.SoloProgress.Coins;
-    public string CurrentCoinsCompactText => LabPet.Client.Formatting.CompactNumberFormatter.Format(CurrentCoins);
-    public string CurrentCoinsExactTooltip => $"보유 코인: {LabPet.Client.Formatting.CompactNumberFormatter.FormatExact(CurrentCoins)} 코인";
+    public bool RequiresGrowthRecovery => _profile.RequiresGrowthRecovery;
+    public string CurrentCoinsCompactText => RequiresGrowthRecovery ? "복구 필요" : LabPet.Client.Formatting.CompactNumberFormatter.Format(CurrentCoins);
+    public string CurrentCoinsExactTooltip => RequiresGrowthRecovery ? PetEconomyService.GrowthRecoveryMessage
+        : $"보유 코인: {LabPet.Client.Formatting.CompactNumberFormatter.FormatExact(CurrentCoins)} 코인";
+    public string CurrentCoinsBalanceText => RequiresGrowthRecovery ? "복구 필요"
+        : $"{LabPet.Client.Formatting.CompactNumberFormatter.FormatExact(CurrentCoins)} 코인";
 
     public string CurrentGameTitle => ActiveGameScreen switch
     {
@@ -273,17 +277,21 @@ public sealed partial class CoinGamesViewModel : ObservableObject, IDisposable
         ? Math.Max(0L, invite.WagerCoins - CurrentCoins)
         : 0L;
     public bool HasIncomingInviteInsufficientCoins => IncomingInvite is { WagerCoins: > 0 } invite
-        && CurrentCoins < invite.WagerCoins;
+        && !PetEconomyService.CanAfford(_profile, invite.WagerCoins);
     public bool CanAcceptIncomingInvite => CanRespondToIncomingInvite && !HasIncomingInviteInsufficientCoins;
 
     public string IncomingInviteRequiredCoinsText => $"{LabPet.Client.Formatting.CompactNumberFormatter.FormatExact(IncomingInviteRequiredCoins)} 코인";
-    public string IncomingInviteCurrentCoinsText => $"{LabPet.Client.Formatting.CompactNumberFormatter.FormatExact(CurrentCoins)} 코인";
-    public string IncomingInviteShortfallText => $"{LabPet.Client.Formatting.CompactNumberFormatter.FormatExact(IncomingInviteShortfallCoins)} 코인";
+    public string IncomingInviteCurrentCoinsText => RequiresGrowthRecovery ? "복구 필요"
+        : $"{LabPet.Client.Formatting.CompactNumberFormatter.FormatExact(CurrentCoins)} 코인";
+    public string IncomingInviteShortfallText => RequiresGrowthRecovery ? "—"
+        : $"{LabPet.Client.Formatting.CompactNumberFormatter.FormatExact(IncomingInviteShortfallCoins)} 코인";
     public string IncomingInviteRemainingTimeText => $"{Math.Max(0, IncomingInviteRemainingSeconds)}초";
     public string IncomingInviteEligibilityText => IncomingInvite is not { } invite
         ? string.Empty
         : invite.WagerCoins <= 0
             ? "참가 가능 (무료 게임)"
+            : RequiresGrowthRecovery
+                ? PetEconomyService.GrowthRecoveryMessage
             : HasIncomingInviteInsufficientCoins
                 ? $"참가 불가 · {LabPet.Client.Formatting.CompactNumberFormatter.FormatExact(IncomingInviteShortfallCoins)} 코인 부족"
                 : "참가 가능";
@@ -904,8 +912,10 @@ public sealed partial class CoinGamesViewModel : ObservableObject, IDisposable
     private void NotifyCoinsChanged()
     {
         OnPropertyChanged(nameof(CurrentCoins));
+        OnPropertyChanged(nameof(RequiresGrowthRecovery));
         OnPropertyChanged(nameof(CurrentCoinsCompactText));
         OnPropertyChanged(nameof(CurrentCoinsExactTooltip));
+        OnPropertyChanged(nameof(CurrentCoinsBalanceText));
         OnEconomyCoinsUpdated();
     }
 
@@ -1114,7 +1124,12 @@ public sealed partial class CoinGamesViewModel : ObservableObject, IDisposable
             return;
         }
 
-        if (_profile.SoloProgress.Coins < RpsWager)
+        if (RequiresGrowthRecovery)
+        {
+            RpsStatusText = PetEconomyService.GrowthRecoveryMessage;
+            return;
+        }
+        if (!PetEconomyService.CanAfford(_profile, RpsWager))
         {
             RpsStatusText = $"코인이 부족합니다. (필요: {RpsWager}, 보유: {_profile.SoloProgress.Coins})";
             return;
@@ -1281,7 +1296,8 @@ public sealed partial class CoinGamesViewModel : ObservableObject, IDisposable
             }
             if (exchange.Wager > 0 && !PetEconomyService.CanAfford(_profile, exchange.Wager))
             {
-                IncomingInviteFeedbackMessage = $"코인이 {LabPet.Client.Formatting.CompactNumberFormatter.FormatExact(PetEconomyService.GetShortfall(_profile, exchange.Wager))} 코인 부족해 아직 수락할 수 없습니다.";
+                IncomingInviteFeedbackMessage = RequiresGrowthRecovery ? PetEconomyService.GrowthRecoveryMessage
+                    : $"코인이 {LabPet.Client.Formatting.CompactNumberFormatter.FormatExact(PetEconomyService.GetShortfall(_profile, exchange.Wager))} 코인 부족해 아직 수락할 수 없습니다.";
                 OnEconomyCoinsUpdated();
                 return;
             }
@@ -1535,14 +1551,14 @@ public sealed partial class CoinGamesViewModel : ObservableObject, IDisposable
     private async Task<bool> SaveGameProfileAsync(PetProfile profile)
     {
         using var operation = _profileSaves.TryBegin();
-        if (operation is null)
+        if (operation is null || profile.RequiresGrowthRecovery)
         {
             return false;
         }
 
         // 종료 스레드가 저장을 기다려도 UI Dispatcher 재개에 의존하지 않는다.
         await Task.Run(() => _store.SaveProfileAsync(profile)).ConfigureAwait(false);
-        return true;
+        return !profile.RequiresGrowthRecovery;
     }
 
     private static void RunOnUi(Action action)

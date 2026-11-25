@@ -5,6 +5,25 @@
 
     <ScrollViewer x:Name="RootScrollViewer" VerticalScrollBarVisibility="Auto" CanContentScroll="False">
         <StackPanel>
+            <Border Style="{StaticResource HubCardStyle}" Margin="0,0,0,16"
+                    Visibility="{Binding RequiresGrowthRecovery, Converter={StaticResource HubBoolToVis}}">
+                <StackPanel>
+                    <TextBlock Text="성장 데이터 복구 필요" Style="{StaticResource HubSectionTitleStyle}" />
+                    <TextBlock Text="같은 Windows 계정에서 만든 백업으로 다시 시도할 수 있어요. 복구하는 동안 코인·레벨 기능은 잠깁니다."
+                               Style="{StaticResource HubCaptionTextStyle}" TextWrapping="Wrap" Margin="0,6,0,10" />
+                    <WrapPanel>
+                        <Button Content="정상 백업으로 복구"
+                                Style="{StaticResource GameSecondaryButtonStyle}"
+                                Command="{Binding RetryGrowthRecoveryCommand}" Margin="0,0,8,0" />
+                        <Button Content="성장 데이터 초기화"
+                                Style="{StaticResource GameSecondaryButtonStyle}" Click="OnResetGrowthClicked" />
+                    </WrapPanel>
+                    <TextBlock Text="{Binding GrowthRecoveryStatusMessage}"
+                               Visibility="{Binding GrowthRecoveryStatusMessage, Converter={StaticResource HubNullToVis}}"
+                               Style="{StaticResource HubCaptionTextStyle}" TextWrapping="Wrap" Margin="0,8,0,0" />
+                </StackPanel>
+            </Border>
+
             <!-- 1. 일반 설정 -->
             <Border Style="{StaticResource HubCardStyle}" Margin="0,0,0,16">
                 <StackPanel>

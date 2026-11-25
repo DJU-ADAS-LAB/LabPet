@@ -5,6 +5,7 @@ using System.Text.Json;
 using System.Windows.Media;
 using CommunityToolkit.Mvvm.Input;
 using LabPet.Client.Games;
+using LabPet.Client.Solo;
 using LabPet.Shared.Models;
 using LabPet.Shared.Protocol;
 using LabPet.Shared.Transport;
@@ -347,6 +348,11 @@ public sealed partial class CoinGamesViewModel
 
         var initialSlots = Math.Clamp(1 + invitees.Count, LabLadderEngine.MinParticipants, LabLadderEngine.MaxParticipants);
         var wager = LadderEntryFee;
+        if (wager > 0 && RequiresGrowthRecovery)
+        {
+            LadderStatusText = PetEconomyService.GrowthRecoveryMessage;
+            return;
+        }
         var prizeDtos = GetPrizeRowDtos();
         if (!LabLadderEngine.TryValidateStructuredPrizes(prizeDtos, initialSlots, wager > 0, out var initialPrizes, out var prizeError))
         {

@@ -36,7 +36,7 @@
                     <StackPanel Orientation="Horizontal" Margin="0,2,0,0" VerticalAlignment="Center">
                         <Path Data="{StaticResource IconCoinGeometry}" Width="14" Height="14" Stretch="Uniform" Stroke="{StaticResource GameCoinBrush}" StrokeThickness="2" Margin="0,0,5,0" VerticalAlignment="Center" />
                         <TextBlock FontSize="15" FontWeight="Bold" Foreground="{StaticResource GameTextPrimaryBrush}">
-                            <Run Text="{Binding CurrentCoins, StringFormat={}{0:N0}, Mode=OneWay}" /><Run Text=" 코인" />
+                            <Run Text="{Binding CurrentCoinsBalanceText, Mode=OneWay}" />
                         </TextBlock>
                     </StackPanel>
                 </StackPanel>

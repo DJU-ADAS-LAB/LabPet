@@ -354,7 +354,7 @@ public sealed partial class PetWindowViewModel : ObservableObject, IAsyncDisposa
             _suppressSliderSideEffects = false;
         }
 
-        TrayTooltip = $"{profile.PetName} · Lv.{profile.SoloProgress.Level}";
+        TrayTooltip = profile.RequiresGrowthRecovery ? $"{profile.PetName} · 성장 복구 필요" : $"{profile.PetName} · Lv.{profile.SoloProgress.Level}";
         ShowPomodoroFeatureBadge = !profile.HasSeenPomodoroFeatureBadge;
         RefreshPomodoroOverlayState();
         ProfileUpdated?.Invoke(this, profile);
@@ -998,7 +998,8 @@ public sealed partial class PetWindowViewModel : ObservableObject, IAsyncDisposa
     public async Task SaveCurrentProfileAsync()
     {
         await SaveProfileTrackedAsync();
-        TrayTooltip = $"{CurrentProfile.PetName} · Lv.{CurrentProfile.SoloProgress.Level}";
+        TrayTooltip = CurrentProfile.RequiresGrowthRecovery ? $"{CurrentProfile.PetName} · 성장 복구 필요"
+            : $"{CurrentProfile.PetName} · Lv.{CurrentProfile.SoloProgress.Level}";
         ProfileProgressUpdated?.Invoke(this, CurrentProfile);
     }
 

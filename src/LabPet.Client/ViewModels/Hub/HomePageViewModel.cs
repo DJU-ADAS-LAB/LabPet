@@ -61,18 +61,20 @@ public sealed partial class HomePageViewModel : ObservableObject, IDisposable
             ? 100.0
             : Math.Clamp((double)Coins / LevelUpCost * 100.0, 0.0, 100.0);
 
-    public string LevelText => IsMaxLevel
+    private bool RequiresGrowthRecovery => _petVm.CurrentProfile.RequiresGrowthRecovery;
+    public string LevelText => RequiresGrowthRecovery ? "레벨 복구 필요" : IsMaxLevel
         ? $"Lv.{LabPet.Client.Solo.PetEconomyService.MaxLevel} MAX"
         : $"Lv.{Level}";
-    public string LevelUpTargetLabel => IsMaxLevel ? "최고 레벨 달성" : $"다음 Lv.{Level + 1} 성장 비용";
-    public string LevelUpProgressText => IsMaxLevel
+    public string LevelUpTargetLabel => RequiresGrowthRecovery ? "성장 데이터 복구" : IsMaxLevel ? "최고 레벨 달성" : $"다음 Lv.{Level + 1} 성장 비용";
+    public string LevelUpProgressText => RequiresGrowthRecovery ? "설정에서 복구" : IsMaxLevel
         ? "MAX LEVEL"
         : Coins >= LevelUpCost
             ? $"레벨 업 가능 ({LabPet.Client.Formatting.CompactNumberFormatter.FormatExact(LevelUpCost)} 코인)"
             : $"{LabPet.Client.Formatting.CompactNumberFormatter.FormatExact(LevelUpCost)} 코인 ({LabPet.Client.Formatting.CompactNumberFormatter.FormatExact(LevelUpShortfallCoins)} 부족)";
 
-    public string CoinsText => $"{LabPet.Client.Formatting.CompactNumberFormatter.Format(Coins)} 코인";
-    public string CoinsExactTooltip => $"보유 코인: {LabPet.Client.Formatting.CompactNumberFormatter.FormatExact(Coins)} 코인";
+    public string CoinsText => RequiresGrowthRecovery ? "코인 복구 필요" : $"{LabPet.Client.Formatting.CompactNumberFormatter.Format(Coins)} 코인";
+    public string CoinsExactTooltip => RequiresGrowthRecovery ? PetEconomyService.GrowthRecoveryMessage
+        : $"보유 코인: {LabPet.Client.Formatting.CompactNumberFormatter.FormatExact(Coins)} 코인";
     public string TotalKeystrokesText => LabPet.Client.Formatting.CompactNumberFormatter.Format(TotalKeystrokes);
     public string TotalKeystrokesTooltip => $"누적 키보드 입력: {LabPet.Client.Formatting.CompactNumberFormatter.FormatExact(TotalKeystrokes)}타";
     public string TotalMouseClicksText => LabPet.Client.Formatting.CompactNumberFormatter.Format(TotalMouseClicks);
@@ -167,7 +169,6 @@ public sealed partial class HomePageViewModel : ObservableObject, IDisposable
     public void Refresh()
     {
         var profile = _petVm.CurrentProfile;
-        var progress = profile.SoloProgress;
 
         PetName = string.IsNullOrWhiteSpace(profile.PetName) ? "모찌" : profile.PetName;
         OwnerNameText = string.IsNullOrWhiteSpace(profile.OwnerName) ? "주인 미설정" : profile.OwnerName;
@@ -176,9 +177,10 @@ public sealed partial class HomePageViewModel : ObservableObject, IDisposable
             ?.DisplayName ?? profile.Appearance.SpeciesId;
         PetPortrait = _portraitRenderer.GetPortrait(profile.Appearance);
 
-        lock (progress)
+        lock (profile.GrowthSync)
         {
             PetEconomyService.NormalizeProgress(profile);
+            var progress = profile.SoloProgress;
             Level = progress.Level;
             Coins = progress.Coins;
             DailySocialCoinsEarned = _games.Economy.GetDailySocialCoinsEarned(profile);

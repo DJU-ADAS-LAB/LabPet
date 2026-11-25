@@ -115,7 +115,7 @@ public sealed partial class SoloHubViewModel : ObservableObject, IDisposable
     public string CompactCoinsText => CompactNumberFormatter.Format(Coins);
     public long LevelUpShortfallCoins => IsMaxLevel ? 0L : Math.Max(0L, LevelUpCost - Coins);
     public long ProjectedRemainingCoins => IsMaxLevel ? Coins : Math.Max(0L, Coins - LevelUpCost);
-    public bool CanLevelUp => !IsMaxLevel && Coins >= LevelUpCost;
+    public bool CanLevelUp => !RequiresGrowthRecovery && !IsMaxLevel && Coins >= LevelUpCost;
 
     public double LevelUpAffordProgressPercent => IsMaxLevel
         ? 100.0
@@ -173,6 +173,10 @@ public sealed partial class SoloHubViewModel : ObservableObject, IDisposable
     [ObservableProperty] private Brush _pomodoroDialArcBrush = PomodoroFocusArcBrush;
     [ObservableProperty] private string _pomodoroRewardPreviewText = $"25분 설정 · 완료 시 +{PetEconomyService.GetPomodoroRewardCoins(25)} 코인";
     [ObservableProperty] private string _pomodoroFocusMinutesInputText = "25";
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(CanLevelUp))]
+    [NotifyCanExecuteChangedFor(nameof(LevelUpCommand))]
+    private bool _requiresGrowthRecovery;
 
     private static Brush CreateFrozenBrush(string hex)
     {
@@ -248,7 +252,7 @@ public sealed partial class SoloHubViewModel : ObservableObject, IDisposable
     public void RefreshProgressUi()
     {
         PetProfileSnapshot snapshot;
-        lock (_profile.SoloProgress)
+        lock (_profile.GrowthSync)
         {
             PetEconomyService.NormalizeProgress(_profile);
             var p = _profile.SoloProgress;
@@ -267,6 +271,7 @@ public sealed partial class SoloHubViewModel : ObservableObject, IDisposable
         }
 
         PetName = snapshot.PetName;
+        RequiresGrowthRecovery = _profile.RequiresGrowthRecovery;
         Level = snapshot.Level;
         Coins = snapshot.Coins;
         DailySocialCoinsEarned = snapshot.DailySocialCoinsEarned;
@@ -309,7 +314,8 @@ public sealed partial class SoloHubViewModel : ObservableObject, IDisposable
         PomodoroTimeText = $"{(int)rem.TotalMinutes:00}:{rem.Seconds:00}";
         PomodoroToggleText = _pomodoro.IsRunning ? "일시정지" : "시작";
         var rewardCoins = PetEconomyService.GetPomodoroRewardCoins(_pomodoro.FocusMinutes);
-        PomodoroRewardPreviewText = _pomodoro.IsDurationLocked
+        PomodoroRewardPreviewText = _profile.RequiresGrowthRecovery ? "성장 데이터 복구 전까지 집중 보상은 적립되지 않아요."
+            : _pomodoro.IsDurationLocked
             ? $"{_pomodoro.FocusMinutes}분 설정 · 완료 시 +{rewardCoins} 코인 · 종료 전까지 시간 고정"
             : $"{_pomodoro.FocusMinutes}분 설정 · 완료 시 +{rewardCoins} 코인 (5분당 +{PetEconomyService.PomodoroCoinsPer5Minutes} 코인)";
 
@@ -414,6 +420,7 @@ public sealed partial class SoloHubViewModel : ObservableObject, IDisposable
     {
         _profile = updated;
         RefreshProgressUi();
+        RefreshPomodoroUi();
         ProfileChanged?.Invoke(this, updated);
     }
 

@@ -117,6 +117,7 @@ public sealed partial class CoinGamesViewModel
 
     partial void RestorePendingSoloLadderSessionIfAny()
     {
+        if (RequiresGrowthRecovery) return;
         var pending = _profile.SoloProgress.PendingSoloLadderSession;
         if (pending is null)
         {
@@ -162,7 +163,7 @@ public sealed partial class CoinGamesViewModel
 
     public async Task CompleteSoloLadderTraceAsync()
     {
-        if (_soloLadderCompleting
+        if (RequiresGrowthRecovery || _soloLadderCompleting
             || _activeSoloLadderSession is not { } session
             || SoloLadderPhase != SoloLadderPhase.Running)
         {

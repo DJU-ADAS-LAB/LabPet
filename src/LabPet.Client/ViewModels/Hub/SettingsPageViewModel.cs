@@ -6,6 +6,7 @@ using System.Windows;
 using System.Windows.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using LabPet.Client.Diagnostics;
 using LabPet.Client.Storage;
 using LabPet.Client.Views;
 using LabPet.Shared.Models;
@@ -20,12 +21,14 @@ public sealed partial class SettingsPageViewModel : ObservableObject, IDisposabl
 {
     private readonly PetWindowViewModel _petVm;
     private readonly IAppDataStore _store;
+    private readonly CoinGamesViewModel? _games;
     private readonly DispatcherTimer _displaySaveDebounceTimer;
 
     private bool _isSyncingFromPet;
     private bool _hasPendingDisplaySave;
     private bool _isActive;
     private bool _disposed;
+    private bool _isRepairingGrowth;
 
     [ObservableProperty]
     private bool _isStartupAutoRunEnabled;
@@ -49,15 +52,21 @@ public sealed partial class SettingsPageViewModel : ObservableObject, IDisposabl
     [ObservableProperty]
     private string _dataStatusMessage = string.Empty;
 
+    [ObservableProperty]
+    private string _growthRecoveryStatusMessage = string.Empty;
+
     public string PetScalePercentText => $"{Math.Round(PetScale * 100)}%";
     public string PetOpacityPercentText => $"{Math.Round(PetOpacity * 100)}%";
+    public bool RequiresGrowthRecovery => _petVm.CurrentProfile.RequiresGrowthRecovery;
 
     public SettingsPageViewModel(
         PetWindowViewModel petVm,
-        IAppDataStore store)
+        IAppDataStore store,
+        CoinGamesViewModel? games = null)
     {
         _petVm = petVm;
         _store = store;
+        _games = games;
 
         _displaySaveDebounceTimer = new DispatcherTimer
         {
@@ -202,6 +211,44 @@ public sealed partial class SettingsPageViewModel : ObservableObject, IDisposabl
     }
 
     [RelayCommand]
+    private Task RetryGrowthRecoveryAsync() => RepairGrowthAsync(reset: false);
+
+    internal Task ResetConfirmedGrowthAsync() => RepairGrowthAsync(reset: true);
+
+    private async Task RepairGrowthAsync(bool reset)
+    {
+        if (_isRepairingGrowth || !RequiresGrowthRecovery) return;
+        _isRepairingGrowth = true;
+        var profile = _petVm.CurrentProfile;
+        try
+        {
+            var recovered = reset ? await _store.ResetUnrecoverableGrowthAsync(profile)
+                : await _store.RetryGrowthRecoveryAsync(profile);
+            if (!recovered)
+            {
+                GrowthRecoveryStatusMessage = "읽을 수 있는 성장 백업을 찾지 못했습니다. 이 Windows 계정에서 만든 백업을 준비한 뒤 다시 시도해 주세요.";
+                return;
+            }
+
+            _petVm.ApplyProfile(profile);
+            _games?.BindProfile(profile);
+            _games?.Economy.NotifyExternalStateChanged(profile, "growth-recovery");
+            DataStatusMessage = "성장 데이터를 사용할 수 있게 됐습니다.";
+            _petVm.ShowBubble(DataStatusMessage, 3200);
+            OnPropertyChanged(nameof(RequiresGrowthRecovery));
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            CrashLogWriter.Write("Settings.GrowthRecovery", ex);
+            GrowthRecoveryStatusMessage = "성장 데이터를 복구하거나 저장하지 못했습니다. 기존 파일을 확인한 뒤 다시 시도해 주세요.";
+        }
+        finally
+        {
+            _isRepairingGrowth = false;
+        }
+    }
+
+    [RelayCommand]
     private void OpenDataFolder()
     {
         try
@@ -267,6 +314,7 @@ public sealed partial class SettingsPageViewModel : ObservableObject, IDisposabl
 
     private void SyncFromPetVm()
     {
+        OnPropertyChanged(nameof(RequiresGrowthRecovery));
         _isSyncingFromPet = true;
         try
         {

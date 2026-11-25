@@ -4,8 +4,17 @@
 
     <ScrollViewer VerticalScrollBarVisibility="Auto" CanContentScroll="False">
         <StackPanel>
+            <Border Style="{StaticResource HubCardStyle}" Margin="0,0,0,16"
+                    Visibility="{Binding RequiresGrowthRecovery, Converter={StaticResource HubBoolToVis}}">
+                <StackPanel>
+                    <TextBlock Text="성장 데이터 복구 필요" Style="{StaticResource HubSectionTitleStyle}" />
+                    <TextBlock Text="설정에서 정상 백업으로 복구할 수 있어요."
+                               Style="{StaticResource HubCaptionTextStyle}" Margin="0,6,0,0" />
+                </StackPanel>
+            </Border>
             <!-- 코인 수동 레벨업 · 활동량 요약 카드 -->
-            <Border Style="{StaticResource HubCardStyle}" Margin="0,0,0,16">
+            <Border Style="{StaticResource HubCardStyle}" Margin="0,0,0,16"
+                    Visibility="{Binding RequiresGrowthRecovery, Converter={StaticResource HubInverseBoolToVis}}">
                 <StackPanel>
                     <DockPanel LastChildFill="False" Margin="0,0,0,12">
                         <StackPanel DockPanel.Dock="Left" Orientation="Horizontal" VerticalAlignment="Center">

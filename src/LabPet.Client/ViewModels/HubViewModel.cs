@@ -67,11 +67,14 @@ public sealed partial class HubViewModel : ObservableObject, IDisposable
 
     public string CurrentPageTitle => FindNavItem(SelectedPage)?.Title ?? "홈";
     public string CurrentPageSubtitle => FindNavItem(SelectedPage)?.Subtitle ?? string.Empty;
-    public string LevelBadgeText => Level >= LabPet.Client.Solo.PetEconomyService.MaxLevel
+    public string LevelBadgeText => _petViewModel.CurrentProfile.RequiresGrowthRecovery ? "성장 복구 필요"
+        : Level >= LabPet.Client.Solo.PetEconomyService.MaxLevel
         ? $"Lv.{LabPet.Client.Solo.PetEconomyService.MaxLevel} MAX"
         : $"Lv.{Level}";
-    public string CoinsBadgeText => $"{LabPet.Client.Formatting.CompactNumberFormatter.Format(Coins)} 코인";
-    public string CoinsBadgeTooltip => $"보유 코인: {LabPet.Client.Formatting.CompactNumberFormatter.FormatExact(Coins)} 코인";
+    public string CoinsBadgeText => _petViewModel.CurrentProfile.RequiresGrowthRecovery ? "코인 복구 필요"
+        : $"{LabPet.Client.Formatting.CompactNumberFormatter.Format(Coins)} 코인";
+    public string CoinsBadgeTooltip => _petViewModel.CurrentProfile.RequiresGrowthRecovery ? "설정에서 성장 데이터를 복구할 수 있습니다."
+        : $"보유 코인: {LabPet.Client.Formatting.CompactNumberFormatter.FormatExact(Coins)} 코인";
 
     public HubViewModel(
         IHubNavigationService navigation,

@@ -503,6 +503,102 @@ public sealed class GameUiUxAndInviteTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task DamagedGrowth_PetVisitsChatSnowballAndFreeGameRemainAvailable()
+    {
+        await WpfTestHost.RunAsync(async () =>
+        {
+            var path = Path.Combine(_hostStore.DataDirectory, "profile.json");
+            var validBackup = await File.ReadAllTextAsync(path);
+            var shell = System.Text.Json.Nodes.JsonNode.Parse(validBackup)!.AsObject();
+            shell["protectedProgressV1"] = "AQID";
+            await File.WriteAllTextAsync(path, shell.ToJsonString());
+            await File.WriteAllTextAsync(path + ".bak", "{손상");
+            await File.WriteAllTextAsync(Path.Combine(_hostStore.DataDirectory, "profile.protection-v1"), "true");
+            var profile = await _hostStore.LoadProfileAsync();
+            Assert.True(profile.RequiresGrowthRecovery);
+            Assert.Equal(_hostProfile.PetId, profile.PetId);
+            await _hostSocial.UpdateLocalPresenceAsync(profile, isMusicActive: false);
+            _hostTransport.HandleDiscoveryHello(new DiscoveryHelloPacket
+            {
+                PetId = _guestProfile.PetId, PetName = _guestProfile.PetName,
+                TcpPort = _guestTransport.BoundTcpPort, AppVersion = "0.3.16"
+            }, IPAddress.Loopback.ToString(), CancellationToken.None);
+
+            var progression = new SoloProgressionService();
+            using var snowballs = new SnowballInteractionService(_hostTransport, _hostSocial);
+            using var receiver = new SnowballInteractionService(_guestTransport, _guestSocial);
+            var receivedSnowball = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            receiver.Received += (_, _) => receivedSnowball.TrySetResult();
+            var receivedChat = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            _guestSocial.FriendMessageReceived += (_, _) => receivedChat.TrySetResult();
+            var factory = new ProceduralPetMeshFactory();
+            var portraits = new PetPortraitRenderer(factory);
+            using var hostGames = new CoinGamesViewModel(_hostStore, progression, _hostSocial, portraits);
+            using var guestGames = new CoinGamesViewModel(_guestStore, new SoloProgressionService(), _guestSocial, portraits);
+            hostGames.BindProfile(profile);
+            guestGames.BindProfile(_guestProfile);
+            var vm = new PetWindowViewModel(_hostStore, _hostSocial, snowballs);
+            vm.ApplyProfile(profile);
+            using var settings = new SettingsPageViewModel(vm, _hostStore, hostGames);
+            settings.Activate();
+            using var audio = new TestAudioAnalyzer();
+            using var hook = new GlobalActivityHookService();
+            var pomodoro = new PomodoroTimerService();
+            var pet = new PetWindow(vm, factory, portraits, new PetAnimationController(), audio, hook,
+                progression, pomodoro, _hostSocial) { ShowActivated = false };
+            var visitor = new VisitorPetWindow(_guestAsFriend, _guestAsFriend.CachedAppearance,
+                factory, audio, _hostSocial) { ShowActivated = false };
+            try
+            {
+                pet.Show();
+                visitor.Show();
+                Assert.True(pet.IsVisible && visitor.IsVisible);
+                Assert.Contains("복구 필요", vm.TrayTooltip);
+                Assert.Equal("복구 필요", hostGames.CurrentCoinsCompactText);
+                visitor.OpenChatComposer();
+                Assert.True(visitor.IsChatComposerOpen);
+                Assert.True(await _hostSocial.SendBubbleMessageAsync(_guestAsFriend, "복구 모드 채팅"));
+                await receivedChat.Task.WaitAsync(TimeSpan.FromSeconds(5));
+                Assert.True(await snowballs.SendAsync(_guestAsFriend));
+                await receivedSnowball.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+                Assert.False(progression.TryLevelUp(profile, out var levelUp));
+                Assert.Equal(LevelUpFailureReason.GrowthRecoveryRequired, levelUp.FailureReason);
+                Assert.False(progression.TrySpendCoins(profile, 1).Success);
+                Assert.Equal(0, progression.RecordKeystrokesDetailed(profile, 400).CoinsEarned);
+                Assert.Equal(0, progression.RecordPomodoroCompletedDetailed(profile, 25).CoinsEarned);
+                Assert.Equal(0, progression.Economy.TryGrantSocialCoinReward(profile, _guestAsFriend.PetId, SocialRewardKind.FriendMessage).CoinsEarned);
+                Assert.Equal(0, profile.SoloProgress.TotalKeystrokes);
+                Assert.Equal(0, profile.SoloProgress.CompletedPomodoros);
+                pomodoro.StartOrPause();
+                Assert.True(pomodoro.IsRunning);
+                pomodoro.Reset();
+
+                hostGames.LadderFriendPicker.SelectAllCommand.Execute(null);
+                hostGames.LadderEntryFee = 0;
+                hostGames.LadderPrizesText = "커피 x1, 통과 x1";
+                var invite = WaitUntilAsync(guestGames, () => guestGames.HasIncomingInvite);
+                await hostGames.OpenLadderRoomCommand.ExecuteAsync(null);
+                await invite.WaitAsync(TimeSpan.FromSeconds(5));
+                await guestGames.AcceptIncomingInviteCommand.ExecuteAsync(null);
+                Assert.Equal(LadderStage.Lobby, guestGames.LadderStage);
+                await guestGames.CancelLadderRoomCommand.ExecuteAsync(null);
+
+                await File.WriteAllTextAsync(path + ".bak", validBackup);
+                await settings.RetryGrowthRecoveryCommand.ExecuteAsync(null);
+                Assert.False(settings.RequiresGrowthRecovery);
+                Assert.Equal(200, hostGames.CurrentCoins);
+                Assert.True(progression.TrySpendCoins(profile, 1).Success);
+            }
+            finally
+            {
+                visitor.Close();
+                pet.Close();
+            }
+        });
+    }
+
+    [Fact]
     public async Task SnowballDesktopScene_UsesTemporaryOrLiveVisitorRigAndCleansUpWhenTargetHides()
     {
         await WpfTestHost.RunAsync(async () =>

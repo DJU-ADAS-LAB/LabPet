@@ -13,6 +13,12 @@ public interface IAppDataStore
     Task<PetProfile> LoadProfileAsync(CancellationToken cancellationToken = default);
     Task SaveProfileAsync(PetProfile profile, CancellationToken cancellationToken = default);
 
+    Task<bool> RetryGrowthRecoveryAsync(PetProfile profile, CancellationToken cancellationToken = default) =>
+        Task.FromResult(false);
+
+    Task<bool> ResetUnrecoverableGrowthAsync(PetProfile profile, CancellationToken cancellationToken = default) =>
+        Task.FromResult(false);
+
     Task<FriendsStore> LoadFriendsAsync(CancellationToken cancellationToken = default);
     Task SaveFriendsAsync(FriendsStore friendsStore, CancellationToken cancellationToken = default);
 }

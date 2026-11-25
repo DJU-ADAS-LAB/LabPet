@@ -1,3 +1,4 @@
+using System.Text.Json.Serialization;
 using LabPet.Shared.Protocol;
 
 namespace LabPet.Shared.Models;
@@ -33,6 +34,16 @@ public sealed class PetProfile
 
     /// <summary>개인 성장 및 상점 해금 상태.</summary>
     public SoloProgress SoloProgress { get; set; } = new();
+
+    // 복구 상태는 저장소가 판정한다. 평문 프로필이나 통신으로 읽거나 쓰지 않는다.
+    [JsonIgnore]
+    public bool RequiresGrowthRecovery { get; set; }
+
+    [JsonIgnore]
+    public string? GrowthResetReceipt { get; set; }
+
+    [JsonIgnore]
+    public object GrowthSync { get; } = new();
 
     /// <summary>향후 GCP 클라우드 동기화용 메타데이터.</summary>
     public SyncMetadata SyncMetadata { get; set; } = new();

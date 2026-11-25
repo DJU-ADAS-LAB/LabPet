@@ -308,9 +308,10 @@ public sealed partial class CoinGamesViewModel
             return true;
         if (string.IsNullOrWhiteSpace(session) || !WagerOptions.Contains(wager))
             return false;
-        var progress = _profile.SoloProgress;
-        lock (progress)
+        lock (_profile.GrowthSync)
         {
+            if (_profile.RequiresGrowthRecovery) return false;
+            var progress = _profile.SoloProgress;
             if (progress.PendingGameWagers.ContainsKey(session) || progress.Coins < wager)
                 return false;
             progress.Coins -= wager;
@@ -324,9 +325,10 @@ public sealed partial class CoinGamesViewModel
     {
         if (session is null)
             return;
-        var progress = _profile.SoloProgress;
-        lock (progress)
+        lock (_profile.GrowthSync)
         {
+            if (_profile.RequiresGrowthRecovery) return;
+            var progress = _profile.SoloProgress;
             if (!progress.PendingGameWagers.TryGetValue(session, out var reserved)
                 || reserved <= 0 || payout < 0 || payout > (long)reserved * LabLadderEngine.MaxParticipants
                 || progress.Coins > long.MaxValue - payout)
@@ -341,12 +343,12 @@ public sealed partial class CoinGamesViewModel
     [System.Reflection.Obfuscation(Exclude = false)]
     private void RecoverInterruptedGameWagers(PetProfile profile)
     {
-        if (string.Equals(_wagerRecoveryPetId, profile.PetId, StringComparison.Ordinal))
-            return;
-        _wagerRecoveryPetId = profile.PetId;
-        var progress = profile.SoloProgress;
-        lock (progress)
+        lock (profile.GrowthSync)
         {
+            if (profile.RequiresGrowthRecovery || string.Equals(_wagerRecoveryPetId, profile.PetId, StringComparison.Ordinal))
+                return;
+            _wagerRecoveryPetId = profile.PetId;
+            var progress = profile.SoloProgress;
             progress.PendingGameWagers ??= [];
             if (progress.PendingGameWagers.Count == 0)
                 return;

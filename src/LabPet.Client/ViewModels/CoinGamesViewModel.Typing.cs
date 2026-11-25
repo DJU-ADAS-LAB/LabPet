@@ -1,5 +1,6 @@
 using CommunityToolkit.Mvvm.Input;
 using LabPet.Client.Games;
+using LabPet.Client.Solo;
 using LabPet.Shared.Models;
 using LabPet.Shared.Protocol;
 using LabPet.Shared.Transport;
@@ -53,7 +54,12 @@ public sealed partial class CoinGamesViewModel
             return;
         }
 
-        if (_profile.SoloProgress.Coins < TypingWager)
+        if (RequiresGrowthRecovery)
+        {
+            TypingStatusText = PetEconomyService.GrowthRecoveryMessage;
+            return;
+        }
+        if (!PetEconomyService.CanAfford(_profile, TypingWager))
         {
             TypingStatusText = $"코인이 부족합니다. (필요: {TypingWager}, 보유: {_profile.SoloProgress.Coins})";
             return;

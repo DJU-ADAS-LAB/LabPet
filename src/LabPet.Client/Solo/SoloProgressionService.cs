@@ -81,6 +81,11 @@ public sealed class SoloProgressionService
 
     public (bool Success, string Message) TrySpendCoins(PetProfile profile, long amount)
     {
+        if (profile.RequiresGrowthRecovery)
+        {
+            return (false, PetEconomyService.GrowthRecoveryMessage);
+        }
+
         if (amount <= 0)
         {
             return (false, "유효하지 않은 코인 금액입니다.");
@@ -92,7 +97,7 @@ public sealed class SoloProgressionService
         }
 
         long currentCoins;
-        lock (profile.SoloProgress)
+        lock (profile.GrowthSync)
         {
             currentCoins = profile.SoloProgress.Coins;
         }
