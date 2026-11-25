@@ -5,6 +5,7 @@ using LabPet.Client.Network;
 using LabPet.Client.Social;
 using LabPet.Client.Solo;
 using LabPet.Client.Storage;
+using LabPet.Client.SystemIntegration;
 using LabPet.Client.ViewModels;
 using LabPet.Shared.Models;
 using LabPet.Shared.Protocol;
@@ -418,6 +419,52 @@ public sealed class StorageAndMigratorTests : IDisposable
 
         Assert.Equal("잠금테스트", loaded.PetName);
         Assert.Equal(77, loaded.SoloProgress.Coins);
+    }
+
+    [Fact]
+    public void StartupRegistration_PreservesInstalledEntryWhenNonInstalledClientRuns()
+    {
+        const string installedExe = @"C:\Users\Test\AppData\Local\LabPet\current\LabPet.Client.exe";
+        const string portableExe = @"C:\Users\Test\Downloads\LabPet-Portable\LabPet.Client.exe";
+        const string existingCommand = $"\"{installedExe}\" --autostart";
+
+        Assert.Equal(installedExe, StartupRegistrationService.ExtractExecutablePath(existingCommand));
+        Assert.True(StartupRegistrationService.ShouldPreserveInstalledRegistration(
+            existingCommand,
+            portableExe,
+            p => string.Equals(p, installedExe, StringComparison.OrdinalIgnoreCase)));
+        Assert.False(StartupRegistrationService.ShouldPreserveInstalledRegistration(
+            existingCommand,
+            installedExe,
+            p => string.Equals(p, installedExe, StringComparison.OrdinalIgnoreCase)));
+        Assert.False(StartupRegistrationService.ShouldPreserveInstalledRegistration(
+            $"\"{portableExe}\" --autostart",
+            portableExe,
+            p => string.Equals(p, installedExe, StringComparison.OrdinalIgnoreCase)));
+        Assert.False(StartupRegistrationService.ShouldPreserveInstalledRegistration(
+            null,
+            portableExe,
+            p => string.Equals(p, installedExe, StringComparison.OrdinalIgnoreCase)));
+    }
+
+    [Fact]
+    public void AppDataPaths_IsolatesDebugBuildsFromProductionDirectoryAndMutex()
+    {
+        var fakeAppData = Path.Combine(_tempDir, "AppData");
+        var dataDir = AppDataPaths.ResolveDefaultDataDirectory(fakeAppData);
+        var logDir = AppDataPaths.ResolveDefaultLogDirectory(fakeAppData);
+
+#if DEBUG
+        Assert.Equal("LabPet-Dev", AppDataPaths.DefaultDirectoryName);
+        Assert.Equal(Path.Combine(fakeAppData, "LabPet-Dev"), dataDir);
+        Assert.Equal(Path.Combine(fakeAppData, "LabPet-Dev", "logs"), logDir);
+        Assert.Equal("Local\\LabPet_SingleInstance_Mutex_Dev", AppDataPaths.SingleInstanceMutexName);
+#else
+        Assert.Equal("LabPet", AppDataPaths.DefaultDirectoryName);
+        Assert.Equal(Path.Combine(fakeAppData, "LabPet"), dataDir);
+        Assert.Equal(Path.Combine(fakeAppData, "LabPet", "logs"), logDir);
+        Assert.Equal("Local\\LabPet_SingleInstance_Mutex", AppDataPaths.SingleInstanceMutexName);
+#endif
     }
 
     [Theory]

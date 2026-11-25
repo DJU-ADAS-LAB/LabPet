@@ -2,6 +2,7 @@ using System.Globalization;
 using System.IO;
 using System.Reflection;
 using System.Text;
+using LabPet.Client.Storage;
 
 namespace LabPet.Client.Diagnostics;
 
@@ -17,10 +18,7 @@ internal static class CrashLogWriter
 
     private static readonly object SyncLock = new();
 
-    public static string DefaultLogDirectory => Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-        "LabPet",
-        "logs");
+    public static string DefaultLogDirectory => AppDataPaths.ResolveDefaultLogDirectory();
 
     public static void Write(
         string source,

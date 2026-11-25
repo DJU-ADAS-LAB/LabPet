@@ -1,3 +1,4 @@
+using System.IO;
 using Microsoft.Win32;
 
 namespace LabPet.Client.SystemIntegration;
@@ -16,11 +17,91 @@ public sealed class StartupRegistrationService
 
     public bool IsEnabled()
     {
+        return !string.IsNullOrWhiteSpace(GetRegisteredCommand());
+    }
+
+    public string? GetRegisteredCommand()
+    {
         try
         {
             using var key = Registry.CurrentUser.OpenSubKey(RunRegistryKeyPath, writable: false);
-            var existing = key?.GetValue(AppRegistryValueName) as string;
-            return !string.IsNullOrWhiteSpace(existing);
+            return key?.GetValue(AppRegistryValueName) as string;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// 앱 시작 시 자동 실행 레지스트리를 최신화한다.
+    /// 이미 Velopack 설치본이 등록되어 있는 상태에서 포터블·로컬 개발 빌드가 실행된 경우에는
+    /// 기존 설치본 자동 실행 경로를 덮어쓰지 않고 보존한다.
+    /// </summary>
+    public bool RefreshForStartup(string? currentExePath = null)
+    {
+        var resolvedCurrent = string.IsNullOrWhiteSpace(currentExePath)
+            ? Environment.ProcessPath
+            : currentExePath;
+        if (ShouldPreserveInstalledRegistration(GetRegisteredCommand(), resolvedCurrent))
+        {
+            return false;
+        }
+
+        return SetEnabled(true);
+    }
+
+    internal static bool ShouldPreserveInstalledRegistration(
+        string? existingCommand,
+        string? currentExePath,
+        Func<string, bool>? isInstalledExe = null)
+    {
+        var existingExe = ExtractExecutablePath(existingCommand);
+        if (string.IsNullOrWhiteSpace(existingExe) || string.IsNullOrWhiteSpace(currentExePath))
+        {
+            return false;
+        }
+
+        var checker = isInstalledExe ?? IsVelopackInstalledExecutable;
+        return checker(existingExe) && !checker(currentExePath);
+    }
+
+    internal static string? ExtractExecutablePath(string? command)
+    {
+        if (string.IsNullOrWhiteSpace(command))
+        {
+            return null;
+        }
+
+        var trimmed = command.Trim();
+        if (trimmed.StartsWith('"'))
+        {
+            var closing = trimmed.IndexOf('"', 1);
+            return closing > 1 ? trimmed[1..closing].Trim() : null;
+        }
+
+        var space = trimmed.IndexOf(' ');
+        return space > 0 ? trimmed[..space].Trim() : trimmed;
+    }
+
+    internal static bool IsVelopackInstalledExecutable(string? exePath)
+    {
+        if (string.IsNullOrWhiteSpace(exePath))
+        {
+            return false;
+        }
+
+        try
+        {
+            if (!File.Exists(exePath))
+            {
+                return false;
+            }
+
+            var currentDir = Path.GetDirectoryName(Path.GetFullPath(exePath));
+            var rootDir = currentDir is null ? null : Directory.GetParent(currentDir)?.FullName;
+            return !string.IsNullOrWhiteSpace(rootDir)
+                && File.Exists(Path.Combine(rootDir, "Update.exe"));
         }
         catch
         {

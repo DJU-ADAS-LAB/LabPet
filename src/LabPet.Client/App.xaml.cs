@@ -21,7 +21,7 @@ namespace LabPet.Client;
 
 public partial class App : Application
 {
-    private const string SingleInstanceMutexName = "Local\\LabPet_SingleInstance_Mutex";
+    private const string SingleInstanceMutexName = AppDataPaths.SingleInstanceMutexName;
 
     private Mutex? _singleInstanceMutex;
     private ServiceProvider? _serviceProvider;
@@ -104,14 +104,14 @@ public partial class App : Application
         // 최초 실행(AutoStartEnabled == null) 시 Windows 시작 프로그램 자동 실행을 기본값(true)으로 등록
         if (profile.AutoStartEnabled is null)
         {
-            startupService.SetEnabled(true);
+            startupService.RefreshForStartup();
             profile.AutoStartEnabled = true;
             await store.SaveProfileAsync(profile);
         }
         else if (profile.AutoStartEnabled == true)
         {
-            // 기존 등록 PC도 --autostart 인자가 포함되도록 레지스트리 값 최신화
-            startupService.SetEnabled(true);
+            // 설치본 경로를 유지하면서 기존 등록 PC도 --autostart 인자가 포함되도록 레지스트리 값 최신화
+            startupService.RefreshForStartup();
         }
 
         var petVm = _serviceProvider.GetRequiredService<PetWindowViewModel>();

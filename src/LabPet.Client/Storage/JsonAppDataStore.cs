@@ -53,7 +53,7 @@ public sealed class JsonAppDataStore : IAppDataStore, IAsyncDisposable
         _migrator = migrator;
         _releaseVersion = releaseVersion;
         DataDirectory = string.IsNullOrWhiteSpace(customDataDirectory)
-            ? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "LabPet")
+            ? AppDataPaths.ResolveDefaultDataDirectory()
             : customDataDirectory;
     }
 
