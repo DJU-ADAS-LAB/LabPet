@@ -29,6 +29,8 @@ public partial class App : Application
     private FriendMessageRouter? _messageRouter;
     private PetWindow? _petWindow;
     private GameInviteCardPresenter? _inviteCard;
+    private SnowballDesktopScene? _snowballScene;
+    private SnowballInteractionService? _snowballs;
     private readonly Dictionary<string, VisitorPetWindow> _visitorWindows = new(StringComparer.OrdinalIgnoreCase);
     private readonly VisitorPopupOrder _visitorPopupOrder = new();
     private bool _crashHooksAttached;
@@ -164,6 +166,35 @@ public partial class App : Application
         _petWindow.SpeechBubbleLayoutChanged += (_, _) => _inviteCard?.RequestUpdate();
         _petWindow.InitializeWithProfile(profile);
         _petWindow.Show();
+        _snowballScene = new SnowballDesktopScene(
+            _petWindow,
+            _serviceProvider.GetRequiredService<IPetMeshFactory>(),
+            petId => _visitorWindows.GetValueOrDefault(petId));
+        social.StateChanged += OnSnowballSocialStateChanged;
+        _snowballs = _serviceProvider.GetRequiredService<SnowballInteractionService>();
+        _snowballs.Received += OnSnowballReceived;
+    }
+
+    internal bool TryReceiveSnowball(Guid senderPetId, Guid eventId, LabPet.Shared.Models.PetAppearance appearance)
+        => _snowballScene?.TryReceive(senderPetId, eventId, appearance) == true;
+
+    private void OnSnowballReceived(object? sender, SnowballReceivedEventArgs e)
+    {
+        if (_snowballScene is null || _social is not { } social || !Guid.TryParse(e.SenderPetId, out var petId)) return;
+        var friend = social.Friends.FirstOrDefault(f => string.Equals(f.PetId, e.SenderPetId, StringComparison.OrdinalIgnoreCase));
+        if (friend is null) return;
+        var peer = social.DiscoveredPeers.FirstOrDefault(p => string.Equals(p.PetId, e.SenderPetId, StringComparison.OrdinalIgnoreCase));
+        TryReceiveSnowball(petId, e.EventId, peer?.Appearance ?? friend.CachedAppearance);
+    }
+
+    private void OnSnowballSocialStateChanged(object? sender, EventArgs e)
+    {
+        if (Dispatcher.HasShutdownStarted) return;
+        Dispatcher.BeginInvoke(() =>
+        {
+            if (_snowballScene is { } scene && _social is { } social)
+                scene.RemoveOfflineSenders(social.DiscoveredPeers.Select(peer => peer.PetId));
+        });
     }
 
     private void OnSocialFriendMessageReceived(object? sender, ReceivedFriendMessage message)
@@ -223,7 +254,8 @@ public partial class App : Application
             _serviceProvider.GetRequiredService<IAudioAnalyzer>(),
             _serviceProvider.GetRequiredService<SocialCoordinatorService>(),
             _visitorPopupOrder,
-            target => CloseOtherVisitorChatComposers(_visitorWindows.Values, target));
+            target => CloseOtherVisitorChatComposers(_visitorWindows.Values, target),
+            _snowballs);
 
         visitor.ApplyDisplaySettings(petVm.PetScale, petVm.PetOpacity);
         visitor.PlaceBeside(_petWindow);
@@ -254,6 +286,7 @@ public partial class App : Application
             return;
         }
 
+        _snowballScene?.RemoveVisitor(petId);
         _serviceProvider?.GetRequiredService<PetWindowViewModel>().NotifyVisitorStateChanged();
     }
 
@@ -269,6 +302,7 @@ public partial class App : Application
     {
         if (_social is not null)
         {
+            _social.StateChanged -= OnSnowballSocialStateChanged;
             _social.FriendMessageReceived -= OnSocialFriendMessageReceived;
             _social.FriendStatusNotification -= OnSocialFriendStatusNotification;
             _social = null;
@@ -276,6 +310,10 @@ public partial class App : Application
 
         _messageRouter = null;
 
+        if (_snowballs is not null) _snowballs.Received -= OnSnowballReceived;
+        _snowballs = null;
+        _snowballScene?.Dispose();
+        _snowballScene = null;
         _inviteCard?.Dispose();
         _inviteCard = null;
         _serviceProvider?.GetService<IHubNavigationService>()?.CloseIfOpen();
@@ -373,6 +411,7 @@ public partial class App : Application
             sp.GetRequiredService<LanP2pTransport>(),
             sp.GetRequiredService<GcpSignalRTransport>()));
         services.AddSingleton<SocialCoordinatorService>();
+        services.AddSingleton<SnowballInteractionService>();
 
         // 배포·자동 업데이트 및 Windows 시작 프로그램·터미널 연동
         services.AddSingleton<StartupRegistrationService>();

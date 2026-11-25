@@ -31,6 +31,7 @@ public sealed partial class QuickOverlayEntry : ObservableObject
     public Brush StatusDotBrush => OnlineDotBrush;
     public string StatusTooltip => IsSleeping ? "자는 중" : "온라인";
     public FriendEntry? Friend { get; set; }
+    public SnowballAction? Snowball { get; init; }
     public PeerSnapshot? Peer { get; set; }
 
     public string MusicButtonIcon => IsFollowingMusic ? "⏹" : "🎵";
@@ -180,9 +181,12 @@ public sealed partial class PetWindowViewModel : ObservableObject, IAsyncDisposa
     private bool _suppressStartupToggleEvent;
     private bool _suppressSliderSideEffects;
 
-    public PetWindowViewModel(IAppDataStore store, SocialCoordinatorService social)
+    private readonly SnowballInteractionService? _snowballs;
+
+    public PetWindowViewModel(IAppDataStore store, SocialCoordinatorService social, SnowballInteractionService? snowballs = null)
     {
         _store = store;
+        _snowballs = snowballs;
         _shutdownProfileSaves = new Lazy<Task>(ShutdownProfileSavesAsync);
         _social = social;
         _bubbleStack.Changed += (_, _) => IsBubbleVisible = _bubbleStack.HasItems;
@@ -331,6 +335,7 @@ public sealed partial class PetWindowViewModel : ObservableObject, IAsyncDisposa
                 IsSleeping = live.IsSleeping,
                 IsFollowingMusic = string.Equals(followingId, f.PetId, StringComparison.OrdinalIgnoreCase),
                 Friend = f,
+                Snowball = _snowballs?.ForFriend(f),
                 Peer = live
             });
         }

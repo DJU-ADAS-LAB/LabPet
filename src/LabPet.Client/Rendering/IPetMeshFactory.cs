@@ -76,6 +76,31 @@ public sealed class PetRigHandle
     internal Point3D NameplateAnchor { get; init; }
     internal Rect3D BodyBounds { get; init; }
 
+    // 절차형 모델은 실제 팔/앞발 변환을 재사용하여 몸통 로컬 좌표를 제공한다.
+    internal Func<Point3D>? RightHandPositionProvider { get; init; }
+
+    /// <summary>관절 갱신 후 호출. 몸통 변환을 포함한 RootModel 내부의 3D 좌표이며 화면 좌표가 아니다.</summary>
+    internal bool TryGetRightHandPosition(out Point3D position)
+    {
+        position = default;
+        RootModel.Dispatcher.VerifyAccess();
+        Point3D hand;
+        if (Skin is not null)
+        {
+            if (!Skin.TryGetRightHandPosition(out hand)) return false;
+        }
+        else if (RightHandPositionProvider is { } provider)
+        {
+            hand = provider();
+        }
+        else return false;
+        var transformed = BodyTransform?.Transform(hand) ?? hand;
+        if (!double.IsFinite(transformed.X) || !double.IsFinite(transformed.Y) ||
+            !double.IsFinite(transformed.Z)) return false;
+        position = transformed;
+        return true;
+    }
+
     /// <summary>색상을 제외한 구조 시그니처 (SpeciesId|ExpressionId|HeadAccessoryId|AuraEffectId).</summary>
     public string AppearanceStructureSignature { get => _signature; init => _signature = value; }
     private string _signature = string.Empty;

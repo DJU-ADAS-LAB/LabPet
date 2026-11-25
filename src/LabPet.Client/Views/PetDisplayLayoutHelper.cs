@@ -84,6 +84,29 @@ internal static class PetDisplayLayoutHelper
         return metrics;
     }
 
+    /// <summary>모델 내부 좌표를 뷰포트 DIP로 투영한다. 화면 물리 픽셀 변환은 호출자가 PointToScreen으로 수행한다.</summary>
+    internal static bool TryProjectPointToViewport(
+        Viewport3D viewport, ModelVisual3D petVisual, Point3D modelPoint, out Point pointDip)
+    {
+        pointDip = default;
+        if (!viewport.Dispatcher.CheckAccess() || !petVisual.Dispatcher.CheckAccess()) return false;
+        if (petVisual.Content is null || viewport.Camera is null ||
+            !double.IsFinite(viewport.ActualWidth) || viewport.ActualWidth <= 0 ||
+            !double.IsFinite(viewport.ActualHeight) || viewport.ActualHeight <= 0 ||
+            !double.IsFinite(modelPoint.X) || !double.IsFinite(modelPoint.Y) ||
+            !double.IsFinite(modelPoint.Z) || !viewport.IsAncestorOf(petVisual)) return false;
+
+        // Visual3D의 투영에는 Content 자체의 모델 변환이 포함되지 않으므로 한 번 적용한다.
+        var visualPoint = petVisual.Content.Transform.Transform(modelPoint);
+        if (!double.IsFinite(visualPoint.X) || !double.IsFinite(visualPoint.Y) ||
+            !double.IsFinite(visualPoint.Z)) return false;
+        var projection = petVisual.TransformToAncestor(viewport);
+        if (!projection.TryTransform(visualPoint, out var projected) ||
+            !double.IsFinite(projected.X) || !double.IsFinite(projected.Y)) return false;
+        pointDip = projected;
+        return true;
+    }
+
     public static bool TryComputeNameplateOffsetY(
         Viewport3D viewport,
         ModelVisual3D petVisual,

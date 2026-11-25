@@ -12,6 +12,250 @@ namespace LabPet.Tests;
 [Collection("WpfUi")]
 public sealed class PetAnimationAndEffectTests
 {
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Snowball_CancelStopsLateReleaseAndPreservesSleep(bool sleeping)
+    {
+        RunOnSta(() =>
+        {
+            var rig = new ProceduralPetMeshFactory().BuildPetRig(
+                new PetAppearance { SpeciesId = PetSpeciesIds.MochiSpirit }, PetRigEffects.None);
+            var controller = new PetAnimationController();
+            controller.SetSleeping(sleeping);
+            controller.AttachRig(rig, "#FF9EB5");
+            controller.SetSnowballLaughing(true);
+            for (var i = 0; i < 20; i++) controller.UpdateFrame(0.01, 0, 0);
+            Assert.Equal("happy", rig.ReactionExpression);
+            Assert.True(controller.TryStartSnowballThrow());
+            controller.TriggerSnowballHit();
+            controller.CancelSnowballInteraction();
+            controller.CancelSnowballInteraction();
+            Assert.Null(rig.ReactionExpression);
+            Assert.False(controller.IsThrowingSnowball);
+            Assert.False(controller.IsReactingToSnowball);
+            Assert.False(controller.IsLaughingAfterSnowball);
+            for (var i = 0; i < 60; i++)
+            {
+                controller.UpdateFrame(1.0 / 60, 0, 0);
+                Assert.False(controller.SnowballReleasedThisFrame);
+            }
+            Assert.Equal(sleeping, controller.IsSleeping);
+            Assert.True(controller.TryStartSnowballThrow());
+            controller.CancelSnowballInteraction();
+            if (!sleeping)
+            {
+                controller.TriggerGameReaction(true);
+                controller.CancelSnowballInteraction();
+                Assert.Equal("happy", rig.ReactionExpression);
+                Assert.True(controller.HasInteractiveMotion);
+            }
+            controller.DetachRig();
+            controller.CancelSnowballInteraction();
+        });
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Snowball_HitsExtendWithoutRestartAndPreserveUnderlyingState(bool sleeping)
+    {
+        RunOnSta(() =>
+        {
+            var factory = new ProceduralPetMeshFactory();
+            var appearance = new PetAppearance { SpeciesId = PetSpeciesIds.MochiSpirit };
+            var rig = factory.BuildPetRig(appearance, PetRigEffects.None);
+            var referenceRig = factory.BuildPetRig(appearance, PetRigEffects.None);
+            var controller = new PetAnimationController();
+            var reference = new PetAnimationController();
+            controller.SetSleeping(sleeping);
+            reference.SetSleeping(sleeping);
+            controller.AttachRig(rig, "#FF9EB5");
+            reference.AttachRig(referenceRig, "#FF9EB5");
+            controller.TriggerSnowballHit();
+            reference.TriggerSnowballHit();
+            for (var i = 0; i < 6; i++)
+            {
+                controller.UpdateFrame(1.0 / 60, 0, 0);
+                reference.UpdateFrame(1.0 / 60, 0, 0);
+            }
+            controller.TriggerSnowballHit();
+            controller.UpdateFrame(1.0 / 60, 0, 0);
+            reference.UpdateFrame(1.0 / 60, 0, 0);
+            Assert.Equal(referenceRig.BodyPitch.Angle, rig.BodyPitch.Angle, 8);
+            Assert.Equal(referenceRig.HeadRoll.Angle, rig.HeadRoll.Angle, 8);
+            Assert.True(controller.HasInteractiveMotion);
+            for (var i = 0; i < 17; i++)
+            {
+                controller.UpdateFrame(1.0 / 60, 0, 0);
+                reference.UpdateFrame(1.0 / 60, 0, 0);
+            }
+            Assert.False(reference.IsReactingToSnowball);
+            Assert.True(controller.IsReactingToSnowball);
+            for (var i = 0; i < 100; i++) controller.TriggerSnowballHit();
+            for (var i = 0; i < 42; i++) controller.UpdateFrame(1.0 / 60, 0, 0);
+            Assert.False(controller.IsReactingToSnowball);
+            Assert.Equal(sleeping, controller.IsSleeping);
+            Assert.InRange(rig.BodyScale.ScaleY, 0.80, 1.24);
+            if (sleeping) Assert.InRange(rig.EyeBlinkScale!.ScaleY, 0, 0.1);
+            controller.TriggerSnowballHit();
+            controller.AttachRig(rig, "#FF9EB5");
+            Assert.False(controller.IsReactingToSnowball);
+            controller.TriggerSnowballHit();
+            controller.DetachRig();
+            Assert.False(controller.IsReactingToSnowball);
+            controller.TriggerSnowballHit();
+            Assert.False(controller.IsReactingToSnowball);
+        });
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Snowball_RepeatedThrowsReleaseOnceAndPreserveSleep(bool sleeping)
+    {
+        RunOnSta(() =>
+        {
+            var rig = new ProceduralPetMeshFactory().BuildPetRig(
+                new PetAppearance { SpeciesId = PetSpeciesIds.MochiSpirit }, PetRigEffects.None);
+            var controller = new PetAnimationController();
+            controller.SetSleeping(sleeping);
+            controller.AttachRig(rig, "#FF9EB5");
+            for (var attempt = 0; attempt < 10; attempt++)
+            {
+                Assert.True(controller.TryStartSnowballThrow());
+                Assert.True(controller.HasInteractiveMotion);
+                var releases = 0;
+                for (var frame = 0; frame < 60; frame++)
+                {
+                    if (frame < 40) Assert.False(controller.TryStartSnowballThrow());
+                    controller.UpdateFrame(1.0 / 60, 0, 0);
+                    if (controller.SnowballReleasedThisFrame) releases++;
+                    Assert.True(double.IsFinite(rig.RightArmPitch!.Angle));
+                    Assert.InRange(rig.RightArmPitch.Angle, -65, 65);
+                }
+                Assert.Equal(1, releases);
+                Assert.False(controller.IsThrowingSnowball);
+                Assert.Equal(sleeping, controller.IsSleeping);
+            }
+            Assert.True(controller.TryStartSnowballThrow());
+            // 발사 신호는 한 프레임만 유지되므로 실제 발생 프레임에서 멈춘다.
+            var releaseFrame = 0;
+            while (!controller.SnowballReleasedThisFrame && releaseFrame < 60)
+            {
+                controller.UpdateFrame(1.0 / 60, 0, 0);
+                releaseFrame++;
+            }
+            Assert.True(controller.SnowballReleasedThisFrame);
+            Assert.InRange(releaseFrame / 60.0, SnowballThrowPose.ReleaseSeconds,
+                SnowballThrowPose.ReleaseSeconds + 1.0 / 60);
+            controller.AttachRig(rig, "#FF9EB5");
+            Assert.False(controller.IsThrowingSnowball);
+            Assert.False(controller.SnowballReleasedThisFrame);
+            Assert.True(controller.TryStartSnowballThrow());
+            controller.DetachRig();
+            Assert.False(controller.IsThrowingSnowball);
+            Assert.False(controller.SnowballReleasedThisFrame);
+            Assert.False(controller.TryStartSnowballThrow());
+        });
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Snowball_LaughBlendsOutAndClearsOnRigReplacement(bool sleeping)
+    {
+        RunOnSta(() =>
+        {
+            var rig = new ProceduralPetMeshFactory().BuildPetRig(
+                new PetAppearance { SpeciesId = PetSpeciesIds.MochiSpirit }, PetRigEffects.None);
+            var controller = new PetAnimationController();
+            controller.SetSleeping(sleeping);
+            controller.AttachRig(rig, "#FF9EB5");
+            controller.SetSnowballLaughing(true);
+            Assert.True(controller.HasInteractiveMotion);
+            for (var i = 0; i < 20; i++) controller.UpdateFrame(0.01, 0, 0);
+            Assert.InRange(rig.EyeBlinkScale!.ScaleY, 0.06, 0.08);
+            Assert.Equal(sleeping, controller.IsSleeping);
+            controller.SetSnowballLaughing(false);
+            controller.UpdateFrame(0.01, 0, 0);
+            Assert.True(controller.IsLaughingAfterSnowball);
+            for (var i = 0; i < 20; i++) controller.UpdateFrame(0.01, 0, 0);
+            Assert.False(controller.IsLaughingAfterSnowball);
+            Assert.Equal(sleeping, controller.IsSleeping);
+            if (!sleeping) Assert.InRange(rig.EyeBlinkScale.ScaleY, 0.99, 1.01);
+            controller.SetSnowballLaughing(true);
+            controller.UpdateFrame(0.01, 0, 0);
+            controller.AttachRig(rig, "#FF9EB5");
+            Assert.False(controller.IsLaughingAfterSnowball);
+            controller.SetSnowballLaughing(true);
+            controller.DetachRig();
+            Assert.False(controller.IsLaughingAfterSnowball);
+            controller.SetSnowballLaughing(true);
+            Assert.False(controller.IsLaughingAfterSnowball);
+        });
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Snowball_LaughExpressionRestoresAppearanceAndYieldsToGame(bool external)
+    {
+        RunOnSta(() =>
+        {
+            var procedural = new ProceduralPetMeshFactory();
+            IPetMeshFactory factory = external ? new BlenderAssetPetMeshFactory(procedural) : procedural;
+            var appearance = new PetAppearance { SpeciesId = PetSpeciesIds.MochiSpirit, ExpressionId = "sparkle" };
+            var rig = factory.BuildPetRig(appearance, PetRigEffects.None);
+            Assert.Equal(external, rig.IsExternalAsset);
+            Assert.NotNull(rig.SelectExpression);
+            var controller = new PetAnimationController();
+            controller.AttachRig(rig, appearance.AccentColorHex);
+            void Laugh()
+            {
+                controller.SetSnowballLaughing(true);
+                for (var i = 0; i < 20; i++) controller.UpdateFrame(0.01, 0, 0);
+                Assert.Equal("happy", rig.ReactionExpression);
+            }
+            Laugh();
+            appearance.ExpressionId = "default";
+            Assert.True(rig.TryUpdateAppearance(appearance));
+            Assert.Equal("happy", rig.ReactionExpression);
+            controller.SetSnowballLaughing(false);
+            controller.UpdateFrame(0.01, 0, 0);
+            Assert.Null(rig.ReactionExpression);
+            Assert.Equal(factory.BuildPetRig(appearance, PetRigEffects.None).TotalTriangleCount, rig.TotalTriangleCount);
+            Laugh();
+            Assert.True(controller.TryStartSnowballThrow());
+            controller.SetSnowballLaughing(false);
+            controller.UpdateFrame(0.01, 0, 0);
+            Assert.Null(rig.ReactionExpression);
+            for (var i = 0; i < 100; i++) controller.UpdateFrame(0.01, 0, 0);
+            Laugh();
+            controller.SetGrabbed(true);
+            controller.UpdateFrame(0.01, 0, 0);
+            Assert.Null(rig.ReactionExpression);
+            controller.SetGrabbed(false);
+            for (var i = 0; i < 30; i++) controller.UpdateFrame(0.01, 0, 0);
+            foreach (var won in new[] { true, false })
+            {
+                Laugh();
+                controller.TriggerGameReaction(won);
+                controller.SetSnowballLaughing(false);
+                for (var i = 0; i < 20; i++) controller.UpdateFrame(0.01, 0, 0);
+                Assert.Equal(won ? "happy" : "sleepy", rig.ReactionExpression);
+                for (var i = 0; i < 220; i++) controller.UpdateFrame(0.01, 0, 0);
+                Assert.Null(rig.ReactionExpression);
+            }
+            Laugh();
+            controller.AttachRig(rig, appearance.AccentColorHex);
+            Assert.Null(rig.ReactionExpression);
+            Laugh();
+            controller.DetachRig();
+            Assert.Null(rig.ReactionExpression);
+        });
+    }
+
     [Fact]
     public void MotionClips_ProduceDistinctBehaviorsAcrossSpecies()
     {

@@ -74,8 +74,15 @@ public sealed class GameInviteTransportTests
             {
                 hostLan.UpdateKnownFriends([guestFriend, alternate]);
                 guestLan.UpdateKnownFriends([hostFriend]);
-                Discover(hostLan, guestFriend);
-                Discover(guestLan, hostFriend);
+                var oldGuest = new LocalPresenceState("", guest.PetName, guest.Appearance, 1, false, "0.3.12");
+                await guestLan.UpdateLocalPresenceAsync(oldGuest);
+                Discover(hostLan, guestFriend, "0.3.12");
+                await UntilAsync(() => hostTransport.GetSnowballPeerStatus(guestFriend.PetId) == SnowballPeerStatus.Unsupported);
+                Assert.Equal(SnowballPeerStatus.Unsupported, hostTransport.GetSnowballPeerStatus(guestFriend.PetId));
+                Assert.False(await hostTransport.SendSnowballAsync(guestFriend, Guid.NewGuid()));
+                await guestLan.UpdateLocalPresenceAsync(oldGuest with { AppVersion = "0.3.13" });
+                Discover(guestLan, hostFriend, "0.3.13");
+                await UntilAsync(() => hostTransport.GetSnowballPeerStatus(guestFriend.PetId) == SnowballPeerStatus.Available);
             }
             else
             {
@@ -89,6 +96,26 @@ public sealed class GameInviteTransportTests
 
             await WpfTestHost.RunAsync(async () =>
             {
+                using (var receiveSnowballs = new SnowballInteractionService(guestTransport))
+                {
+                    var delivered = new List<SnowballReceivedEventArgs>();
+                    receiveSnowballs.Received += (_, e) => delivered.Add(e);
+                    var eventId = Guid.NewGuid();
+                    var otherEvent = Guid.NewGuid();
+                    Assert.Equal(SnowballPeerStatus.Available, hostTransport.GetSnowballPeerStatus(guestFriend.PetId));
+                    Assert.True(await hostTransport.SendSnowballAsync(guestFriend, eventId));
+                    Assert.True(await hostTransport.SendSnowballAsync(guestFriend, eventId));
+                    Assert.False(await hostTransport.SendPetInteractionAsync(guestFriend, "future"));
+                    Assert.True(await hostTransport.SendSnowballAsync(guestFriend, otherEvent));
+                    await WpfTestHost.FlushAsync();
+                    Assert.Equal(new[] { eventId, otherEvent }, delivered.Select(e => e.EventId));
+                    Assert.All(delivered, e => Assert.Equal(host.PetId, e.SenderPetId));
+                    Assert.Equal(100, host.SoloProgress.Coins);
+                    Assert.Equal(100, guest.SoloProgress.Coins);
+                    Assert.Equal(0, guestFriend.Intimacy);
+                    Assert.Equal(0, hostFriend.Intimacy);
+                }
+
                 using var a = new CoinGamesViewModel(hostStore, new SoloProgressionService(), hostSocial);
                 using var b = new CoinGamesViewModel(guestStore, new SoloProgressionService(), guestSocial);
                 a.BindProfile(host);
@@ -392,8 +419,9 @@ public sealed class GameInviteTransportTests
         LastKnownIp = port > 0 ? IPAddress.Loopback.ToString() : string.Empty, LastKnownTcpPort = port
     };
 
-    private static void Discover(LanP2pTransport lan, FriendEntry friend)
-        => lan.HandleDiscoveryHello(new DiscoveryHelloPacket { PetId = friend.PetId, TcpPort = friend.LastKnownTcpPort },
+    private static void Discover(LanP2pTransport lan, FriendEntry friend, string version = "0.1.0")
+        => lan.HandleDiscoveryHello(new DiscoveryHelloPacket
+            { PetId = friend.PetId, TcpPort = friend.LastKnownTcpPort, AppVersion = version },
             IPAddress.Loopback.ToString(), CancellationToken.None);
 
     private static async Task UntilAsync(Func<bool> condition)
@@ -418,6 +446,7 @@ public sealed class GameInviteTransportTests
         public event EventHandler<BubbleMessageReceivedEventArgs>? BubbleMessageReceived { add => inner.BubbleMessageReceived += value; remove => inner.BubbleMessageReceived -= value; }
         public event EventHandler<QuickReactionReceivedEventArgs>? QuickReactionReceived { add => inner.QuickReactionReceived += value; remove => inner.QuickReactionReceived -= value; }
         public event EventHandler<PetInteractionReceivedEventArgs>? PetInteractionReceived { add => inner.PetInteractionReceived += value; remove => inner.PetInteractionReceived -= value; }
+        public event EventHandler<SnowballReceivedEventArgs>? SnowballReceived { add => inner.SnowballReceived += value; remove => inner.SnowballReceived -= value; }
         public event EventHandler<MusicFrameReceivedEventArgs>? MusicFrameReceived { add => inner.MusicFrameReceived += value; remove => inner.MusicFrameReceived -= value; }
         public event EventHandler<MusicFollowStateChangedEventArgs>? MusicFollowStateChanged { add => inner.MusicFollowStateChanged += value; remove => inner.MusicFollowStateChanged -= value; }
         public event EventHandler<GameEventReceivedEventArgs>? GameEventReceived { add => inner.GameEventReceived += value; remove => inner.GameEventReceived -= value; }
@@ -434,6 +463,8 @@ public sealed class GameInviteTransportTests
         public Task<FriendOperationResult> RespondFriendRequestDetailedAsync(string id, bool accept, CancellationToken ct = default) => inner.RespondFriendRequestDetailedAsync(id, accept, ct);
         public Task<bool> SendBubbleMessageAsync(FriendEntry f, string text, CancellationToken ct = default) => inner.SendBubbleMessageAsync(f, text, ct);
         public Task<bool> SendQuickReactionAsync(FriendEntry f, string id, CancellationToken ct = default) => inner.SendQuickReactionAsync(f, id, ct);
+        public SnowballPeerStatus GetSnowballPeerStatus(string petId) => inner.GetSnowballPeerStatus(petId);
+        public Task<bool> SendSnowballAsync(FriendEntry friend, Guid eventId, CancellationToken ct = default) => inner.SendSnowballAsync(friend, eventId, ct);
         public Task<bool> SendPetInteractionAsync(FriendEntry f, string type, CancellationToken ct = default) => inner.SendPetInteractionAsync(f, type, ct);
         public Task<bool> SetMusicFollowAsync(FriendEntry f, bool enable, CancellationToken ct = default) => inner.SetMusicFollowAsync(f, enable, ct);
         public Task<bool> SendGameEventAsync(FriendEntry f, GameEventPayload p, CancellationToken ct = default)

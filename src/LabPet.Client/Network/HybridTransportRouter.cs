@@ -76,6 +76,7 @@ public sealed class HybridTransportRouter : ISocialTransport
     public event EventHandler<BubbleMessageReceivedEventArgs>? BubbleMessageReceived;
     public event EventHandler<QuickReactionReceivedEventArgs>? QuickReactionReceived;
     public event EventHandler<PetInteractionReceivedEventArgs>? PetInteractionReceived;
+    public event EventHandler<SnowballReceivedEventArgs>? SnowballReceived;
     public event EventHandler<MusicFrameReceivedEventArgs>? MusicFrameReceived;
     public event EventHandler<MusicFollowStateChangedEventArgs>? MusicFollowStateChanged;
     public event EventHandler<GameEventReceivedEventArgs>? GameEventReceived;
@@ -255,6 +256,19 @@ public sealed class HybridTransportRouter : ISocialTransport
     public Task<bool> SendQuickReactionAsync(FriendEntry friend, string reactionId, CancellationToken cancellationToken = default)
         => SendRoutedAsync(friend, t => t.SendQuickReactionAsync(friend, reactionId, cancellationToken));
 
+    public SnowballPeerStatus GetSnowballPeerStatus(string petId)
+    {
+        var lan = _lan.GetSnowballPeerStatus(petId);
+        var gcp = _gcp.GetSnowballPeerStatus(petId);
+        if (lan == SnowballPeerStatus.Available || gcp == SnowballPeerStatus.Available)
+            return SnowballPeerStatus.Available;
+        return lan == SnowballPeerStatus.Unsupported || gcp == SnowballPeerStatus.Unsupported
+            ? SnowballPeerStatus.Unsupported : SnowballPeerStatus.Offline;
+    }
+
+    public Task<bool> SendSnowballAsync(FriendEntry friend, Guid eventId, CancellationToken cancellationToken = default)
+        => SendRoutedAsync(friend, transport => transport.SendSnowballAsync(friend, eventId, cancellationToken));
+
     public Task<bool> SendPetInteractionAsync(FriendEntry friend, string interactionType, CancellationToken cancellationToken = default)
         => SendRoutedAsync(friend, t => t.SendPetInteractionAsync(friend, interactionType, cancellationToken));
 
@@ -365,6 +379,7 @@ public sealed class HybridTransportRouter : ISocialTransport
         source.BubbleMessageReceived += OnSourceBubbleMessageReceived;
         source.QuickReactionReceived += OnSourceQuickReactionReceived;
         source.PetInteractionReceived += OnSourcePetInteractionReceived;
+        source.SnowballReceived += OnSourceSnowballReceived;
         source.MusicFrameReceived += OnSourceMusicFrameReceived;
         source.MusicFollowStateChanged += OnSourceMusicFollowStateChanged;
         source.GameEventReceived += OnSourceGameEventReceived;
@@ -381,6 +396,7 @@ public sealed class HybridTransportRouter : ISocialTransport
         source.BubbleMessageReceived -= OnSourceBubbleMessageReceived;
         source.QuickReactionReceived -= OnSourceQuickReactionReceived;
         source.PetInteractionReceived -= OnSourcePetInteractionReceived;
+        source.SnowballReceived -= OnSourceSnowballReceived;
         source.MusicFrameReceived -= OnSourceMusicFrameReceived;
         source.MusicFollowStateChanged -= OnSourceMusicFollowStateChanged;
         source.GameEventReceived -= OnSourceGameEventReceived;
@@ -436,6 +452,8 @@ public sealed class HybridTransportRouter : ISocialTransport
 
     private void OnSourceQuickReactionReceived(object? sender, QuickReactionReceivedEventArgs e)
         => QuickReactionReceived?.Invoke(this, e);
+
+    private void OnSourceSnowballReceived(object? sender, SnowballReceivedEventArgs e) => SnowballReceived?.Invoke(this, e);
 
     private void OnSourcePetInteractionReceived(object? sender, PetInteractionReceivedEventArgs e)
         => PetInteractionReceived?.Invoke(this, e);

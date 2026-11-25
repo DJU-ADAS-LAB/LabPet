@@ -107,7 +107,9 @@ public partial class VisitorPetWindow : Window, IMessageBubbleTarget
 
     private FriendEntry _friend;
     private string _appliedAppearanceSignature = string.Empty;
+    private readonly SnowballInteractionService? _snowballs;
     private PetRigHandle? _currentRig;
+    private bool _snowballSceneOwnsPose;
     private Point3D _nameplateAnchor;
     private double _petOpacity = PetDisplayLayoutHelper.MaxPetOpacity;
 
@@ -146,10 +148,12 @@ public partial class VisitorPetWindow : Window, IMessageBubbleTarget
         IAudioAnalyzer audioAnalyzer,
         SocialCoordinatorService social,
         VisitorPopupOrder? popupOrder = null,
-        Action<VisitorPetWindow>? beforeChatComposerOpen = null)
+        Action<VisitorPetWindow>? beforeChatComposerOpen = null,
+        SnowballInteractionService? snowballs = null)
     {
         InitializeComponent();
 
+        _snowballs = snowballs;
         _friend = friend;
         _meshFactory = meshFactory;
         _audioAnalyzer = audioAnalyzer;
@@ -460,6 +464,7 @@ public partial class VisitorPetWindow : Window, IMessageBubbleTarget
 
     public void ApplyFriendState(FriendEntry friend, PetAppearance appearance)
     {
+        SnowballMenuItem.DataContext = _snowballs?.ForFriend(friend);
         _friend = friend;
         VisitorNameText.Text = SocialCoordinatorService.FormatDisplayName(friend.OwnerName, friend.PetName);
 
@@ -1346,7 +1351,45 @@ public partial class VisitorPetWindow : Window, IMessageBubbleTarget
         }
 
         ComputeNormalizedLookDirection(out var lookX, out var lookY);
-        _animator.UpdateFrame(dt, lookX, lookY, VisitorBubblePopup.IsOpen);
+        if (!_snowballSceneOwnsPose)
+            _animator.UpdateFrame(dt, lookX, lookY, VisitorBubblePopup.IsOpen);
+    }
+
+    internal bool TryUseSnowballPose()
+    {
+        Dispatcher.VerifyAccess();
+        if (_snowballSceneOwnsPose || !IsAvailableForMessages || _currentRig is null) return false;
+        _snowballSceneOwnsPose = true;
+        return true;
+    }
+
+    internal bool AdvanceSnowballPose(SnowballActorPhase phase, bool beginThrow, double seconds, double lookX, double lookY)
+    {
+        Dispatcher.VerifyAccess();
+        if (!_snowballSceneOwnsPose || !IsAvailableForMessages || _currentRig is null
+            || (beginThrow && !_animator.TryStartSnowballThrow())) return false;
+        _animator.SetSnowballLaughing(phase == SnowballActorPhase.Laughing);
+        _animator.UpdateFrame(seconds, lookX, lookY, VisitorBubblePopup.IsOpen);
+        return true;
+    }
+
+    internal bool TryGetSnowballHandPhysical(out Point hand)
+    {
+        Dispatcher.VerifyAccess();
+        hand = default;
+        if (!IsAvailableForMessages || _currentRig is null || PresentationSource.FromVisual(VisitorViewport) is null
+            || !_currentRig.TryGetRightHandPosition(out var handPosition)
+            || !PetDisplayLayoutHelper.TryProjectPointToViewport(VisitorViewport, VisitorPetVisual, handPosition, out var local)) return false;
+        hand = VisitorViewport.PointToScreen(local);
+        return double.IsFinite(hand.X) && double.IsFinite(hand.Y);
+    }
+
+    internal void ReleaseSnowballPose()
+    {
+        Dispatcher.VerifyAccess();
+        if (!_snowballSceneOwnsPose) return;
+        _snowballSceneOwnsPose = false;
+        _animator.CancelSnowballInteraction();
     }
 
     private void ComputeNormalizedLookDirection(out double lookX, out double lookY)

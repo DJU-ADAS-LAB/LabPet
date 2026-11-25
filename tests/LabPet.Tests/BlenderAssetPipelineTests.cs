@@ -14,6 +14,106 @@ namespace LabPet.Tests;
 [Collection("WpfUi")]
 public sealed class BlenderAssetPipelineTests
 {
+    [Theory]
+    [InlineData(PetSpeciesIds.Joey)]
+    [InlineData(PetSpeciesIds.Chiikawa)]
+    [InlineData(PetSpeciesIds.ChibiCat)]
+    public void Snowball_HandPositionIncludesBodyTransformOnce(string species)
+    {
+        RunOnSta(() =>
+        {
+            var factory = new BlenderAssetPetMeshFactory(new ProceduralPetMeshFactory());
+            var rig = factory.BuildPetRig(new PetAppearance { SpeciesId = species });
+            var skin = Assert.IsType<PetSkinInstance>(rig.Skin);
+            skin.Update(rig, 1f / 60, 0, 0, 0, 0, -1, 0);
+            Assert.True(skin.TryGetRightHandPosition(out var local));
+            rig.BodyScale.ScaleX = 1.5;
+            rig.BodyScale.ScaleY = 0.8;
+            rig.BodyYaw.Angle = 90;
+            rig.BodyTranslate.OffsetX = -2;
+            rig.BodyTranslate.OffsetY = 3;
+            rig.BodyTranslate.OffsetZ = 4;
+            Assert.True(rig.TryGetRightHandPosition(out var hand));
+            var expected = new Point3D(local.Z - 2, local.Y * 0.8 + 3, -local.X * 1.5 + 4);
+            Assert.InRange((hand - expected).Length, 0, 0.00001);
+            Assert.True(skin.TryGetRightHandPosition(out var unchanged));
+            Assert.Equal(local, unchanged);
+            rig.BodyTranslate.OffsetX = double.NaN;
+            Assert.False(rig.TryGetRightHandPosition(out var invalid));
+            Assert.Equal(default(Point3D), invalid);
+        });
+    }
+
+    [Theory]
+    [InlineData(PetSpeciesIds.Chiikawa)]
+    [InlineData(PetSpeciesIds.ChibiCat)]
+    public void Snowball_ReleasesTypingIkAndReturnsHandToKeyboard(string species)
+    {
+        RunOnSta(() =>
+        {
+            var factory = new BlenderAssetPetMeshFactory(new ProceduralPetMeshFactory());
+            var rig = factory.BuildPetRig(new PetAppearance { SpeciesId = species });
+            var skin = Assert.IsType<PetSkinInstance>(rig.Skin);
+            Assert.Null(skin.Asset.Clips);
+            void Advance(SnowballThrowPose pose, int frames)
+            {
+                for (var i = 0; i < frames; i++)
+                    skin.Update(rig, 1f / 60, 0, 1, 0, 0, -1, 0, throwPose: pose);
+            }
+            Advance(default, 90);
+            Assert.True(skin.TryGetRightHandPosition(out var keyboardHand));
+            var pose = SnowballThrowPose.Evaluate(SnowballThrowPose.ReleaseSeconds);
+            Advance(pose, 30);
+            Assert.True(skin.TryGetRightHandPosition(out var releasedHand));
+            Assert.True(double.IsFinite(releasedHand.X) && double.IsFinite(releasedHand.Y) && double.IsFinite(releasedHand.Z));
+            Assert.True((releasedHand - keyboardHand).Length > 0.01, "투척 중 오른손의 키보드 IK가 해제되어야 합니다.");
+            Advance(default, 90);
+            Assert.True(skin.TryGetRightHandPosition(out var restoredHand));
+            Assert.InRange((restoredHand - keyboardHand).Length, 0, 0.0001);
+        });
+    }
+
+    [Theory]
+    [InlineData("idle")]
+    [InlineData("sleep")]
+    [InlineData("dance")]
+    public void Joey_SnowballDeformsSkinAndRestoresUnderlyingClip(string clip)
+    {
+        RunOnSta(() =>
+        {
+            var factory = new BlenderAssetPetMeshFactory(new ProceduralPetMeshFactory());
+            var rig = factory.BuildPetRig(new PetAppearance { SpeciesId = PetSpeciesIds.Joey });
+            var skin = Assert.IsType<PetSkinInstance>(rig.Skin);
+            Assert.NotNull(skin.Asset.Clips);
+            var models = GeometryModels(rig.RootModel).ToArray();
+            Point3D[] Snapshot() => models.SelectMany(m => ((MeshGeometry3D)m.Geometry).Positions).ToArray();
+            void Update(SnowballThrowPose pose = default) =>
+                skin.Update(rig, 1f / 60, 0, 0, 0, 0, -1, 0, clip, 0.25f, pose);
+            // 기본 클립의 시간은 고정하고 전환을 끝내 투척에 의한 변형만 비교한다.
+            for (var i = 0; i < 30; i++) Update();
+            var baseline = Snapshot();
+            Assert.True(skin.TryGetRightHandPosition(out var restingHand));
+            Assert.Contains(baseline, p => (p - restingHand).Length < 0.00001);
+            for (var attempt = 0; attempt < 10; attempt++)
+            {
+                Update(SnowballThrowPose.Evaluate(SnowballThrowPose.ReleaseSeconds));
+                Assert.True(skin.TryGetRightHandPosition(out var throwingHand));
+                Assert.True(double.IsFinite(throwingHand.X) && double.IsFinite(throwingHand.Y) && double.IsFinite(throwingHand.Z));
+                Assert.True((throwingHand - restingHand).Length > 0.001);
+                Assert.Contains(Snapshot(), p => (p - throwingHand).Length < 0.00001);
+                Assert.True(skin.TryGetRightHandPosition(out var repeatedHand));
+                Assert.Equal(throwingHand, repeatedHand);
+                var displacement = Snapshot().Zip(baseline, (a, b) => (a - b).Length).ToArray();
+                Assert.NotEmpty(displacement);
+                Assert.All(displacement, d => Assert.True(double.IsFinite(d)));
+                Assert.True(displacement.Max() > 0.001, "투척 자세가 실제 스킨 표면을 변형해야 합니다.");
+                Update();
+                var restored = Snapshot().Zip(baseline, (a, b) => (a - b).Length);
+                Assert.All(restored, d => Assert.InRange(d, 0, 0.00001));
+            }
+        });
+    }
+
     [Fact]
     public void Joey_AnimatesAllEmbeddedClipsWithTexturedGeometry()
     {

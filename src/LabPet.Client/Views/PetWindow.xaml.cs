@@ -730,6 +730,41 @@ public partial class PetWindow : Window, IMessageBubbleTarget
         return true;
     }
 
+    /// <summary>UI 스레드 전용. 현재 몸통 중심을 화면 물리 픽셀로 반환한다.</summary>
+    internal double SnowballPetScale => _viewModel.PetScale;
+
+    internal bool TryGetSnowballTargetPhysical(out Point targetPhysical)
+    {
+        targetPhysical = default;
+        if (!Dispatcher.CheckAccess() || Dispatcher.HasShutdownStarted ||
+            _isClosingOrClosed || !IsVisible || _currentRig is not { } rig ||
+            PresentationSource.FromVisual(PetViewport) is null) return false;
+        var bounds = rig.BodyBounds;
+        if (bounds.IsEmpty || bounds.SizeX <= 0 || bounds.SizeY <= 0) return false;
+        var center = new Point3D(bounds.X + bounds.SizeX * 0.5,
+            bounds.Y + bounds.SizeY * 0.5, bounds.Z + bounds.SizeZ * 0.5);
+        center = rig.BodyTransform?.Transform(center) ?? center;
+        if (!PetDisplayLayoutHelper.TryProjectPointToViewport(
+            PetViewport, PetVisual, center, out var viewportDip)) return false;
+        var physical = PetViewport.PointToScreen(viewportDip);
+        if (!double.IsFinite(physical.X) || !double.IsFinite(physical.Y) ||
+            Math.Abs(physical.X) > 10000000 || Math.Abs(physical.Y) > 10000000) return false;
+        targetPhysical = physical;
+        return true;
+    }
+
+    /// <summary>공용 눈덩이 연출 관리자가 명중 시 UI 스레드에서 호출한다.</summary>
+    internal bool TryTriggerSnowballHit()
+    {
+        // 숨김·종료·리그 해제 이후의 늦은 명중은 재생하지 않는다.
+        if (!TryGetSnowballTargetPhysical(out _)) return false;
+        _animator.TriggerSnowballHit();
+        // 유휴 갱신 중에도 짧은 피격 반응을 부드럽게 재생한다.
+        if (_frameTimer.Interval != ActiveFrameInterval)
+            _frameTimer.Interval = ActiveFrameInterval;
+        return true;
+    }
+
     private void OnSocialPetReactionTriggered(object? sender, EventArgs e)
     {
         Dispatcher.BeginInvoke(() => _animator.TriggerPetReaction());

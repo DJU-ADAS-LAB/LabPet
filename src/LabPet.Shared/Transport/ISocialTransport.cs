@@ -23,6 +23,7 @@ public interface ISocialTransport : IAsyncDisposable
     event EventHandler<BubbleMessageReceivedEventArgs>? BubbleMessageReceived;
     event EventHandler<QuickReactionReceivedEventArgs>? QuickReactionReceived;
     event EventHandler<PetInteractionReceivedEventArgs>? PetInteractionReceived;
+    event EventHandler<SnowballReceivedEventArgs>? SnowballReceived { add { } remove { } }
     event EventHandler<MusicFrameReceivedEventArgs>? MusicFrameReceived;
     event EventHandler<MusicFollowStateChangedEventArgs>? MusicFollowStateChanged;
     event EventHandler<GameEventReceivedEventArgs>? GameEventReceived;
@@ -60,6 +61,10 @@ public interface ISocialTransport : IAsyncDisposable
 
     Task<bool> SendBubbleMessageAsync(FriendEntry friend, string message, CancellationToken cancellationToken = default);
     Task<bool> SendQuickReactionAsync(FriendEntry friend, string reactionId, CancellationToken cancellationToken = default);
+    SnowballPeerStatus GetSnowballPeerStatus(string petId) => SnowballPeerStatus.Unsupported;
+    Task<bool> SendSnowballAsync(FriendEntry friend, Guid eventId, CancellationToken cancellationToken = default)
+        => Task.FromResult(false);
+
     Task<bool> SendPetInteractionAsync(FriendEntry friend, string interactionType, CancellationToken cancellationToken = default);
     Task<bool> SetMusicFollowAsync(FriendEntry hostFriend, bool enable, CancellationToken cancellationToken = default);
     Task<bool> SendGameEventAsync(FriendEntry friend, GameEventPayload payload, CancellationToken cancellationToken = default);
@@ -149,6 +154,15 @@ public sealed class PetInteractionReceivedEventArgs(string senderPetId, string i
 {
     public string SenderPetId { get; } = senderPetId;
     public string InteractionType { get; } = interactionType;
+}
+
+public enum SnowballPeerStatus { Offline, Unsupported, Available }
+
+public sealed class SnowballReceivedEventArgs(string senderPetId, Guid eventId, DateTimeOffset timestampUtc) : EventArgs
+{
+    public string SenderPetId { get; } = senderPetId;
+    public Guid EventId { get; } = eventId;
+    public DateTimeOffset TimestampUtc { get; } = timestampUtc;
 }
 
 public sealed class MusicFrameReceivedEventArgs(string hostPetId, MusicFrameData frame) : EventArgs

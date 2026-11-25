@@ -92,12 +92,24 @@ internal sealed class AuthoredPetClips
     }
 
     internal void Apply(ReadOnlySpan<BonePose> pose, PetRigHandle rig, float typing, float left, float right,
-        Matrix4x4[] world, Matrix4x4[] palette, MatrixTransform3D head)
+        Matrix4x4[] world, Matrix4x4[] palette, MatrixTransform3D head, SnowballThrowPose throwPose = default)
     {
         for (var i = 0; i < _bones.Length; i++)
         {
             var local = pose[i].ToMatrix();
             var bone = _bones[i];
+            if (bone.Joint.Name == "Wing.R" && throwPose.Weight > 0
+                && double.IsFinite(throwPose.Weight) && double.IsFinite(throwPose.ArmPitch)
+                && double.IsFinite(throwPose.ArmRoll))
+            {
+                var weight = (float)Math.Clamp(throwPose.Weight, 0, 1);
+                var radians = MathF.PI / 180;
+                var target = Quaternion.CreateFromYawPitchRoll(0,
+                    (float)Math.Clamp(throwPose.ArmPitch / throwPose.Weight, -65, 65) * radians,
+                    (float)Math.Clamp(throwPose.ArmRoll / throwPose.Weight, -65, 65) * radians);
+                var throwing = pose[i] with { Rotation = Quaternion.Slerp(pose[i].Rotation, target, weight) };
+                local = throwing.ToMatrix();
+            }
             if (bone.Joint.Name == "Head")
                 local = Matrix4x4.CreateFromYawPitchRoll((float)rig.HeadYaw.Angle*MathF.PI/180,
                     (float)rig.HeadPitch.Angle*MathF.PI/180,(float)rig.HeadRoll.Angle*MathF.PI/180) * local;

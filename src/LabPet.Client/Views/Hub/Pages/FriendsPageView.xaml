@@ -306,14 +306,27 @@
                                      Height="36" />
                         </DockPanel>
 
-                        <TextBlock Text="퀵 이모지 · 인사하기" FontWeight="Bold" FontSize="13" Foreground="{StaticResource HubTextPrimaryBrush}" Margin="0,0,0,6" />
-                        <WrapPanel Margin="0,0,0,10">
-                            <Button Content="♥" Command="{Binding SendQuickReactionCommand}" CommandParameter="♥" Width="46" Height="34" Margin="0,0,6,4" />
-                            <Button Content="👏" Command="{Binding SendQuickReactionCommand}" CommandParameter="👏" Width="46" Height="34" Margin="0,0,6,4" />
-                            <Button Content="🎵" Command="{Binding SendQuickReactionCommand}" CommandParameter="🎵" Width="46" Height="34" Margin="0,0,6,4" />
-                            <Button Content="🔥" Command="{Binding SendQuickReactionCommand}" CommandParameter="🔥" Width="46" Height="34" Margin="0,0,10,4" />
-                            <Button Content="인사하기 보내기" Command="{Binding SendPetInteractionCommand}" Height="34" />
-                        </WrapPanel>
+                        <TextBlock Text="퀵 반응" FontWeight="Bold" FontSize="13" Foreground="{StaticResource HubTextPrimaryBrush}" Margin="0,0,0,6" />
+                        <Grid Margin="0,0,0,10">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <Button Grid.Column="0" Content="♥" Command="{Binding SendQuickReactionCommand}" CommandParameter="♥" Height="34" Margin="0,0,4,0" Padding="0" />
+                            <Button Grid.Column="1" Content="👏" Command="{Binding SendQuickReactionCommand}" CommandParameter="👏" Height="34" Margin="0,0,4,0" Padding="0" />
+                            <Button Grid.Column="2" Content="🎵" Command="{Binding SendQuickReactionCommand}" CommandParameter="🎵" Height="34" Margin="0,0,4,0" Padding="0" />
+                            <Button Grid.Column="3" Content="🔥" Command="{Binding SendQuickReactionCommand}" CommandParameter="🔥" Height="34" Margin="0,0,4,0" Padding="0" />
+                            <Button Grid.Column="4" Content="인사하기 보내기" Command="{Binding SendPetInteractionCommand}" Height="34" Margin="0,0,4,0" />
+                            <Button x:Name="SnowballQuickReactionButton" Grid.Column="5" Width="38" Height="34" Padding="0"
+                                    Content="{Binding SelectedFriend.Snowball.Icon, FallbackValue=❄}"
+                                    ToolTip="{Binding SelectedFriend.Snowball.Tooltip, FallbackValue=눈던지기}"
+                                    AutomationProperties.Name="눈던지기" ToolTipService.ShowOnDisabled="True"
+                                    Command="{Binding SelectedFriend.Snowball.Command}" />
+                        </Grid>
 
                         <Separator Margin="0,2,0,10" />
 

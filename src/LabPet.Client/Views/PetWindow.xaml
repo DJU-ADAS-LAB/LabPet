@@ -464,6 +464,7 @@
 
                                                 <TextBlock Grid.Column="1"
                                                            Text="{Binding DisplayTitle}"
+                                                           ToolTip="{Binding DisplayTitle}"
                                                            FontSize="11.5"
                                                            FontWeight="SemiBold"
                                                            Foreground="#FF1F2430"
@@ -471,7 +472,7 @@
                                                            TextTrimming="CharacterEllipsis" />
                                             </Grid>
 
-                                            <!-- 메시지 / 인사하기 / 노래 따라하기 / 데려오기 -->
+                                            <!-- 메시지 / 인사하기 / 눈던지기 / 노래 따라하기 / 데려오기 -->
                                             <StackPanel Grid.Column="1"
                                                         Orientation="Horizontal"
                                                         VerticalAlignment="Center">
@@ -486,6 +487,13 @@
                                                         Style="{StaticResource MiniActionIconButton}"
                                                         Command="{Binding DataContext.QuickPetFriendCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
                                                         CommandParameter="{Binding}"
+                                                        Margin="0,0,3,0" />
+                                                <Button Content="{Binding Snowball.Icon, FallbackValue=❄}"
+                                                        ToolTip="{Binding Snowball.Tooltip, FallbackValue=눈던지기}"
+                                                        AutomationProperties.Name="눈던지기"
+                                                        ToolTipService.ShowOnDisabled="True"
+                                                        Style="{StaticResource MiniActionIconButton}"
+                                                        Command="{Binding Snowball.Command}"
                                                         Margin="0,0,3,0" />
                                                 <Button Content="{Binding MusicButtonIcon}"
                                                         ToolTip="{Binding MusicTooltip}"

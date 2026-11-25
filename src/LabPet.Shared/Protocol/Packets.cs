@@ -123,7 +123,18 @@ public sealed class QuickReactionPayload
 
 public sealed class PetInteractionPayload
 {
-    public string InteractionType { get; set; } = "pet";
+    public const string PetType = "pet";
+    public const string SnowballType = "snowball";
+    private static readonly Version FirstSnowballVersion = new(0, 3, 13);
+
+    public static bool SupportsSnowball(string appVersion) =>
+        Version.TryParse(appVersion, out var version) && version >= FirstSnowballVersion;
+
+    public string InteractionType { get; set; } = PetType;
+
+    /// <summary>눈던지기의 논리 이벤트 ID. 재전송 및 LAN/GCP 경로 전환 시 같은 값을 유지한다.</summary>
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public string? EventId { get; set; }
 }
 
 public sealed class MusicFollowPayload

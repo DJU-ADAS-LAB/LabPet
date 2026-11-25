@@ -248,8 +248,18 @@ public sealed partial class LanP2pTransport
             case PacketType.PetInteraction:
             {
                 var p = JsonSerializer.Deserialize<PetInteractionPayload>(effectivePayloadJson, ProtocolJson.PacketOptions);
-                PetInteractionReceived?.Invoke(this, new PetInteractionReceivedEventArgs(
-                    header.SenderPetId, p?.InteractionType ?? "pet"));
+                if (p?.InteractionType == PetInteractionPayload.PetType)
+                {
+                    PetInteractionReceived?.Invoke(this, new PetInteractionReceivedEventArgs(header.SenderPetId, p.InteractionType));
+                    break;
+                }
+
+                if (p?.InteractionType != PetInteractionPayload.SnowballType
+                    || !Guid.TryParseExact(p.EventId, "N", out var eventId) || eventId == Guid.Empty
+                    || !PetInteractionPayload.SupportsSnowball(header.AppVersion))
+                    return RejectAck(header.MessageId, "INVALID_INTERACTION");
+
+                SnowballReceived?.Invoke(this, new SnowballReceivedEventArgs(header.SenderPetId, eventId, header.TimestampUtc));
                 break;
             }
 

@@ -72,6 +72,7 @@ public sealed partial class LanP2pTransport : ISocialTransport
     public event EventHandler<BubbleMessageReceivedEventArgs>? BubbleMessageReceived;
     public event EventHandler<QuickReactionReceivedEventArgs>? QuickReactionReceived;
     public event EventHandler<PetInteractionReceivedEventArgs>? PetInteractionReceived;
+    public event EventHandler<SnowballReceivedEventArgs>? SnowballReceived;
     public event EventHandler<MusicFrameReceivedEventArgs>? MusicFrameReceived;
     public event EventHandler<MusicFollowStateChangedEventArgs>? MusicFollowStateChanged;
     public event EventHandler<GameEventReceivedEventArgs>? GameEventReceived;
@@ -326,6 +327,24 @@ public sealed partial class LanP2pTransport : ISocialTransport
             PacketType.QuickReaction,
             new QuickReactionPayload { ReactionId = reactionId },
             cancellationToken);
+
+    public SnowballPeerStatus GetSnowballPeerStatus(string petId)
+    {
+        var peer = GetDiscoveredPeers().FirstOrDefault(p =>
+            string.Equals(p.PetId, petId, StringComparison.OrdinalIgnoreCase));
+        if (peer is null) return SnowballPeerStatus.Offline;
+        return !peer.RequiresUpdate && PetInteractionPayload.SupportsSnowball(peer.AppVersion)
+            ? SnowballPeerStatus.Available : SnowballPeerStatus.Unsupported;
+    }
+
+    public Task<bool> SendSnowballAsync(FriendEntry friend, Guid eventId, CancellationToken cancellationToken = default)
+    {
+        if (eventId == Guid.Empty || GetSnowballPeerStatus(friend.PetId) != SnowballPeerStatus.Available)
+            return Task.FromResult(false);
+        return SendFriendControlPacketAsync(friend, PacketType.PetInteraction,
+            new PetInteractionPayload { InteractionType = PetInteractionPayload.SnowballType, EventId = eventId.ToString("N") },
+            cancellationToken);
+    }
 
     public Task<bool> SendPetInteractionAsync(FriendEntry friend, string interactionType, CancellationToken cancellationToken = default)
         => SendFriendControlPacketAsync(

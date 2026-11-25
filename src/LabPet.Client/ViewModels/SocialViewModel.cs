@@ -65,6 +65,7 @@ public sealed partial class PeerListItemViewModel : ObservableObject
 public sealed class FriendListItemViewModel
 {
     public FriendEntry Entry { get; }
+    public SnowballAction? Snowball { get; init; }
     public PetAppearance EffectiveAppearance { get; }
     public bool IsOnline { get; }
     public bool IsMusicActive { get; }
@@ -144,6 +145,7 @@ public sealed partial class SocialViewModel : ObservableObject
     private const string MessageSendFailureStatus = "메시지 전송에 실패했습니다.";
 
     private readonly SocialCoordinatorService _social;
+    private readonly SnowballInteractionService? _snowballs;
     private readonly HashSet<string> _retryableFailedPeerIds = new(StringComparer.OrdinalIgnoreCase);
     private Func<string, bool>? _isVisitorActivePredicate;
 
@@ -160,9 +162,10 @@ public sealed partial class SocialViewModel : ObservableObject
     public bool HasSelectedFriend => SelectedFriend is not null;
     public string RemoteConnectionStatusText => _social.ConnectionSummary;
 
-    public SocialViewModel(SocialCoordinatorService social)
+    public SocialViewModel(SocialCoordinatorService social, SnowballInteractionService? snowballs = null)
     {
         _social = social;
+        _snowballs = snowballs;
         _preferLocalMusicWhenActive = _social.PreferLocalMusicWhenActive;
         _social.StateChanged += OnSocialStateChanged;
         _social.TransportErrorReported += OnTransportErrorReported;
@@ -247,7 +250,10 @@ public sealed partial class SocialViewModel : ObservableObject
             var live = peers.FirstOrDefault(p => string.Equals(p.PetId, friend.PetId, StringComparison.OrdinalIgnoreCase));
             var isFollowing = string.Equals(_social.FollowingHostPetId, friend.PetId, StringComparison.OrdinalIgnoreCase);
             var isVisiting = _isVisitorActivePredicate?.Invoke(friend.PetId) ?? false;
-            Friends.Add(new FriendListItemViewModel(friend, live, isFollowing, isVisiting));
+            Friends.Add(new FriendListItemViewModel(friend, live, isFollowing, isVisiting)
+            {
+                Snowball = _snowballs?.ForFriend(friend)
+            });
         }
 
         if (selectedPetId is not null)

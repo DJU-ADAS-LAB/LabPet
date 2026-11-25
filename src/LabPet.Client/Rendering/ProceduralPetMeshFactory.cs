@@ -111,6 +111,7 @@ public sealed class ProceduralPetMeshFactory : IPetMeshFactory
         AxisAngleRotation3D? rightArmRot = null;
         AxisAngleRotation3D? leftArmPitch = null;
         AxisAngleRotation3D? rightArmPitch = null;
+        Func<Point3D>? rightHandPosition = null;
 
         float headPivotY;
         float headSocketY;
@@ -160,6 +161,7 @@ public sealed class ProceduralPetMeshFactory : IPetMeshFactory
                 rightPadMb.AddEllipsoid(new Vector3(0.33f, -0.62f, 0.51f), 0.065f, 0.055f, 0.03f, 12, 8);
                 triangleCount += AddGeometry(rightPawGroup, rightPadMb, accentMaterial);
                 bodyGroup.Children.Add(rightPawGroup);
+                rightHandPosition = () => rightPawGroup.Transform.Transform(new Point3D(0.33, -0.60, 0.51));
 
                 // 귀여운 앉은 뒷발 2개
                 var backFeetMb = new MeshBuilder(true, false);
@@ -339,6 +341,7 @@ public sealed class ProceduralPetMeshFactory : IPetMeshFactory
                 rightFrontPawMb.AddEllipsoid(new Vector3(0.19f, -0.86f, 0.20f), 0.13f, 0.085f, 0.15f, 14, 8);
                 triangleCount += AddGeometry(rightFrontGroup, rightFrontPawMb, softLightBodyMaterial);
                 bodyGroup.Children.Add(rightFrontGroup);
+                rightHandPosition = () => rightFrontGroup.Transform.Transform(new Point3D(0.19, -0.86, 0.35));
 
                 // 크고 동그란 머리 + 통통한 볼살
                 var headMb = new MeshBuilder(true, false);
@@ -429,6 +432,8 @@ public sealed class ProceduralPetMeshFactory : IPetMeshFactory
                 var rightWingMb = new MeshBuilder(true, false);
                 rightWingMb.AddEllipsoid(new Vector3(1.12f, 0.08f, -0.04f), 0.26f, 0.14f, 0.12f, 16, 10);
                 triangleCount += AddGeometry(headGroup, rightWingMb, softLightBodyMaterial, rightWingTf);
+                rightHandPosition = () => headGroup.Transform.Transform(
+                    rightWingTf.Transform(new Point3D(1.30, 0.08, 0.02)));
 
                 break;
             }
@@ -475,6 +480,7 @@ public sealed class ProceduralPetMeshFactory : IPetMeshFactory
                 var rightArmMb = new MeshBuilder(true, false);
                 rightArmMb.AddEllipsoid(new Vector3(0.62f, -0.30f, 0.14f), 0.15f, 0.11f, 0.12f, 14, 10);
                 triangleCount += AddGeometry(bodyGroup, rightArmMb, bodyMaterial, rightArmTf);
+                rightHandPosition = () => rightArmTf.Transform(new Point3D(0.72, -0.30, 0.22));
 
                 tailRot = new AxisAngleRotation3D(new Vector3D(0, 1, 0), 0);
                 var tailGroup = new Model3DGroup
@@ -580,6 +586,8 @@ public sealed class ProceduralPetMeshFactory : IPetMeshFactory
                 var rightArmMb = new MeshBuilder(true, false);
                 rightArmMb.AddEllipsoid(new Vector3(1.02f, -0.18f, 0.24f), 0.22f, 0.14f, 0.16f, 16, 10);
                 triangleCount += AddGeometry(headGroup, rightArmMb, bodyMaterial, rightArmTf);
+                rightHandPosition = () => headGroup.Transform.Transform(
+                    rightArmTf.Transform(new Point3D(1.18, -0.18, 0.34)));
 
                 break;
             }
@@ -674,6 +682,7 @@ public sealed class ProceduralPetMeshFactory : IPetMeshFactory
             TotalTriangleCount = triangleCount,
             NameplateAnchor = new Point3D(0, bodyGroup.Bounds.Y, 0.35),
             BodyBounds = bodyGroup.Bounds,
+            BodyTransform = bodyTransformGroup,
             BodyScale = bodyScale,
             BodyTranslate = bodyTranslate,
             BodyYaw = bodyYaw,
@@ -697,6 +706,7 @@ public sealed class ProceduralPetMeshFactory : IPetMeshFactory
             RightArmRotation = rightArmRot,
             LeftArmPitch = leftArmPitch,
             RightArmPitch = rightArmPitch,
+            RightHandPositionProvider = rightHandPosition,
             MusicParticles = musicParticles,
             AuraRotation = auraRot,
             AuraTranslate = auraTrans,

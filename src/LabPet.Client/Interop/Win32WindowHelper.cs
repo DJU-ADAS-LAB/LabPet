@@ -62,6 +62,47 @@ public static partial class Win32WindowHelper
 
     internal static bool IsValidWindowHandle(IntPtr handle) => handle != IntPtr.Zero && IsWindow(handle);
 
+    /// <summary>대상 창이 위치한 모니터 전체 경계. 반환 단위는 물리 픽셀이며 WPF DIP가 아니다.</summary>
+    internal static bool TryGetNearestMonitorBounds(Window window, out Rect bounds)
+    {
+        window.Dispatcher.VerifyAccess();
+        bounds = Rect.Empty;
+        var handle = new WindowInteropHelper(window).Handle;
+        if (!IsValidWindowHandle(handle)) return false;
+        var monitor = MonitorFromWindow(handle, 2);
+        var info = new NativeMonitorInfo { Size = Marshal.SizeOf<NativeMonitorInfo>() };
+        if (monitor == IntPtr.Zero || !GetMonitorInfo(monitor, ref info)) return false;
+        var rect = info.Monitor;
+        var width = (double)rect.Right - rect.Left;
+        var height = (double)rect.Bottom - rect.Top;
+        if (width <= 0 || height <= 0) return false;
+        bounds = new Rect(rect.Left, rect.Top, width, height);
+        return true;
+    }
+
+    /// <summary>오버레이 HWND의 위치·크기를 물리 픽셀로 적용한다. 경계 밖으로 반올림하지 않는다.</summary>
+    internal static bool TrySetOverlayPhysicalBounds(Window window, Rect bounds)
+    {
+        window.Dispatcher.VerifyAccess();
+        if (bounds.IsEmpty || !double.IsFinite(bounds.Left) || !double.IsFinite(bounds.Top)
+            || !double.IsFinite(bounds.Right) || !double.IsFinite(bounds.Bottom)
+            || bounds.Left < int.MinValue || bounds.Top < int.MinValue
+            || bounds.Right > int.MaxValue || bounds.Bottom > int.MaxValue
+            || bounds.Width <= 0 || bounds.Height <= 0
+            || bounds.Width > int.MaxValue || bounds.Height > int.MaxValue) return false;
+        var left = Math.Ceiling(bounds.Left);
+        var top = Math.Ceiling(bounds.Top);
+        var width = Math.Floor(bounds.Right) - left;
+        var height = Math.Floor(bounds.Bottom) - top;
+        if (width < 1 || height < 1) return false;
+        var handle = new WindowInteropHelper(window).Handle;
+        if (!IsValidWindowHandle(handle)) return false;
+        if (SetWindowPos(handle, HwndTopMost, (int)left, (int)top, (int)width, (int)height,
+            SwpNoActivate | SwpNoOwnerZOrder)) return true;
+        System.Diagnostics.Debug.WriteLine($"눈던지기 오버레이 경계 적용 실패 ({Marshal.GetLastPInvokeError()})");
+        return false;
+    }
+
     public static bool TryGetNearestWorkArea(Window window, out Rect bounds)
     {
         const uint monitorDefaultToNearest = 2;

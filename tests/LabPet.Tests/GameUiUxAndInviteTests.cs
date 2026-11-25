@@ -406,6 +406,164 @@ public sealed class GameUiUxAndInviteTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task SnowballButtons_ShareOneCommandAndCooldownAcrossAllThreeViews()
+    {
+        await WpfTestHost.RunAsync(async () =>
+        {
+            _hostTransport.HandleDiscoveryHello(new DiscoveryHelloPacket
+            {
+                PetId = _guestProfile.PetId, PetName = _guestProfile.PetName,
+                TcpPort = _guestTransport.BoundTcpPort, AppVersion = "0.3.13"
+            }, IPAddress.Loopback.ToString(), CancellationToken.None);
+            using var snowballs = new SnowballInteractionService(_hostTransport);
+            using var receiver = new SnowballInteractionService(_guestTransport);
+            var received = new List<Guid>();
+            receiver.Received += (_, e) => received.Add(e.EventId);
+            var factory = new ProceduralPetMeshFactory();
+            var vm = new PetWindowViewModel(_hostStore, _hostSocial, snowballs);
+            using var audio = new TestAudioAnalyzer();
+            using var hook = new GlobalActivityHookService();
+            var pet = new PetWindow(vm, factory, new PetPortraitRenderer(factory), new PetAnimationController(),
+                audio, hook, new SoloProgressionService(), new PomodoroTimerService(), _hostSocial)
+            {
+                Left = 400, Top = 350, ShowActivated = false
+            };
+            var visit = new VisitorPetWindow(_guestAsFriend, _guestAsFriend.CachedAppearance, factory, audio, _hostSocial,
+                snowballs: snowballs);
+            using var page = new FriendsPageView(new SocialViewModel(_hostSocial, snowballs), vm, factory);
+            var hub = new Window { Content = page, Width = 840, Height = 580, ShowActivated = false };
+            vm.ApplyProfile(_hostProfile);
+            vm.RefreshQuickOverlayEntries();
+            pet.Show();
+            hub.Show();
+            visit.Show();
+            try
+            {
+                var popup = Assert.IsType<System.Windows.Controls.Primitives.Popup>(pet.FindName("FriendOverlayPopup"));
+                popup.IsOpen = true;
+                await WpfTestHost.FlushAsync();
+                var quickButton = Assert.Single(Descendants<Button>(popup.Child),
+                    button => AutomationName(button) == "눈던지기");
+                var hubButton = Assert.IsType<Button>(page.FindName("SnowballQuickReactionButton"));
+                var visitorMenu = Assert.IsType<Viewport3D>(visit.FindName("VisitorViewport")).ContextMenu;
+                var visitButton = Assert.Single(visitorMenu.Items.OfType<MenuItem>(),
+                    item => AutomationName(item) == "눈던지기");
+                var state = Assert.Single(vm.QuickOverlayEntries).Snowball!;
+                Assert.Same(state.Command, quickButton.Command);
+                Assert.Same(state.Command, hubButton.Command);
+                Assert.Same(state.Command, visitButton.Command);
+                Assert.Equal(26, quickButton.ActualWidth);
+                Assert.Equal(24, quickButton.ActualHeight);
+
+                foreach (var command in new[] { quickButton.Command, hubButton.Command, visitButton.Command })
+                {
+                    Assert.True(command.CanExecute(null));
+                    var send = state.Command.ExecuteAsync(null);
+                    Assert.False(quickButton.Command.CanExecute(null));
+                    Assert.False(hubButton.Command.CanExecute(null));
+                    Assert.False(visitButton.Command.CanExecute(null));
+                    Assert.Equal("1초", state.Icon);
+                    await send.WaitAsync(TimeSpan.FromSeconds(4));
+                    await WpfTestHost.FlushAsync();
+                    Assert.Equal("❄", state.Icon);
+                }
+                Assert.Equal(3, received.Distinct().Count());
+            }
+            finally
+            {
+                visit.Close();
+                hub.Close();
+                pet.Close();
+            }
+        });
+
+        static string AutomationName(DependencyObject element) =>
+            System.Windows.Automation.AutomationProperties.GetName(element);
+
+        static IEnumerable<T> Descendants<T>(DependencyObject element) where T : DependencyObject
+        {
+            if (element is T match) yield return match;
+            for (var i = 0; i < VisualTreeHelper.GetChildrenCount(element); i++)
+                foreach (var child in Descendants<T>(VisualTreeHelper.GetChild(element, i))) yield return child;
+        }
+    }
+
+    [Fact]
+    public async Task SnowballDesktopScene_UsesTemporaryOrLiveVisitorRigAndCleansUpWhenTargetHides()
+    {
+        await WpfTestHost.RunAsync(async () =>
+        {
+            var factory = new ProceduralPetMeshFactory();
+            var vm = new PetWindowViewModel(_hostStore, _hostSocial);
+            using var audio = new TestAudioAnalyzer();
+            using var hook = new GlobalActivityHookService();
+            var animator = new PetAnimationController();
+            var pet = new PetWindow(vm, factory, new PetPortraitRenderer(factory), animator, audio,
+                hook, new SoloProgressionService(), new PomodoroTimerService(), _hostSocial)
+            {
+                Left = 400, Top = 350, ShowActivated = false
+            };
+            var visit = new VisitorPetWindow(_guestAsFriend, _guestAsFriend.CachedAppearance, factory, audio, _hostSocial)
+            {
+                Left = 650, Top = 350, ShowActivated = false
+            };
+            using var scene = new SnowballDesktopScene(pet, factory,
+                id => id == _guestProfile.PetId && visit.IsVisible ? visit : null);
+            vm.ApplyProfile(_hostProfile);
+            pet.Show();
+
+            SnowballOverlayWindow GetOverlay() => Assert.Single(Application.Current.Windows.OfType<SnowballOverlayWindow>());
+            try
+            {
+                var sender = Guid.Parse(_guestProfile.PetId);
+                await WpfTestHost.FlushAsync();
+                Assert.True(scene.TryReceive(sender, Guid.NewGuid(), _guestAsFriend.CachedAppearance));
+                var overlay = GetOverlay();
+                Assert.Single(overlay.Scene.Children.OfType<SnowballPetVisual>());
+                await WaitForHitAsync();
+                pet.Hide();
+                Assert.False(overlay.IsVisible);
+                Assert.Empty(Application.Current.Windows.OfType<SnowballOverlayWindow>());
+
+                pet.Show();
+                visit.Show();
+                var recovery = System.Diagnostics.Stopwatch.StartNew();
+                while (animator.IsReactingToSnowball && recovery.Elapsed < TimeSpan.FromSeconds(2))
+                    await Task.Delay(15);
+                Assert.False(animator.IsReactingToSnowball);
+                visit.OpenChatComposer();
+                visit.ChatComposerInputText = "보내지 않은 메시지";
+                Assert.True(visit.ShowChatMessage("투척 중 유지할 말풍선", 12_000));
+                await WpfTestHost.FlushAsync();
+                var position = new Point(visit.Left, visit.Top);
+                Assert.True(scene.TryReceive(sender, Guid.NewGuid(), _guestAsFriend.CachedAppearance));
+                Assert.Empty(GetOverlay().Scene.Children.OfType<SnowballPetVisual>());
+                await WaitForHitAsync();
+                Assert.Equal(position, new Point(visit.Left, visit.Top));
+                Assert.True(visit.IsChatComposerOpen);
+                Assert.Equal("보내지 않은 메시지", visit.ChatComposerInputText);
+                Assert.False(visit.CurrentBubblePhysicalBounds.IsEmpty);
+                scene.RemoveVisitor(_guestProfile.PetId);
+                pet.Hide();
+                Assert.Empty(Application.Current.Windows.OfType<SnowballOverlayWindow>());
+            }
+            finally
+            {
+                visit.Close();
+                pet.Close();
+            }
+
+            async Task WaitForHitAsync()
+            {
+                var deadline = System.Diagnostics.Stopwatch.StartNew();
+                while (!animator.IsReactingToSnowball && deadline.Elapsed < TimeSpan.FromSeconds(5))
+                    await Task.Delay(15);
+                Assert.True(animator.IsReactingToSnowball);
+            }
+        });
+    }
+
+    [Fact]
     public async Task InviteCardWindow_DoesNotStealFocus_AllowsClickEvenDuringClickThroughMode()
     {
         await WpfTestHost.RunAsync(() =>

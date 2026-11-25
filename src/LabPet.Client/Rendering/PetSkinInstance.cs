@@ -29,6 +29,58 @@ internal sealed class PetSkinInstance(CharacterSkin asset)
     private readonly AuthoredPetClips.BonePose[] _transitionStart = asset.Clips is null ? [] : new AuthoredPetClips.BonePose[asset.Bones.Length];
     private readonly Matrix4x4[] _world = new Matrix4x4[asset.Bones.Length];
 
+    private bool _handAnchorResolved;
+    private int _handBone = -1;
+    private Vector3 _handRest;
+    private SkinSurface? _handSurface;
+    private int _handVertex;
+
+    /// <summary>스킨 갱신 후 호출. 몸통 변환 전 모델 좌표이며 화면 픽셀/DIP가 아니다.</summary>
+    internal bool TryGetRightHandPosition(out Point3D position)
+    {
+        position = default;
+        if (!_handAnchorResolved)
+        {
+            _handAnchorResolved = true;
+            _handBone = Array.FindIndex(asset.Bones, b => b.Name is "RightArmTip" or "RightPawTip" or "Wing.R");
+            if (_handBone >= 0)
+            {
+                _handRest = asset.Bones[_handBone].End;
+                if (asset.Clips is not null)
+                {
+                    // 제작 모델에는 손끝 메타데이터가 없어 날개에 주로 결합된 원위 표면점을 선택한다.
+                    var farthest = 0f;
+                    foreach (var surface in asset.Surfaces.Values)
+                    for (var i = 0; i < surface.Positions.Length; i++)
+                    {
+                        var influence = 0f;
+                        for (var j = 0; j < 4; j++)
+                            if ((int)surface.Joints[i][j] == _handBone) influence += surface.Weights[i][j];
+                        var distance = Vector3.DistanceSquared(surface.Positions[i], _handRest);
+                        if (influence < 0.5f || !float.IsFinite(distance) || distance <= farthest) continue;
+                        farthest = distance;
+                        _handSurface = surface;
+                        _handVertex = i;
+                    }
+                }
+            }
+        }
+        if (_handBone < 0) return false;
+        Vector3 point;
+        if (asset.Clips is null) point = Vector3.Transform(_handRest, _palette[_handBone]);
+        else if (_handSurface is { } data)
+        {
+            point = Vector3.Zero;
+            for (var j = 0; j < 4; j++)
+                point += Vector3.Transform(data.Positions[_handVertex], _palette[(int)data.Joints[_handVertex][j]])
+                    * data.Weights[_handVertex][j];
+        }
+        else return false;
+        if (!float.IsFinite(point.X) || !float.IsFinite(point.Y) || !float.IsFinite(point.Z)) return false;
+        position = new(point.X, point.Y, point.Z);
+        return true;
+    }
+
     internal CharacterSkin Asset => asset;
     internal bool IsAuthoredTransitioning => _transitionElapsed < AuthoredTransitionSeconds;
 
@@ -36,12 +88,13 @@ internal sealed class PetSkinInstance(CharacterSkin asset)
         _surfaces.Add(new(model, part.Geometry, asset.Surfaces[part]));
 
     internal void Update(PetRigHandle rig, float dt, float stride, float typing, float leftStrike, float rightStrike,
-        float waveTime, float step, string clip = "idle", float? progress = null)
+        float waveTime, float step, string clip = "idle", float? progress = null,
+        SnowballThrowPose throwPose = default)
     {
         if (asset.Clips is { } authored)
         {
             UpdateAuthoredPose(authored, clip, dt, progress);
-            authored.Apply(_authoredPose, rig, typing, leftStrike, rightStrike, _world, _palette, HeadSocket);
+            authored.Apply(_authoredPose, rig, typing, leftStrike, rightStrike, _world, _palette, HeadSocket, throwPose);
             Array.Fill(_changed, true);
             foreach (var surface in _surfaces) surface.Apply(_palette, _changed);
             return;
@@ -129,6 +182,13 @@ internal sealed class PetSkinInstance(CharacterSkin asset)
             }
             else continue;
             SolveChain(upper.Bind.Translation, tip.Bind.Translation, tip.End, goal, tipPitchRad, out _ik[tip.Parent], out _ik[i]);
+            // 투척 팔만 키보드 IK에서 점진적으로 해제한다. 왼팔과 보행은 유지한다.
+            if (tip.Name is "RightArmTip" or "RightPawTip")
+            {
+                var typingWeight = (float)(1 - Math.Clamp(throwPose.Weight, 0, 1));
+                layer *= typingWeight;
+                _targetBoneOffsets[tip.Parent] *= typingWeight;
+            }
             _ikWeights[tip.Parent] = _ikWeights[i] = layer;
         }
 

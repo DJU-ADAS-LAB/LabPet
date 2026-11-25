@@ -127,6 +127,7 @@ public sealed class GcpSignalRTransport : ISocialTransport
     public event EventHandler<BubbleMessageReceivedEventArgs>? BubbleMessageReceived;
     public event EventHandler<QuickReactionReceivedEventArgs>? QuickReactionReceived;
     public event EventHandler<PetInteractionReceivedEventArgs>? PetInteractionReceived;
+    public event EventHandler<SnowballReceivedEventArgs>? SnowballReceived;
     public event EventHandler<MusicFrameReceivedEventArgs>? MusicFrameReceived;
     public event EventHandler<MusicFollowStateChangedEventArgs>? MusicFollowStateChanged;
     public event EventHandler<GameEventReceivedEventArgs>? GameEventReceived;
@@ -690,6 +691,25 @@ public sealed class GcpSignalRTransport : ISocialTransport
     public Task<bool> SendQuickReactionAsync(FriendEntry friend, string reactionId, CancellationToken cancellationToken = default)
         => SendEncryptedFriendPacketAsync(
             friend, PacketType.QuickReaction, new QuickReactionPayload { ReactionId = reactionId }, cancellationToken);
+
+    public SnowballPeerStatus GetSnowballPeerStatus(string petId)
+    {
+        if (!IsRemoteConnected) return SnowballPeerStatus.Offline;
+        var peer = GetDiscoveredPeers().FirstOrDefault(p =>
+            string.Equals(p.PetId, petId, StringComparison.OrdinalIgnoreCase));
+        if (peer is null) return SnowballPeerStatus.Offline;
+        return !peer.RequiresUpdate && PetInteractionPayload.SupportsSnowball(peer.AppVersion)
+            ? SnowballPeerStatus.Available : SnowballPeerStatus.Unsupported;
+    }
+
+    public Task<bool> SendSnowballAsync(FriendEntry friend, Guid eventId, CancellationToken cancellationToken = default)
+    {
+        if (eventId == Guid.Empty || GetSnowballPeerStatus(friend.PetId) != SnowballPeerStatus.Available)
+            return Task.FromResult(false);
+        return SendEncryptedFriendPacketAsync(friend, PacketType.PetInteraction,
+            new PetInteractionPayload { InteractionType = PetInteractionPayload.SnowballType, EventId = eventId.ToString("N") },
+            cancellationToken);
+    }
 
     public Task<bool> SendPetInteractionAsync(FriendEntry friend, string interactionType, CancellationToken cancellationToken = default)
         => SendEncryptedFriendPacketAsync(
@@ -1466,8 +1486,18 @@ public sealed class GcpSignalRTransport : ISocialTransport
             case PacketType.PetInteraction:
             {
                 var p = JsonSerializer.Deserialize<PetInteractionPayload>(effectivePayloadJson, ProtocolJson.PacketOptions);
-                PetInteractionReceived?.Invoke(this, new PetInteractionReceivedEventArgs(
-                    header.SenderPetId, p?.InteractionType ?? "pet"));
+                if (p?.InteractionType == PetInteractionPayload.PetType)
+                {
+                    PetInteractionReceived?.Invoke(this, new PetInteractionReceivedEventArgs(header.SenderPetId, p.InteractionType));
+                    break;
+                }
+
+                if (p?.InteractionType != PetInteractionPayload.SnowballType
+                    || !Guid.TryParseExact(p.EventId, "N", out var eventId) || eventId == Guid.Empty
+                    || !PetInteractionPayload.SupportsSnowball(header.AppVersion))
+                    return RejectAck(header.MessageId, "INVALID_INTERACTION");
+
+                SnowballReceived?.Invoke(this, new SnowballReceivedEventArgs(header.SenderPetId, eventId, header.TimestampUtc));
                 break;
             }
 
