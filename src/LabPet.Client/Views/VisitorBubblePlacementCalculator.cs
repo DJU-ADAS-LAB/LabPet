@@ -8,6 +8,7 @@ namespace LabPet.Client.Views;
 internal static class VisitorBubblePlacementCalculator
 {
     private const double ComposerGapDip = 5;
+    private const double BodyRasterInsetPixels = 1;
     private const double TailLengthDip = 9;
     private const double TailStrokeInsetDip = 1;
     private const double TailHalfWidthDip = 5;
@@ -53,16 +54,20 @@ internal static class VisitorBubblePlacementCalculator
             return new BubblePlacement(Rect.Empty, fallbackTip, IsBelowHead: false, Scale: 0);
         }
 
+        // WPF의 레이아웃과 화면 좌표를 픽셀 단위로 반올림해도 카드 본문은 작업영역 안에 둔다.
+        var bodyArea = workArea;
+        bodyArea.Inflate(-Math.Min(BodyRasterInsetPixels, workArea.Width / 4),
+            -Math.Min(BodyRasterInsetPixels, workArea.Height / 4));
         dpi = NormalizeDpi(dpi);
-        var insetX = Math.Min(TailStrokeInsetDip * dpi.DpiScaleX, workArea.Width / 2);
-        var insetY = Math.Min(TailStrokeInsetDip * dpi.DpiScaleY, workArea.Height / 2);
+        var insetX = Math.Min(TailStrokeInsetDip * dpi.DpiScaleX, bodyArea.Width / 2);
+        var insetY = Math.Min(TailStrokeInsetDip * dpi.DpiScaleY, bodyArea.Height / 2);
         var tip = new Point(
-            SafeClamp(head.X, workArea.Left + insetX, workArea.Right - insetX),
-            SafeClamp(head.Y, workArea.Top + insetY, workArea.Bottom - insetY));
-        var tailLength = Math.Min(TailLengthDip * dpi.DpiScaleY, workArea.Height / 4);
-        var above = tip.Y - tailLength - workArea.Top;
-        var below = workArea.Bottom - tip.Y - tailLength;
-        var widthScale = SafeClamp(workArea.Width / body.Width, 0, 1);
+            SafeClamp(head.X, bodyArea.Left + insetX, bodyArea.Right - insetX),
+            SafeClamp(head.Y, bodyArea.Top + insetY, bodyArea.Bottom - insetY));
+        var tailLength = Math.Min(TailLengthDip * dpi.DpiScaleY, bodyArea.Height / 4);
+        var above = tip.Y - tailLength - bodyArea.Top;
+        var below = bodyArea.Bottom - tip.Y - tailLength;
+        var widthScale = SafeClamp(bodyArea.Width / body.Width, 0, 1);
         var isBelow = body.Height * widthScale > above && below > above;
         var availableHeight = Math.Max(0, isBelow ? below : above);
 
@@ -70,7 +75,7 @@ internal static class VisitorBubblePlacementCalculator
         var rawScale = Math.Min(widthScale, availableHeight / body.Height);
         var scale = double.IsFinite(rawScale) ? SafeClamp(rawScale, 0, 1) : 0;
         var size = new Size(Math.Max(0, body.Width * scale), Math.Max(0, body.Height * scale));
-        var x = ClampStart(tip.X - size.Width / 2, workArea.Left, workArea.Right, size.Width);
+        var x = ClampStart(tip.X - size.Width / 2, bodyArea.Left, bodyArea.Right, size.Width);
         var y = isBelow ? tip.Y + tailLength : tip.Y - tailLength - size.Height;
         if (!double.IsFinite(x) || !double.IsFinite(y)
             || !double.IsFinite(size.Width) || !double.IsFinite(size.Height)

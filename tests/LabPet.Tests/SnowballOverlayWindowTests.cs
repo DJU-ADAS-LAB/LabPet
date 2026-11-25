@@ -312,8 +312,11 @@ public sealed class SnowballOverlayWindowTests
         using var pet = new LabPet.Client.Rendering.SnowballPetVisual(
             new LabPet.Client.Rendering.ProceduralPetMeshFactory(),
             new LabPet.Shared.Models.PetAppearance(), 1);
+        // 모니터 크기와 상관없이 소수 물리 좌표를 거친다.
+        var perimeter = 2 * (monitor.Width + monitor.Height);
+        var sample = (Math.Floor(0.13 * perimeter) + 0.25) / perimeter;
         Assert.True(LabPet.Client.Rendering.SnowballSpawnGeometry.TryCreate(
-            monitor, new Size(214, 224), 0.13, out var spawn));
+            monitor, new Size(214, 224), sample, out var spawn));
         var ids = Enumerable.Range(0, count).Select(_ => Guid.NewGuid()).ToArray();
         using var actor = new LabPet.Client.Rendering.SnowballTemporaryActor(overlay, pet, spawn, ids[0]);
         var launches = new List<Guid>();
@@ -348,7 +351,10 @@ public sealed class SnowballOverlayWindowTests
             if (tick >= 40 && tick < (count - 1) * 100)
             {
                 Assert.Same(pet, Assert.Single(overlay.Scene.Children.OfType<LabPet.Client.Rendering.SnowballPetVisual>()));
-                Assert.InRange((pet.PointToScreen(default) - spawn.VisibleBounds.TopLeft).Length, 0, 0.01);
+                var actual = pet.PointToScreen(default);
+                // Win32 화면 좌표를 사용하므로 축별 반 픽셀의 양자화까지만 허용한다.
+                Assert.InRange(Math.Abs(actual.X - spawn.VisibleBounds.Left), 0, 0.500001);
+                Assert.InRange(Math.Abs(actual.Y - spawn.VisibleBounds.Top), 0, 0.500001);
             }
         }
         Assert.Equal(ids, launches);

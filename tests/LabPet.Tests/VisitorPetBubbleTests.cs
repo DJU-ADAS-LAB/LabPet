@@ -1379,8 +1379,9 @@ public sealed class VisitorPetBubbleTests
 
             await WpfTestHost.RunAsync(async () =>
             {
+                var clock = new ManualTimeProvider();
                 var friend = new FriendEntry { PetId = "rapid-cycles", OwnerName = "보미", PetName = "구름이" };
-                var window = new VisitorPetWindow(friend, friend.CachedAppearance, new ProceduralPetMeshFactory(), audio, social)
+                var window = new VisitorPetWindow(friend, friend.CachedAppearance, new ProceduralPetMeshFactory(), audio, social, bubbleClock: clock)
                 {
                     CrashLogDirectory = crashDir,
                     ShowActivated = false,
@@ -1412,7 +1413,14 @@ public sealed class VisitorPetBubbleTests
                         await FlushUiAsync();
                         AssertBubbleHeadAlignment(window);
 
-                        await WaitUntilAsync(() => !window.HasStatusBubble && !window.ChatBubbleStack.HasItems);
+                        clock.Advance(TimeSpan.FromMilliseconds(40));
+                        await WaitUntilAsync(() => !window.HasStatusBubble);
+                        Assert.True(window.ChatBubbleStack.HasItems);
+                        await FlushUiAsync();
+                        AssertBubbleHeadAlignment(window);
+
+                        clock.Advance(TimeSpan.FromMilliseconds(20));
+                        await WaitUntilAsync(() => !window.ChatBubbleStack.HasItems);
                         await WaitUntilAsync(() => !popup.IsOpen);
                     }
 

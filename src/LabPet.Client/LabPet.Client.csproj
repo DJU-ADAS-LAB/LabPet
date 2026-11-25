@@ -9,7 +9,7 @@
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <RootNamespace>LabPet.Client</RootNamespace>
     <AssemblyName>LabPet.Client</AssemblyName>
-    <Version>0.3.13</Version>
+    <Version>0.3.14</Version>
     <Authors>LabPet</Authors>
     <Product>LabPet</Product>
     <ApplicationIcon>Assets\app.ico</ApplicationIcon>

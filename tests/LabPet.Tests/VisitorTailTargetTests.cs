@@ -37,6 +37,18 @@ public sealed class VisitorTailTargetTests
     }
 
     [Fact]
+    public void BodyPreservesOnePixelForRasterRoundingAtWorkAreaEdge()
+    {
+        var work = new Rect(0, 0, 1024, 720);
+        var head = new Point(1066, 327);
+        var placement = VisitorBubblePlacementCalculator.CalculateBubblePlacement(
+            head, new Size(123.8, 27), work, new DpiScale(1, 1));
+
+        Assert.Equal(1023, placement.Body.Right, 6);
+        Assert.Equal(head, placement.Tip);
+    }
+
+    [Fact]
     public void InvalidHeadProducesEmptyBodyAndFiniteFallback()
     {
         var placement = VisitorBubblePlacementCalculator.CalculateBubblePlacement(

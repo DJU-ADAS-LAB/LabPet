@@ -71,7 +71,8 @@ public partial class VisitorPetWindow : Window, IMessageBubbleTarget
     private readonly IAudioAnalyzer _audioAnalyzer;
     private readonly SocialCoordinatorService _social;
     private readonly PetAnimationController _animator = new();
-    private readonly BubbleMessageStack _chatBubbleStack = new(PetWindowViewModel.MaxBubbleLines);
+    private readonly BubbleMessageStack _chatBubbleStack;
+    private readonly TimeProvider _bubbleClock;
     private readonly VisitorPopupOrder _popupOrder;
     private readonly DataTemplate _chatCardTemplate;
     private readonly Action<VisitorPetWindow>? _beforeChatComposerOpen;
@@ -149,11 +150,14 @@ public partial class VisitorPetWindow : Window, IMessageBubbleTarget
         SocialCoordinatorService social,
         VisitorPopupOrder? popupOrder = null,
         Action<VisitorPetWindow>? beforeChatComposerOpen = null,
-        SnowballInteractionService? snowballs = null)
+        SnowballInteractionService? snowballs = null,
+        TimeProvider? bubbleClock = null)
     {
         InitializeComponent();
 
         _snowballs = snowballs;
+        _bubbleClock = bubbleClock ?? TimeProvider.System;
+        _chatBubbleStack = new BubbleMessageStack(PetWindowViewModel.MaxBubbleLines, _bubbleClock);
         _friend = friend;
         _meshFactory = meshFactory;
         _audioAnalyzer = audioAnalyzer;
@@ -569,7 +573,7 @@ public partial class VisitorPetWindow : Window, IMessageBubbleTarget
 
         try
         {
-            await Task.Delay(Math.Max(1, durationMs), token);
+            await Task.Delay(TimeSpan.FromMilliseconds(Math.Max(1, durationMs)), _bubbleClock, token);
             if (!token.IsCancellationRequested && !_isClosingOrClosed && ReferenceEquals(_statusBubbleCts, cts))
             {
                 _hasStatusBubble = false;
