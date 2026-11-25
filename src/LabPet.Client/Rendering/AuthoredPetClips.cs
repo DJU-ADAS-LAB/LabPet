@@ -102,7 +102,13 @@ internal sealed class AuthoredPetClips
                 local = Matrix4x4.CreateFromYawPitchRoll((float)rig.HeadYaw.Angle*MathF.PI/180,
                     (float)rig.HeadPitch.Angle*MathF.PI/180,(float)rig.HeadRoll.Angle*MathF.PI/180) * local;
             if (bone.Joint.Name is "Wing.L" or "Wing.R")
-                local = Matrix4x4.CreateRotationX(typing * -.48f + (bone.Joint.Name == "Wing.L" ? left : right)*.42f) * local;
+            {
+                var isLeft = bone.Joint.Name == "Wing.L";
+                var strike = isLeft ? left : right;
+                var swingX = typing * -0.82f + strike * 0.42f;
+                var inwardZ = (isLeft ? -1f : 1f) * typing * 0.24f;
+                local = Matrix4x4.CreateRotationZ(inwardZ) * Matrix4x4.CreateRotationX(swingX) * local;
+            }
             world[i] = _parents[i] < 0 ? local : local * world[_parents[i]];
             palette[i] = bone.InverseBindMatrix * world[i] * Fit;
             if (bone.Joint.Name == "Head")

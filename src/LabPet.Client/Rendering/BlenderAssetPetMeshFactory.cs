@@ -388,9 +388,10 @@ public sealed class BlenderAssetPetMeshFactory : IPetMeshFactory
         if (source?.Clips != null) headGroup.Transform = skin!.HeadSocket;
         bodyGroup.Children.Add(headGroup);
 
-        // 키보드 및 풀링 파티클 (단일 전면 미니 키보드 및 Blender 음표/별 메시 우선 적용)
+        // 키보드 및 풀링 파티클 (종별 팔 높이에 맞춘 단일 전면 미니 키보드 및 Blender 음표/별 메시 우선 적용)
+        var typingKeyboardPlacement = TypingKeyboardPlacement.ForSpecies(appearance.SpeciesId);
         var (keyboardTriangles, typingKeyboardScale) = effects.HasFlag(PetRigEffects.TypingKeyboard)
-            ? _fallbackFactory.BuildTypingKeyboard(rootGroup, accentColor, accentDiffuseBrush)
+            ? _fallbackFactory.BuildTypingKeyboard(rootGroup, accentColor, typingKeyboardPlacement, accentDiffuseBrush)
             : (0, null);
 
         var (particleTriangles, musicParticles) = effects.HasFlag(PetRigEffects.MusicParticles)
@@ -447,6 +448,7 @@ public sealed class BlenderAssetPetMeshFactory : IPetMeshFactory
             CreateTearEffect = () => _fallbackFactory.BuildTearEffect(headGroup, blinkCenter.ToPoint3D()),
             ShadowScale = shadowScale,
             TypingKeyboardScale = typingKeyboardScale,
+            TypingKeyboard = typingKeyboardPlacement,
             LeftEarRotation = leftEarRot,
             RightEarRotation = rightEarRot,
             TailRotation = tailRot,

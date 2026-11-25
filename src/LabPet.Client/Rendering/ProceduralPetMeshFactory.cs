@@ -606,8 +606,9 @@ public sealed class ProceduralPetMeshFactory : IPetMeshFactory
 
         bodyGroup.Children.Add(headGroup);
 
+        var typingKeyboardPlacement = TypingKeyboardPlacement.ForSpecies(appearance.SpeciesId);
         (int keyboardTriangles, ScaleTransform3D? typingKeyboardScale) = effects.HasFlag(PetRigEffects.TypingKeyboard)
-            ? BuildTypingKeyboard(rootGroup, accentColor, accentDiffuseBrush)
+            ? BuildTypingKeyboard(rootGroup, accentColor, typingKeyboardPlacement, accentDiffuseBrush)
             : (0, null);
         var (particleTriangles, musicParticles) = effects.HasFlag(PetRigEffects.MusicParticles)
             ? BuildMusicParticles(rootGroup, accentColor)
@@ -670,6 +671,7 @@ public sealed class ProceduralPetMeshFactory : IPetMeshFactory
             CreateTearEffect = () => BuildTearEffect(headGroup, eyeCenter),
             ShadowScale = shadowScale,
             TypingKeyboardScale = typingKeyboardScale,
+            TypingKeyboard = typingKeyboardPlacement,
             LeftEarRotation = leftEarRot,
             RightEarRotation = rightEarRot,
             TailRotation = tailRot,
@@ -694,17 +696,18 @@ public sealed class ProceduralPetMeshFactory : IPetMeshFactory
         };
     }
 
-    internal const float TypingKeyboardCenterY = -0.76f;
-    internal const float TypingKeyboardCenterZ = 0.82f;
-    internal const float TypingKeyboardKeyTopY = TypingKeyboardCenterY + 0.055f + 0.02f;
+    internal const float TypingKeyboardCenterY = -0.52f;
+    internal const float TypingKeyboardCenterZ = 0.78f;
+    internal const float TypingKeyboardKeyTopY = TypingKeyboardCenterY + TypingKeyboardPlacement.KeycapTopOffsetY;
 
     internal (int Triangles, ScaleTransform3D Scale) BuildTypingKeyboard(
         Model3DGroup rootGroup,
         Color accentColor,
+        TypingKeyboardPlacement placement,
         SolidColorBrush? sharedAccentBrush = null)
     {
-        const float centerY = TypingKeyboardCenterY;
-        const float centerZ = TypingKeyboardCenterZ;
+        var centerY = placement.CenterY;
+        var centerZ = placement.CenterZ;
         var scale = new ScaleTransform3D(0, 0, 0, 0, centerY, centerZ);
         var keyboard = new Model3DGroup { Transform = scale };
 

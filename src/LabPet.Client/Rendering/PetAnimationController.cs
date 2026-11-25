@@ -614,12 +614,12 @@ public sealed class PetAnimationController
             rig.TailRotation.Angle = p.TailAngle + signedTap * 6.5 * awakeFactor;
         }
 
-        // 앞발 (모션 클립 춤 + 타이핑 교대 타건 블렌딩)
+        // 앞발 (모션 클립 춤 + 높여진 키보드 기준 타이핑 교대 타건 블렌딩)
         if (rig.LeftPawTranslate is not null && rig.RightPawTranslate is not null)
         {
             var proceduralStandingPuppy = rig.SpeciesId == PetSpeciesIds.FluffyPuppy && !rig.IsExternalAsset;
-            var liftY = proceduralStandingPuppy ? 0.18 : 0.08;
-            var reachZ = proceduralStandingPuppy ? 0.30 : 0.25;
+            var liftY = proceduralStandingPuppy ? 0.28 : 0.20;
+            var reachZ = proceduralStandingPuppy ? 0.26 : 0.22;
             var strikeHeight = proceduralStandingPuppy ? 0.12 : 0.14;
 
             rig.LeftPawTranslate.OffsetY = activeStance * liftY + leftStrike * strikeHeight * awakeFactor + p.LeftPawY * (1.0 - activeStance) + leftKick * 0.16;
@@ -632,15 +632,15 @@ public sealed class PetAnimationController
         if (rig.LeftArmRotation is not null && rig.RightArmRotation is not null)
         {
             var reactionLift = 18.0 * (_petReactionTime / PetReactionDuration) + gameArmLift + grabWeight * 16.0;
-            var stanceInward = activeStance * 28.0;
+            var stanceInward = activeStance * 30.0;
             rig.LeftArmRotation.Angle = p.LeftArmRoll * (1.0 - activeStance * 0.7) + reactionLift + stanceInward - leftStrike * 26.0 * awakeFactor + wakeArmBoost + leftKick * 24.0;
             rig.RightArmRotation.Angle = p.RightArmRoll * (1.0 - activeStance * 0.7) - reactionLift - stanceInward + rightStrike * 26.0 * awakeFactor - wakeArmBoost - rightKick * 24.0;
         }
 
         if (rig.LeftArmPitch is not null && rig.RightArmPitch is not null)
         {
-            rig.LeftArmPitch.Angle = p.LeftArmPitch * (1.0 - activeStance * 0.7) + activeStance * 24.0 - leftStrike * 34.0 * awakeFactor;
-            rig.RightArmPitch.Angle = p.RightArmPitch * (1.0 - activeStance * 0.7) + activeStance * 24.0 - rightStrike * 34.0 * awakeFactor;
+            rig.LeftArmPitch.Angle = p.LeftArmPitch * (1.0 - activeStance * 0.7) + activeStance * 34.0 - leftStrike * 34.0 * awakeFactor;
+            rig.RightArmPitch.Angle = p.RightArmPitch * (1.0 - activeStance * 0.7) + activeStance * 34.0 - rightStrike * 34.0 * awakeFactor;
         }
 
         // 부피 보존형 Squash & Stretch 및 안전 클램프 (급격한 튐·창 경계 이탈 방지)
@@ -653,7 +653,7 @@ public sealed class PetAnimationController
 
         rig.BodyTranslate.OffsetX = Math.Clamp(offsetX, -0.25, 0.25);
         rig.BodyTranslate.OffsetY = Math.Clamp(offsetY, -0.15, 0.45);
-        rig.BodyTranslate.OffsetZ = Math.Clamp(p.BodyOffsetZ + activeStance * 0.11, -0.15, 0.22);
+        rig.BodyTranslate.OffsetZ = Math.Clamp(p.BodyOffsetZ + activeStance * rig.TypingKeyboard.BodyForwardZ, -0.15, 0.22);
 
         rig.BodyYaw.Angle = _currentLookX * 14.0 * (1.0 - activeStance * 0.65) * awakeFactor + bodyYawExtra + dizzyYaw;
         rig.BodyPitch.Angle = _currentLookY * 8.0 * (1.0 - activeStance * 0.7) * awakeFactor + activeStance * 7.0 + anyTapWave * 2.2 * awakeFactor + bodyPitchExtra;

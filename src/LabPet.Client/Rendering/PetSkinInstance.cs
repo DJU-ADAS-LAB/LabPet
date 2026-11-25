@@ -11,6 +11,8 @@ internal sealed class PetSkinInstance(CharacterSkin asset)
     private const float AuthoredTransitionSeconds = 0.24f;
     private readonly Matrix4x4[] _palette = new Matrix4x4[asset.Bones.Length];
     private readonly Quaternion[] _rotations = Enumerable.Repeat(Quaternion.Identity, asset.Bones.Length).ToArray();
+    private readonly Vector3[] _boneOffsets = new Vector3[asset.Bones.Length];
+    private readonly Vector3[] _targetBoneOffsets = new Vector3[asset.Bones.Length];
     private readonly float[] _lag = new float[asset.Bones.Length];
     private readonly float[] _velocity = new float[asset.Bones.Length];
     private readonly List<SurfaceInstance> _surfaces = [];
@@ -47,7 +49,9 @@ internal sealed class PetSkinInstance(CharacterSkin asset)
         var body = rig.BodyTransform?.Value ?? Matrix3D.Identity;
         var inverseBody = body;
         if (typing > 0.005f || step > 0.005f) inverseBody.Invert();
+        var kb = rig.TypingKeyboard;
         Array.Clear(_ikWeights);
+        Array.Clear(_targetBoneOffsets);
         for (int i = 0; i < asset.Bones.Length; i++)
         {
             var tip = asset.Bones[i];
@@ -61,35 +65,53 @@ internal sealed class PetSkinInstance(CharacterSkin asset)
             {
                 if (typing < 0.005f) continue;
                 float tap = leftSide ? leftStrike : rightStrike;
-                float keyX = leftSide ? -0.24f : 0.24f;
-                float lift = (tap + 0.92f) * 0.075f;
+                float keyX = (leftSide ? -1f : 1f) * kb.KeyReachX;
+                float lift = (tap + 0.92f) * 0.072f;
                 float pressZ = tap < 0 ? 0.035f : -0.02f;
                 var world = new Point3D(
                     keyX,
-                    ProceduralPetMeshFactory.TypingKeyboardKeyTopY + 0.02f + lift,
-                    ProceduralPetMeshFactory.TypingKeyboardCenterZ - 0.05f + pressZ);
+                    kb.KeyTopY + 0.015f + lift,
+                    kb.CenterZ - 0.06f + pressZ);
                 var local = inverseBody.Transform(world);
                 goal = new((float)local.X, (float)local.Y, (float)local.Z);
-                tipPitchRad = -tap * 10f * Radians;
+                tipPitchRad = -tap * 12f * Radians;
                 layer = typing;
             }
             else if (tip.Name is "LeftArmTip" or "RightArmTip")
             {
                 if (typing < 0.005f) continue;
                 float tap = leftSide ? leftStrike : rightStrike;
-                float keyX = (leftSide ? -1f : 1f) * MathF.Min(0.42f, MathF.Abs(upper.Bind.Translation.X) * 0.55f);
+                float keyX = (leftSide ? -1f : 1f) * MathF.Min(kb.KeyReachX, MathF.Abs(upper.Bind.Translation.X) * 0.72f);
+                var armOffset = new Vector3(
+                    (leftSide ? 1f : -1f) * kb.ArmInwardOffsetX * typing,
+                    0f,
+                    kb.ArmForwardOffsetZ * typing);
+                _targetBoneOffsets[tip.Parent] = armOffset;
+
+                float lift = (tap + 0.85f) * 0.055f;
+                float pressZ = tap < 0 ? 0.03f : -0.015f;
                 var world = new Point3D(
                     keyX,
-                    ProceduralPetMeshFactory.TypingKeyboardKeyTopY + 0.02f,
-                    ProceduralPetMeshFactory.TypingKeyboardCenterZ - 0.06f);
+                    kb.KeyTopY + 0.015f + lift,
+                    kb.CenterZ - 0.06f + pressZ);
                 var local = inverseBody.Transform(world);
                 var kbLocal = new Vector3((float)local.X, (float)local.Y, (float)local.Z);
-                var shoulder = upper.Bind.Translation;
+                var shoulder = upper.Bind.Translation + armOffset;
                 var toKey = kbLocal - shoulder;
-                var aim = toKey.LengthSquared() < 1e-6f ? Vector3.UnitZ : Vector3.Normalize(toKey);
-                var reach = Vector3.Distance(shoulder, tip.Bind.Translation) + Vector3.Distance(tip.Bind.Translation, tip.End);
-                var strokeDir = Vector3.Normalize(new Vector3(aim.X, aim.Y + (tap + 0.15f) * 0.34f, aim.Z));
-                goal = shoulder + strokeDir * (reach * 0.92f);
+                var dist = toKey.Length();
+                var aim = dist < 1e-6f ? Vector3.UnitZ : toKey / dist;
+                var reach = Vector3.Distance(upper.Bind.Translation, tip.Bind.Translation)
+                    + Vector3.Distance(tip.Bind.Translation, tip.End);
+                if (dist <= reach * 0.96f)
+                {
+                    goal = kbLocal - armOffset;
+                }
+                else
+                {
+                    var strokeDir = Vector3.Normalize(new Vector3(aim.X, aim.Y + (tap + 0.15f) * 0.30f, aim.Z));
+                    goal = upper.Bind.Translation + strokeDir * (reach * 0.94f);
+                }
+
                 tipPitchRad = -tap * 18f * Radians;
                 layer = typing;
             }
@@ -168,10 +190,13 @@ internal sealed class PetSkinInstance(CharacterSkin asset)
                 target = Quaternion.Slerp(Quaternion.Identity, target, bone.Limit * Radians / angle);
             var rotation = bone.Name == "Head" ? target : Quaternion.Slerp(_rotations[i], target, 1 - MathF.Exp(-26 * dt));
             _rotations[i] = rotation;
-            // 바인드 공간에서 회전한 뒤 상위 관절의 변형을 누적한다.
+            var offset = Vector3.Lerp(_boneOffsets[i], _targetBoneOffsets[i], 1 - MathF.Exp(-22 * dt));
+            if (offset.LengthSquared() < 1e-8f) offset = Vector3.Zero;
+            _boneOffsets[i] = offset;
+            // 바인드 공간에서 회전·미세 전방 보정한 뒤 상위 관절의 변형을 누적한다.
             var pivot = bone.Bind.Translation;
             var posed = bone.Bind * Matrix4x4.CreateTranslation(-pivot) * Matrix4x4.CreateFromQuaternion(rotation)
-                * Matrix4x4.CreateTranslation(pivot);
+                * Matrix4x4.CreateTranslation(pivot + offset);
             var matrix = bone.InverseBind * posed;
             if (bone.Parent >= 0) matrix *= _palette[bone.Parent];
             _changed[i] = _palette[i] != matrix;

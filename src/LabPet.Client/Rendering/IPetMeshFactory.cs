@@ -28,6 +28,37 @@ public enum PetRigEffects
 }
 
 /// <summary>
+/// 캐릭터 종별 팔·앞발·날개 높이와 몸통 전면 여유에 맞춘 타이핑 미니 키보드 배치 프로필.
+/// </summary>
+internal readonly record struct TypingKeyboardPlacement(
+    float CenterY,
+    float CenterZ,
+    float BodyForwardZ,
+    float KeyReachX,
+    float ArmForwardOffsetZ = 0f,
+    float ArmInwardOffsetX = 0f)
+{
+    public const float KeycapTopOffsetY = 0.055f + 0.02f;
+
+    public float KeyTopY => CenterY + KeycapTopOffsetY;
+
+    public static readonly TypingKeyboardPlacement Default = new(-0.52f, 0.78f, 0.10f, 0.24f);
+
+    public static TypingKeyboardPlacement ForSpecies(string? speciesId) => speciesId switch
+    {
+        PetSpeciesIds.ChibiCat => new(-0.52f, 0.77f, 0.10f, 0.24f),
+        PetSpeciesIds.FluffyPuppy => new(-0.52f, 0.78f, 0.10f, 0.24f),
+        PetSpeciesIds.Chiikawa => new(-0.46f, 0.79f, 0.09f, 0.36f, ArmForwardOffsetZ: 0.14f, ArmInwardOffsetX: 0.05f),
+        PetSpeciesIds.Hachiware => new(-0.46f, 0.81f, 0.09f, 0.36f, ArmForwardOffsetZ: 0.14f, ArmInwardOffsetX: 0.05f),
+        PetSpeciesIds.Usagi => new(-0.46f, 0.79f, 0.09f, 0.36f, ArmForwardOffsetZ: 0.14f, ArmInwardOffsetX: 0.05f),
+        PetSpeciesIds.MochiSpirit => new(-0.62f, 1.05f, 0.07f, 0.44f, ArmForwardOffsetZ: 0.15f, ArmInwardOffsetX: 0.08f),
+        PetSpeciesIds.FluffyCloud => new(-0.56f, 0.90f, 0.07f, 0.46f, ArmForwardOffsetZ: 0.16f, ArmInwardOffsetX: 0.08f),
+        PetSpeciesIds.Joey => new(-0.44f, 0.56f, 0.08f, 0.28f),
+        _ => Default
+    };
+}
+
+/// <summary>
 /// 60fps UI 타이머가 Transform3D와 Material 색상만 저부하로 갱신하기 위해 보관하는 3D 리그 핸들.
 /// </summary>
 public sealed class PetRigHandle
@@ -73,8 +104,9 @@ public sealed class PetRigHandle
     // 바닥 소프트 접지 그림자 스케일 (점프/부유 높이에 연동)
     public ScaleTransform3D? ShadowScale { get; init; }
 
-    // 타이핑 시 펫 앞에 팝인되는 3D 미니 키보드 스케일
+    // 타이핑 시 펫 앞에 팝인되는 3D 미니 키보드 스케일 및 종별 배치 프로필
     public ScaleTransform3D? TypingKeyboardScale { get; init; }
+    internal TypingKeyboardPlacement TypingKeyboard { get; init; } = TypingKeyboardPlacement.Default;
 
     // 종별 보조 파츠 (치비 고양이 귀/꼬리/앞발, 모찌 미니 팔, 솜구름 미니 날개)
     public AxisAngleRotation3D? LeftEarRotation { get; init; }

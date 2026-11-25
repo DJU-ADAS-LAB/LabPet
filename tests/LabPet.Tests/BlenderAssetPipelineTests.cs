@@ -179,6 +179,7 @@ public sealed class BlenderAssetPipelineTests
     [InlineData(PetSpeciesIds.Hachiware)]
     [InlineData(PetSpeciesIds.Chiikawa)]
     [InlineData(PetSpeciesIds.Usagi)]
+    [InlineData(PetSpeciesIds.Joey)]
     public void UnifiedTypingKeyboard_AttachesSingleDeskKeyboardAndAnimatesTowardIt(string species)
     {
         RunOnSta(() =>
@@ -254,6 +255,85 @@ public sealed class BlenderAssetPipelineTests
 
             Assert.True(maxForwardDeltaZ > 0.02);
             Assert.True(maxLeftRightDelta > 0.01);
+        });
+    }
+
+    [Theory]
+    [InlineData(PetSpeciesIds.MochiSpirit)]
+    [InlineData(PetSpeciesIds.ChibiCat)]
+    [InlineData(PetSpeciesIds.FluffyCloud)]
+    [InlineData(PetSpeciesIds.FluffyPuppy)]
+    [InlineData(PetSpeciesIds.Hachiware)]
+    [InlineData(PetSpeciesIds.Chiikawa)]
+    [InlineData(PetSpeciesIds.Usagi)]
+    [InlineData(PetSpeciesIds.Joey)]
+    public void TypingKeyboard_RaisesToSpeciesArmHeightAndReturnsCleanlyWhenIdle(string species)
+    {
+        RunOnSta(() =>
+        {
+            var factory = new BlenderAssetPetMeshFactory(new ProceduralPetMeshFactory());
+            var appearance = new PetAppearance { SpeciesId = species };
+            var rig = factory.BuildPetRig(appearance, PetRigEffects.TypingKeyboard);
+            var expected = TypingKeyboardPlacement.ForSpecies(species);
+
+            Assert.Equal(expected, rig.TypingKeyboard);
+            Assert.True(expected.CenterY > -0.70f, $"{species} 키보드 높이({expected.CenterY})가 기존 바닥 위치(-0.76)보다 높아야 합니다.");
+
+            var keyboard = Assert.Single(
+                rig.RootModel.Children.OfType<Model3DGroup>(),
+                group => ReferenceEquals(group.Transform, rig.TypingKeyboardScale));
+            var deck = GeometryModels(keyboard).First().Bounds;
+            var deckCenterY = deck.Y + deck.SizeY * 0.5;
+            var deckCenterZ = deck.Z + deck.SizeZ * 0.5;
+            Assert.InRange(deckCenterY, expected.CenterY - 0.01, expected.CenterY + 0.01);
+            Assert.InRange(deckCenterZ, expected.CenterZ - 0.01, expected.CenterZ + 0.01);
+
+            var controller = new PetAnimationController();
+            controller.AttachRig(rig, appearance.AccentColorHex);
+
+            // 타이핑 중 앞발형 캐릭터의 앞발 정점이 높여진 키캡 상단 근처에 도달하는지 확인한다.
+            for (var i = 0; i < 18; i++)
+            {
+                if (i == 0 || i == 9)
+                {
+                    controller.TriggerTypingPawTap();
+                }
+
+                controller.UpdateFrame(1.0 / 60.0, 0, 0);
+            }
+
+            Assert.NotNull(rig.TypingKeyboardScale);
+            Assert.True(rig.TypingKeyboardScale!.ScaleX > 0.8);
+
+            if (species is PetSpeciesIds.ChibiCat or PetSpeciesIds.FluffyPuppy)
+            {
+                var bodyTransform = rig.BodyTransform?.Value ?? Matrix3D.Identity;
+                var keyboardModels = GeometryModels(keyboard).ToHashSet();
+                var keyTarget = new Point3D(-expected.KeyReachX, expected.KeyTopY, expected.CenterZ - 0.06);
+                var minDistance = double.PositiveInfinity;
+                foreach (var model in GeometryModels(rig.RootModel).Where(m => !keyboardModels.Contains(m)))
+                {
+                    foreach (var pt in ((MeshGeometry3D)model.Geometry).Positions)
+                    {
+                        var world = bodyTransform.Transform(pt);
+                        var d = (world - keyTarget).Length;
+                        if (d < minDistance)
+                        {
+                            minDistance = d;
+                        }
+                    }
+                }
+
+                Assert.True(minDistance < 0.14, $"{species} 앞발 정점이 키캡 목표({keyTarget})에 근접해야 합니다. 실제 최소 거리={minDistance:F3}");
+            }
+
+            // 입력이 멈춘 뒤에는 키보드가 접히고 타이핑 전진 오프셋이 복귀한다.
+            for (var i = 0; i < 150; i++)
+            {
+                controller.UpdateFrame(1.0 / 60.0, 0, 0);
+            }
+
+            Assert.Equal(0.0, rig.TypingKeyboardScale.ScaleX);
         });
     }
 
