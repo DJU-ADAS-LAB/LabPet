@@ -524,7 +524,8 @@ public sealed class PetAnimationController
             if (pWake < 0.28)
             {
                 var u = pWake / 0.28;
-                var jump = Math.Sin(u * Math.PI);
+                // 출발과 착지의 속도를 0으로 유지하면서 중간 피크 기울기를 완화해 수면·기상 전환을 연속적으로 연결한다.
+                var jump = Math.Pow(Math.Sin(u * Math.PI), 1.25);
                 offsetY += 0.34 * jump;
                 scaleY += 0.18 * jump;
                 bodyPitchExtra -= 14.0 * jump;
@@ -535,7 +536,8 @@ public sealed class PetAnimationController
             else if (pWake < 0.72)
             {
                 var u = (pWake - 0.28) / 0.44;
-                var settle = 1.0 - (usesAuthoredClips ? PetMotionClips.SmoothStep(u) : u * 0.5);
+                // 모든 스킨 경로에서 두리번거림이 다음 구간 진입 전에 0으로 수렴해야 한다.
+                var settle = 1.0 - PetMotionClips.SmoothStep(u);
                 var squash = Math.Sin(u * Math.PI) * (1.0 - u * 0.4);
                 var lookAround = Math.Sin(u * Math.PI * 2.5) * settle;
                 scaleY -= 0.11 * squash;
@@ -543,8 +545,10 @@ public sealed class PetAnimationController
                 headYawExtra += 24.0 * lookAround;
                 headRollExtra += 10.0 * lookAround;
                 bodyYawExtra += 8.0 * lookAround;
-                wakeEarBoost = 8.0 * (1.0 - u);
-                wakeArmBoost = 10.0 * (1.0 - u);
+                // 점프 구간 끝의 0에서 시작해 착지 반동을 만들고 다시 0으로 돌아온다.
+                var landingRecoil = Math.Sin(u * Math.PI) * (1.0 - u);
+                wakeEarBoost = 8.0 * landingRecoil;
+                wakeArmBoost = 10.0 * landingRecoil;
             }
             else
             {
@@ -811,7 +815,9 @@ public sealed class PetAnimationController
         if (_wakeUpReactionTime > 0.01)
         {
             _blinkProgress = -1.0;
-            rig.EyeBlinkScale.ScaleY = 1.0;
+            // 빠르게 열되 순간적인 크기 변경은 피하고, 미세한 잔차는 정확히 마무리한다.
+            var eyeScale = 1.0 - (1.0 - rig.EyeBlinkScale.ScaleY) * Math.Exp(-60.0 * dt);
+            rig.EyeBlinkScale.ScaleY = Math.Abs(1.0 - eyeScale) < 0.001 ? 1.0 : eyeScale;
             return;
         }
 

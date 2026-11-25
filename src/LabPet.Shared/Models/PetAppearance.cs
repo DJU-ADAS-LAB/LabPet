@@ -13,6 +13,7 @@ public static class PetSpeciesIds
     public const string Chiikawa = "chiikawa";
     public const string Joey = "joey";
     public const string Usagi = "usagi";
+    public const string PinkReference = "pink_reference";
 
     public static IReadOnlyList<string> All { get; } =
     [
@@ -23,7 +24,8 @@ public static class PetSpeciesIds
         Hachiware,
         Chiikawa,
         Usagi,
-        Joey
+        Joey,
+        PinkReference
     ];
 }
 

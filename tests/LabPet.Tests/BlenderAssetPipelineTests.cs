@@ -131,6 +131,7 @@ public sealed class BlenderAssetPipelineTests
     [InlineData(PetSpeciesIds.Hachiware)]
     [InlineData(PetSpeciesIds.Chiikawa)]
     [InlineData(PetSpeciesIds.Usagi)]
+    [InlineData(PetSpeciesIds.PinkReference)]
     public void WeightedSkin_BendsFiniteVerticesAndKeepsOtherPetInBindPose(string species)
     {
         RunOnSta(() =>
@@ -180,6 +181,7 @@ public sealed class BlenderAssetPipelineTests
     [InlineData(PetSpeciesIds.Chiikawa)]
     [InlineData(PetSpeciesIds.Usagi)]
     [InlineData(PetSpeciesIds.Joey)]
+    [InlineData(PetSpeciesIds.PinkReference)]
     public void UnifiedTypingKeyboard_AttachesSingleDeskKeyboardAndAnimatesTowardIt(string species)
     {
         RunOnSta(() =>
@@ -267,6 +269,7 @@ public sealed class BlenderAssetPipelineTests
     [InlineData(PetSpeciesIds.Chiikawa)]
     [InlineData(PetSpeciesIds.Usagi)]
     [InlineData(PetSpeciesIds.Joey)]
+    [InlineData(PetSpeciesIds.PinkReference)]
     public void TypingKeyboard_RaisesToSpeciesArmHeightAndReturnsCleanlyWhenIdle(string species)
     {
         RunOnSta(() =>
@@ -345,6 +348,7 @@ public sealed class BlenderAssetPipelineTests
     [InlineData(PetSpeciesIds.Hachiware)]
     [InlineData(PetSpeciesIds.Chiikawa)]
     [InlineData(PetSpeciesIds.Usagi)]
+    [InlineData(PetSpeciesIds.PinkReference)]
     public void BuildPetRig_LoadsShippedBlenderAssetsForAllFourSpecies(string speciesId)
     {
         RunOnSta(() =>
@@ -362,6 +366,58 @@ public sealed class BlenderAssetPipelineTests
             Assert.NotEmpty(rig.RootModel.Children);
             Assert.InRange(rig.TotalTriangleCount, 1200, 12000);
             Assert.Equal(BlenderAssetPetMeshFactory.MaxPooledParticles, rig.MusicParticles.Count);
+        });
+    }
+
+    [Fact]
+    public void PinkReference_KeepsHeadAndEarPinkFixedAcrossColorCustomizations()
+    {
+        RunOnSta(() =>
+        {
+            var expectedKaniPink = Color.FromRgb(248, 178, 190);
+            var factory = new BlenderAssetPetMeshFactory(new ProceduralPetMeshFactory());
+            var rig = factory.BuildPetRig(new PetAppearance
+            {
+                SpeciesId = PetSpeciesIds.PinkReference,
+                BodyColorHex = "#E6F4FF",
+                AccentColorHex = "#7CC6FE",
+                ExpressionId = "default"
+            }, PetRigEffects.None);
+
+            Assert.True(rig.IsExternalAsset);
+
+            static Color? ExtractDiffuseColor(Material? material)
+            {
+                if (material is DiffuseMaterial { Brush: SolidColorBrush direct })
+                {
+                    return direct.Color;
+                }
+
+                if (material is MaterialGroup group)
+                {
+                    var diffuse = group.Children.OfType<DiffuseMaterial>().FirstOrDefault();
+                    if (diffuse?.Brush is SolidColorBrush brush)
+                    {
+                        return brush.Color;
+                    }
+                }
+
+                return null;
+            }
+
+            var fixedPinkModels = GeometryModels(rig.RootModel)
+                .Where(m => ExtractDiffuseColor(m.Material) == expectedKaniPink)
+                .ToArray();
+
+            // 머리 상단 핑크 캡 + 좌/우 게 집게발 귀(최소 3개 서브메시)가 고정 파스텔 핑크 재질을 사용한다.
+            Assert.True(fixedPinkModels.Length >= 3, $"고정 kani_pink 파츠가 3개 이상이어야 합니다. 실제={fixedPinkModels.Length}");
+            Assert.All(fixedPinkModels, m => Assert.True(m.Material.IsFrozen));
+
+            // 바디·포인트 색상을 다른 색으로 변경해도 kani_pink 슬롯은 전혀 변하지 않는다.
+            rig.UpdateColors("#E9F7E8", "#A78BFA");
+            Assert.Equal(Color.FromRgb(0xE9, 0xF7, 0xE8), rig.BodyDiffuseBrush!.Color);
+            Assert.Equal(Color.FromRgb(0xA7, 0x8B, 0xFA), rig.AccentDiffuseBrush!.Color);
+            Assert.All(fixedPinkModels, m => Assert.Equal(expectedKaniPink, ExtractDiffuseColor(m.Material)));
         });
     }
 

@@ -18,6 +18,7 @@ WPF 3D 좌표계 규약:
 """
 
 import argparse
+import json
 import math
 import os
 import sys
@@ -1501,6 +1502,7 @@ def build_chiikawa_style_face(
     cheek_ry=0.072,
     brow_style="short_arc",
     open_tongue_default=True,
+    include_nose_tick=True,
 ):
     """하치와레·치이카와·우사기 특유의 볼터치 4줄 빗금(////), 눈썹, 비즈 눈, 귀여운 입+혀 생성."""
     expr_parts, blink_center = build_conformed_face_expressions(
@@ -1583,6 +1585,23 @@ def build_chiikawa_style_face(
                     cast_dir=b_dir,
                 )
             )
+        elif brow_style == "kani_double":
+            # 카니: 각 눈 위 짧은 2줄 이중 눈썹 (살짝 안쪽 아래로 기운 단정한 틱 2개)
+            bx = side * (eye_x * 0.90)
+            for idx, (y_off, half_w, rad) in enumerate(((0.146, 0.032, 0.0082), (0.184, 0.026, 0.0078))):
+                by = eye_y + y_off
+                extra_head_objs.append(
+                    project_surface_tube(
+                        f"_BrowKani_{side}_{idx}",
+                        [
+                            (bx - side * half_w, by - 0.007, rad * 0.92),
+                            (bx, by + 0.002, rad),
+                            (bx + side * half_w, by + 0.011, rad * 0.92),
+                        ],
+                        normal_embed=0.006,
+                        cast_dir=b_dir,
+                    )
+                )
         else:
             # 치이카와: 순하고 짧은 아치 눈썹
             bx = side * (eye_x * 0.94)
@@ -1601,13 +1620,14 @@ def build_chiikawa_style_face(
             )
 
     # 입 바로 위 아주 작고 귀여운 코 점 + 턱 아래 작은 미소 보조선
-    extra_head_objs.append(
-        project_surface_tube(
-            "_TinyNoseTick",
-            [(-0.014, mouth_y + 0.032, 0.008), (0.0, mouth_y + 0.026, 0.010), (0.014, mouth_y + 0.032, 0.008)],
-            normal_embed=0.007,
+    if include_nose_tick:
+        extra_head_objs.append(
+            project_surface_tube(
+                "_TinyNoseTick",
+                [(-0.014, mouth_y + 0.032, 0.008), (0.0, mouth_y + 0.026, 0.010), (0.014, mouth_y + 0.032, 0.008)],
+                normal_embed=0.007,
+            )
         )
-    )
     extra_head_objs.append(
         project_surface_tube(
             "_ChinDimple",
@@ -2094,6 +2114,216 @@ def build_usagi():
 
 
 # ---------------------------------------------------------------------------
+# 1I. 카니 (pink_reference) — 파스텔 핑크 고정 머리와 게 집게발 귀, 2가닥 삐죽털
+# ---------------------------------------------------------------------------
+
+def build_pink_reference():
+    clear_scene()
+    objects = []
+
+    # 1) Body: 책 등 보조 요소 없이 서 있는 2등신 치이카와 찹쌀떡 체형 + 짧은 두 발
+    body_elements = [
+        ((0.0, 0.00, 0.00), (0.48, 0.27, 0.44), None, 2.0),
+        ((0.0, -0.35, 0.01), (0.50, 0.36, 0.46), None, 2.15),
+        ((0.0, -0.59, 0.00), (0.48, 0.27, 0.43), None, 2.1),
+        ((-0.19, -0.82, 0.05), (0.135, 0.145, 0.155), (0.0, 0.06, -0.05), 2.0),
+        ((0.19, -0.82, 0.05), (0.135, 0.145, 0.155), (0.0, -0.06, 0.05), 2.0),
+    ]
+    body_clay = create_metaball_clay(
+        "Body",
+        "body",
+        body_elements,
+        mb_res=0.034,
+        voxel_size=0.026,
+        smooth_iters=14,
+        target_tris=1050,
+        post_smooth_fn=lambda x, y, z: (x, soft_cushion_floor(y, -0.94, 0.10), z),
+    )
+    objects.append(body_clay)
+
+    # 2) LeftArm / RightArm (몸통 양옆 짧은 찹쌀 팔)
+    for side, name in ((-1, "LeftArm"), (1, "RightArm")):
+        arm_elements = [
+            ((side * 0.50, -0.27, 0.10), (0.120, 0.110, 0.115), None, 2.0),
+            ((side * 0.65, -0.31, 0.15), (0.115, 0.100, 0.110), (0.0, -side * 0.16, side * 0.22), 2.1),
+        ]
+        objects.append(
+            create_metaball_clay(
+                name,
+                "body",
+                arm_elements,
+                mb_res=0.022,
+                voxel_size=0.017,
+                smooth_iters=14,
+                target_tris=190,
+            )
+        )
+
+    # 3) Tail (엉덩이 뒤 작고 동그란 폼폼 꼬리)
+    tail_pivot = (0.0, -0.62, -0.45)
+    objects.append(
+        create_metaball_clay(
+            "Tail",
+            "body",
+            [((0.0, -0.62, -0.49), (0.122, 0.122, 0.122), None, 2.0)],
+            mb_res=0.022,
+            voxel_size=0.017,
+            smooth_iters=12,
+            target_tris=160,
+        )
+    )
+
+    # 4) Head (통통한 만두형 두상 + 톱니 없이 매끈하게 절단된 파스텔 핑크 고정 머리 캡)
+    head_elements = [
+        ((0.0, 0.34, 0.00), (0.75, 0.62, 0.65), None, 2.05),
+        ((-0.26, 0.21, 0.10), (0.46, 0.35, 0.44), None, 2.1),
+        ((0.26, 0.21, 0.10), (0.46, 0.35, 0.44), None, 2.1),
+    ]
+    head_clay = create_metaball_clay(
+        "_KaniHeadClay",
+        "body",
+        head_elements,
+        mb_res=0.034,
+        voxel_size=0.026,
+        smooth_iters=15,
+        target_tris=1200,
+    )
+
+    # 이마 상단에서 양 관자놀이와 뒤통수로 부드럽게 감싸는 아치 경계(bmesh bisect)로 kani_pink 슬롯 분리
+    def kani_hairline(x, depth):
+        front = min(1.0, max(0.0, (depth + 0.30) / 0.85))
+        arch = min(1.35, (x / 0.72) ** 2)
+        return 0.59 + 0.11 * front - 0.135 * arch
+
+    head_clay.data.materials.append(ensure_material("kani_pink"))
+    bm = bmesh.new()
+    bm.from_mesh(head_clay.data)
+    for v in bm.verts:
+        v.co.z -= kani_hairline(v.co.x, -v.co.y)
+    bmesh.ops.bisect_plane(
+        bm,
+        geom=list(bm.verts) + list(bm.edges) + list(bm.faces),
+        plane_co=(0, 0, 0),
+        plane_no=(0, 0, 1),
+        dist=1e-6,
+    )
+    for face in bm.faces:
+        face.material_index = int(face.calc_center_median().z > 0)
+    for v in bm.verts:
+        v.co.z += kani_hairline(v.co.x, -v.co.y)
+    bm.to_mesh(head_clay.data)
+    bm.free()
+    head_clay.data.update()
+    set_smooth_and_recalc(head_clay)
+
+    head_socket_y, head_radius_x = measure_head_crown_and_radius(head_clay, head_center_z=0.0)
+    crown_y = head_socket_y + 0.025
+
+    # 정수리 중앙의 작고 가는 2가닥 삐죽 머리털(아호게, V자 ∨ 형태)
+    ahoge_left = create_curve_tube(
+        "_KaniAhogeLeft",
+        "eye_dark",
+        [
+            (-0.010, crown_y - 0.030, 0.012, 0.0115),
+            (-0.032, crown_y + 0.040, 0.016, 0.0095),
+            (-0.052, crown_y + 0.072, 0.014, 0.0055),
+        ],
+        resolution_u=3,
+        bevel_resolution=1,
+    )
+    ahoge_right = create_curve_tube(
+        "_KaniAhogeRight",
+        "eye_dark",
+        [
+            (0.010, crown_y - 0.030, 0.012, 0.0115),
+            (0.026, crown_y + 0.048, 0.016, 0.0095),
+            (0.042, crown_y + 0.084, 0.014, 0.0055),
+        ],
+        resolution_u=3,
+        bevel_resolution=1,
+    )
+
+    expr_parts, blink_center, extra_head_objs = build_chiikawa_style_face(
+        head_clay,
+        eye_x=0.228,
+        eye_y=0.272,
+        eye_rx=0.095,
+        eye_ry=0.105,
+        eye_depth=0.048,
+        mouth_y=0.145,
+        cheek_x=0.405,
+        cheek_y=0.168,
+        cheek_rx=0.130,
+        cheek_ry=0.072,
+        brow_style="kani_double",
+        open_tongue_default=False,
+        include_nose_tick=False,
+    )
+    objects.append(join_part_group("Head", [head_clay, ahoge_left, ahoge_right] + extra_head_objs))
+
+    # 5) LeftEar / RightEar (통통하고 둥근 게 집게발 모양 귀 + 꼭대기 앙증맞은 V자 홈 — 고정 kani_pink 슬롯)
+    for side, ear_name in ((-1, "LeftEar"), (1, "RightEar")):
+        pivot = Vector((side * 0.43, 0.79, 0.01))
+        tilt_z = -side * 0.40  # 바깥쪽으로 약 23도 대칭 기울임
+        rot_m = Euler((0.0, 0.0, tilt_z), "XYZ").to_matrix()
+
+        def ear_pt(u, v, w=0.0):
+            p = pivot + rot_m @ Vector((u, v, w))
+            return (p.x, p.y, p.z)
+
+        ear_elements = [
+            # 밑동~중간 통통한 게 집게 본체 (둥글고 도톰하게 모인 형태)
+            (ear_pt(0.0, 0.07, 0.0), (0.145, 0.135, 0.112), (0.0, 0.0, tilt_z), 2.0),
+            (ear_pt(0.0, 0.18, 0.0), (0.165, 0.145, 0.118), (0.0, 0.0, tilt_z), 2.1),
+            # 상단 좌·우 둥근 집게 끝 2개 (하트처럼 과도하게 벌어지지 않고 둥글게 모임)
+            (ear_pt(-0.068, 0.275, 0.0), (0.115, 0.135, 0.104), (0.0, 0.0, tilt_z + 0.14), 2.15),
+            (ear_pt(0.068, 0.275, 0.0), (0.115, 0.135, 0.104), (0.0, 0.0, tilt_z - 0.14), 2.15),
+            # 꼭대기 정중앙의 앙증맞은 V자 노치 카빙용 네거티브 메타볼
+            (ear_pt(0.0, 0.415, 0.0), (0.052, 0.095, 0.185), (0.0, 0.0, tilt_z), 2.35, True),
+        ]
+        objects.append(
+            create_metaball_clay(
+                ear_name,
+                "kani_pink",
+                ear_elements,
+                mb_res=0.016,
+                voxel_size=0.013,
+                smooth_iters=11,
+                target_tris=280,
+            )
+        )
+
+    objects.extend(expr_parts.values())
+
+    out_dir = os.path.join(MODELS_ROOT, "Characters", "pink_reference")
+    rig_meta = {
+        "coordinateSystem": "WPF_Y_UP_Z_FRONT",
+        "unitScale": 1.0,
+        "originOffset": {"x": 0.0, "y": 0.0, "z": 0.0},
+        "headPivot": {"x": 0.0, "y": 0.01, "z": 0.0},
+        "headSocket": {"x": 0.0, "y": head_socket_y, "z": 0.01},
+        "headRadiusX": head_radius_x,
+        "auraSocket": {"x": 0.0, "y": 0.0, "z": 0.0},
+        "shadowY": -0.94,
+        "shadowRadiusX": 0.70,
+        "shadowRadiusZ": 0.62,
+        "eyeBlinkCenter": {"x": 0.0, "y": blink_center[1], "z": blink_center[2]},
+        "nameplateAnchor": {"x": 0.0, "y": -0.94, "z": 0.35},
+        "leftEarPivot": {"x": -0.43, "y": 0.80, "z": 0.01},
+        "rightEarPivot": {"x": 0.43, "y": 0.80, "z": 0.01},
+        "leftEarBaseAngle": 0.0,
+        "rightEarBaseAngle": 0.0,
+        "leftArmPivot": {"x": -0.53, "y": -0.27, "z": 0.10},
+        "rightArmPivot": {"x": 0.53, "y": -0.27, "z": 0.10},
+        "tailPivot": {"x": tail_pivot[0], "y": tail_pivot[1], "z": tail_pivot[2]},
+    }
+    export_character(out_dir, objects, rig_meta)
+    with open(os.path.join(out_dir, "rig.json"), "w", encoding="utf-8", newline="\n") as f:
+        json.dump(rig_meta, f, indent=2, ensure_ascii=False)
+        f.write("\n")
+
+
+# ---------------------------------------------------------------------------
 # 2. 공통 액세서리 5종 (원점 = HeadSocket (0,0,0))
 # ---------------------------------------------------------------------------
 
@@ -2349,6 +2579,8 @@ def main():
         build_chiikawa()
     if "all" in targets or "usagi" in targets:
         build_usagi()
+    if "all" in targets or "pink_reference" in targets:
+        build_pink_reference()
     if "all" in targets or "accessories" in targets:
         build_accessories()
     if "all" in targets or "effects" in targets:

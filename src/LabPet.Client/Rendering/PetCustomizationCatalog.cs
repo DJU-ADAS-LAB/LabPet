@@ -23,6 +23,7 @@ public static class PetCustomizationCatalog
         new(PetSpeciesIds.Hachiware, "하치와레", "파란 가르마 무늬와 쫑긋한 고양이 귀, 파란 꼬리", "#FFF5F7"),
         new(PetSpeciesIds.Chiikawa, "치이카와", "동글동글 하얀 찹쌀 몸통과 작은 둥근 귀", "#FFF5F7"),
         new(PetSpeciesIds.Joey, "리처드", "노란 오리와 곰 문양 티셔츠", "#FFD029"),
+        new(PetSpeciesIds.PinkReference, "카니", "파스텔 핑크 머리와 게 집게발 귀, 삐죽 머리털이 매력적인 캐릭터", "#FFF5F7"),
         new(PetSpeciesIds.Usagi, "우사기", "따뜻한 크림 옐로우 몸통과 쫑긋 솟은 긴 토끼 귀", "#FFF7CC")
     ];
 

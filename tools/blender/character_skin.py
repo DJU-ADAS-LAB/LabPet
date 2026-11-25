@@ -122,7 +122,7 @@ def export_character(directory, objects, meta):
     for b in data.bones:
         end = b.tail_local
         b["end"] = [end.x, end.z, -end.y]
-        limit = {"mochi_spirit": 62, "fluffy_cloud": 52, "chiikawa": 60, "usagi": 85}.get(species, 78)
+        limit = {"mochi_spirit": 62, "fluffy_cloud": 52, "chiikawa": 60, "pink_reference": 60, "usagi": 85}.get(species, 78)
         if b.name.endswith(("Ear", "EarTip")):
             limit = 38 if species == "usagi" else 48
         b["limit"] = limit

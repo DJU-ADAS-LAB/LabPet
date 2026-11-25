@@ -436,6 +436,7 @@ public sealed class ProceduralPetMeshFactory : IPetMeshFactory
             case PetSpeciesIds.Hachiware:
             case PetSpeciesIds.Chiikawa:
             case PetSpeciesIds.Usagi:
+            case PetSpeciesIds.PinkReference:
             {
                 headPivotY = 0.02f;
                 headSocketY = 0.86f;
@@ -445,7 +446,9 @@ public sealed class ProceduralPetMeshFactory : IPetMeshFactory
 
                 var isHachi = appearance.SpeciesId == PetSpeciesIds.Hachiware;
                 var isUsagi = appearance.SpeciesId == PetSpeciesIds.Usagi;
+                var isKani = appearance.SpeciesId == PetSpeciesIds.PinkReference;
                 var hachiBlueMat = CreateClayMaterial(Color.FromRgb(109, 169, 204), bodyEmissiveBrush, specularPower: 14, specularAlpha: 48);
+                var kaniPinkMat = CreateClayMaterial(Color.FromRgb(248, 178, 190), bodyEmissiveBrush, specularPower: 11, specularAlpha: 28);
 
                 var torsoMb = new MeshBuilder(true, false);
                 torsoMb.AddEllipsoid(new Vector3(0, -0.36f, 0), 0.56f, 0.44f, 0.50f, 28, 18);
@@ -494,6 +497,12 @@ public sealed class ProceduralPetMeshFactory : IPetMeshFactory
                     capMb.AddEllipsoid(new Vector3(0.30f, 0.64f, 0.16f), 0.34f, 0.22f, 0.34f, 18, 12);
                     triangleCount += AddGeometry(headGroup, capMb, hachiBlueMat);
                 }
+                else if (isKani)
+                {
+                    var capMb = new MeshBuilder(true, false);
+                    capMb.AddEllipsoid(new Vector3(0f, 0.66f, 0.02f), 0.66f, 0.24f, 0.56f, 20, 12);
+                    triangleCount += AddGeometry(headGroup, capMb, kaniPinkMat);
+                }
 
                 leftEarRot = new AxisAngleRotation3D(new Vector3D(0, 0, 1), 0);
                 rightEarRot = new AxisAngleRotation3D(new Vector3D(0, 0, 1), 0);
@@ -514,6 +523,13 @@ public sealed class ProceduralPetMeshFactory : IPetMeshFactory
                     {
                         earMb.AddCone(new Vector3(side * 0.40f, 0.75f, 0), new Vector3(side * 0.14f, 1.0f, 0.04f), 0.21f, 0.05f, 0.32f, true, true, 18);
                         triangleCount += AddGeometry(earGroup, earMb, hachiBlueMat);
+                    }
+                    else if (isKani)
+                    {
+                        earMb.AddSphere(new Vector3(side * 0.46f, 0.94f, 0.01f), 0.15f, 16, 12);
+                        earMb.AddSphere(new Vector3(side * 0.54f, 1.06f, 0.01f), 0.11f, 14, 10);
+                        earMb.AddSphere(new Vector3(side * 0.38f, 1.08f, 0.01f), 0.11f, 14, 10);
+                        triangleCount += AddGeometry(earGroup, earMb, kaniPinkMat);
                     }
                     else
                     {

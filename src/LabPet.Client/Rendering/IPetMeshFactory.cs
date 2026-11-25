@@ -51,6 +51,7 @@ internal readonly record struct TypingKeyboardPlacement(
         PetSpeciesIds.Chiikawa => new(-0.46f, 0.79f, 0.09f, 0.36f, ArmForwardOffsetZ: 0.14f, ArmInwardOffsetX: 0.05f),
         PetSpeciesIds.Hachiware => new(-0.46f, 0.81f, 0.09f, 0.36f, ArmForwardOffsetZ: 0.14f, ArmInwardOffsetX: 0.05f),
         PetSpeciesIds.Usagi => new(-0.46f, 0.79f, 0.09f, 0.36f, ArmForwardOffsetZ: 0.14f, ArmInwardOffsetX: 0.05f),
+        PetSpeciesIds.PinkReference => new(-0.46f, 0.79f, 0.09f, 0.36f, ArmForwardOffsetZ: 0.14f, ArmInwardOffsetX: 0.05f),
         PetSpeciesIds.MochiSpirit => new(-0.62f, 1.05f, 0.07f, 0.44f, ArmForwardOffsetZ: 0.15f, ArmInwardOffsetX: 0.08f),
         PetSpeciesIds.FluffyCloud => new(-0.56f, 0.90f, 0.07f, 0.46f, ArmForwardOffsetZ: 0.16f, ArmInwardOffsetX: 0.08f),
         PetSpeciesIds.Joey => new(-0.44f, 0.56f, 0.08f, 0.28f),
