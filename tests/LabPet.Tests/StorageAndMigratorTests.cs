@@ -1,4 +1,6 @@
 using System.IO;
+using System.Text.Json;
+using System.Text.Json.Nodes;
 using LabPet.Client.Network;
 using LabPet.Client.Social;
 using LabPet.Client.Solo;
@@ -72,6 +74,98 @@ public sealed class StorageAndMigratorTests : IDisposable
         Assert.Equal("레거시모찌", loaded.PetName);
         Assert.False(string.IsNullOrWhiteSpace(loaded.PetId));
         Assert.False(string.IsNullOrWhiteSpace(loaded.FriendCode));
+    }
+
+    [Theory]
+    [InlineData(51, 100_001, true)]
+    [InlineData(50, 100_001, false)]
+    [InlineData(51, 100_000, false)]
+    [InlineData(50, 100_000, false)]
+    public async Task LegacyProgressReset_RequiresBothThresholdsAndRunsOnce(int level, long coins, bool reset)
+    {
+        var profile = new PetProfile { PetName = "이전 모찌", IsOnboardingCompleted = true };
+        profile.SoloProgress.Level = level;
+        profile.SoloProgress.Coins = coins;
+        profile.SoloProgress.PendingGameWagers.Add("보류 세션", 10);
+        profile.SoloProgress.PendingSoloLadderSession = new() { SessionId = "솔로 세션", BetCoins = 10 };
+        profile.SoloProgress.TotalKeystrokes = 123;
+        var path = Path.Combine(_tempDir, "profile.json");
+        await File.WriteAllTextAsync(path, JsonSerializer.Serialize(profile, ProtocolJson.StorageOptions));
+
+        await using var store = new JsonAppDataStore(new StateMigrator(), _tempDir);
+        var migrated = await store.LoadProfileAsync();
+        Assert.Equal(reset ? 1 : level, migrated.SoloProgress.Level);
+        Assert.Equal(reset ? 0 : coins, migrated.SoloProgress.Coins);
+        Assert.Equal(reset ? 0 : 1, migrated.SoloProgress.PendingGameWagers.Count);
+        Assert.Equal(reset, migrated.SoloProgress.PendingSoloLadderSession is null);
+        Assert.Equal(123, migrated.SoloProgress.TotalKeystrokes);
+        Assert.Equal(profile.PetId, migrated.PetId);
+        Assert.Equal(profile.PetName, migrated.PetName);
+
+        migrated.SoloProgress.Level = 60;
+        migrated.SoloProgress.Coins = 200_000;
+        await store.SaveProfileAsync(migrated);
+        await using var restarted = new JsonAppDataStore(new StateMigrator(), _tempDir);
+        var saved = await restarted.LoadProfileAsync();
+        Assert.Equal(60, saved.SoloProgress.Level);
+        Assert.Equal(200_000, saved.SoloProgress.Coins);
+    }
+
+    [Fact]
+    public void LegacyResetDoesNotApplyWhenAnInstallationSkipsTheResetRelease()
+    {
+        var progress = new SoloProgress { Level = 80, Coins = 300_000 };
+        Assert.True(JsonAppDataStore.ShouldResetLegacyProgress(progress, new Version(0, 3, 15, 0)));
+        Assert.False(JsonAppDataStore.ShouldResetLegacyProgress(progress, new Version(0, 3, 16, 0)));
+    }
+
+    [Fact]
+    public async Task ProtectedProgress_IgnoresPlaintextEditsAndAnOuterSchemaDowngrade()
+    {
+        await using var store = new JsonAppDataStore(new StateMigrator(), _tempDir);
+        var profile = new PetProfile();
+        profile.SoloProgress.Level = 25;
+        profile.SoloProgress.Coins = 600;
+        await store.SaveProfileAsync(profile);
+
+        var path = Path.Combine(_tempDir, "profile.json");
+        var root = JsonNode.Parse(await File.ReadAllTextAsync(path))!.AsObject();
+        Assert.False(root.ContainsKey("soloProgress"));
+        Assert.True(root.ContainsKey("protectedProgressV1"));
+        root["schemaVersion"] = 1;
+        root["soloProgress"] = JsonNode.Parse("""{"level":99,"coins":999999}""");
+        root["petName"] = "수정한 이름";
+        await File.WriteAllTextAsync(path, root.ToJsonString());
+
+        var loaded = await store.LoadProfileAsync();
+        Assert.Equal(25, loaded.SoloProgress.Level);
+        Assert.Equal(600, loaded.SoloProgress.Coins);
+        Assert.Equal("수정한 이름", loaded.PetName);
+    }
+
+    [Fact]
+    public async Task ProtectedProgress_RecoversValidatedBackupAndRejectsFlatJsonRollback()
+    {
+        var path = Path.Combine(_tempDir, "profile.json");
+        await using var store = new JsonAppDataStore(new StateMigrator(), _tempDir);
+        var profile = new PetProfile();
+        profile.SoloProgress.Coins = 15;
+        await store.SaveProfileAsync(profile);
+        profile.SoloProgress.Coins = 5;
+        await store.SaveProfileAsync(profile);
+
+        var root = JsonNode.Parse(await File.ReadAllTextAsync(path))!.AsObject();
+        root["protectedProgressV1"] = "AQID";
+        await File.WriteAllTextAsync(path, root.ToJsonString());
+        Assert.Equal(15, (await store.LoadProfileAsync()).SoloProgress.Coins);
+        Assert.Single(Directory.GetFiles(_tempDir, "profile.json.rejected-*"));
+
+        var legacy = JsonSerializer.Serialize(profile, ProtocolJson.StorageOptions);
+        await File.WriteAllTextAsync(path, legacy);
+        await File.WriteAllTextAsync(path + ".bak", legacy);
+        await Assert.ThrowsAsync<ProfileProtectionException>(() => store.LoadProfileAsync());
+        Assert.Equal(legacy, await File.ReadAllTextAsync(path));
+        Assert.Equal(legacy, await File.ReadAllTextAsync(path + ".bak"));
     }
 
     [Theory]

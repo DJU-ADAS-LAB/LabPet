@@ -30,7 +30,7 @@ public static class LocalSecretProtector
         }
 
         var plainBytes = Encoding.UTF8.GetBytes(plaintextSecret);
-        var protectedBytes = ProtectBytes(plainBytes);
+        var protectedBytes = ProtectBytes(plainBytes, AdditionalEntropy, "LabPet Friend Secret");
         return ProtectedPrefix + Convert.ToBase64String(protectedBytes);
     }
 
@@ -59,7 +59,7 @@ public static class LocalSecretProtector
         {
             var base64 = storedValue[ProtectedPrefix.Length..];
             var protectedBytes = Convert.FromBase64String(base64);
-            var plainBytes = UnprotectBytes(protectedBytes);
+            var plainBytes = UnprotectBytes(protectedBytes, AdditionalEntropy);
             plaintextSecret = Encoding.UTF8.GetString(plainBytes);
             return true;
         }
@@ -70,17 +70,17 @@ public static class LocalSecretProtector
         }
     }
 
-    private static byte[] ProtectBytes(byte[] plainBytes)
+    internal static byte[] ProtectBytes(byte[] plainBytes, byte[] entropy, string description)
     {
         var inputBlob = CreateBlob(plainBytes);
-        var entropyBlob = CreateBlob(AdditionalEntropy);
+        var entropyBlob = CreateBlob(entropy);
         var outputBlob = default(DataBlob);
 
         try
         {
             if (!CryptProtectData(
                 ref inputBlob,
-                szDataDescr: "LabPet Friend Secret",
+                szDataDescr: description,
                 ref entropyBlob,
                 pvReserved: IntPtr.Zero,
                 pPromptStruct: IntPtr.Zero,
@@ -105,10 +105,10 @@ public static class LocalSecretProtector
         }
     }
 
-    private static byte[] UnprotectBytes(byte[] protectedBytes)
+    internal static byte[] UnprotectBytes(byte[] protectedBytes, byte[] entropy)
     {
         var inputBlob = CreateBlob(protectedBytes);
-        var entropyBlob = CreateBlob(AdditionalEntropy);
+        var entropyBlob = CreateBlob(entropy);
         var outputBlob = default(DataBlob);
 
         try

@@ -59,7 +59,19 @@ public partial class App : Application
         _serviceProvider = services.BuildServiceProvider();
 
         var store = _serviceProvider.GetRequiredService<IAppDataStore>();
-        var profile = await store.LoadProfileAsync();
+        LabPet.Shared.Models.PetProfile profile;
+        try
+        {
+            profile = await store.LoadProfileAsync();
+        }
+        catch (Exception ex) when (ex is System.IO.IOException or UnauthorizedAccessException)
+        {
+            CrashLogWriter.Write("App.LoadProtectedProfile", ex);
+            MessageBox.Show("코인과 레벨 데이터의 보호 상태를 확인할 수 없습니다. 기존 파일을 보존했습니다. 같은 Windows 계정에서 정상 백업을 복원한 뒤 다시 실행해 주세요.",
+                "LabPet", MessageBoxButton.OK, MessageBoxImage.Warning);
+            Shutdown();
+            return;
+        }
 
         // 최초 실행 시 온보딩 마법사 진행
         if (!profile.IsOnboardingCompleted)
