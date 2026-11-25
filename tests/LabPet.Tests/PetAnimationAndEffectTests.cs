@@ -590,14 +590,35 @@ public sealed class PetAnimationAndEffectTests
             var window = new Window { Content = host, ShowActivated = false, ShowInTaskbar = false };
             try
             {
-                Assert.Equal(3, overlay.BubbleCount);
+                var letters = overlay.Children.Cast<UIElement>().Select(Assert.IsType<TextBlock>).ToArray();
+                Assert.Equal(new[] { "z", "Z", "Z" }, letters.Select(letter => letter.Text));
+                Assert.Equal(new[] { 13d, 16d, 19d }, letters.Select(letter => letter.FontSize));
+                Assert.Null(overlay.Background);
+                Assert.All(letters, letter => Assert.Null(letter.Background));
                 Assert.False(overlay.IsAnimating);
                 window.Show();
                 await WpfTestHost.FlushAsync();
                 Assert.True(overlay.IsAnimating);
 
+                var timer = System.Diagnostics.Stopwatch.StartNew();
+                var maxOpacity = 0d;
+                var minY = 0d;
+                var sawVisibleRise = false;
+                while (timer.Elapsed < TimeSpan.FromSeconds(3))
+                {
+                    var opacity = letters[0].Opacity;
+                    var y = letters[0].RenderTransform.Value.OffsetY;
+                    maxOpacity = Math.Max(maxOpacity, opacity);
+                    minY = Math.Min(minY, y);
+                    sawVisibleRise = opacity >= 0.5 && y < 0;
+                    if (sawVisibleRise) break;
+                    await Task.Delay(16);
+                }
+                Assert.True(sawVisibleRise, $"진행한 수면 글자 값 (투명도 {maxOpacity:F2}, 상승 {minY:F2})");
+
                 host.Visibility = Visibility.Collapsed;
                 Assert.False(overlay.IsAnimating);
+                Assert.False(overlay.IsVisible);
                 host.Visibility = Visibility.Visible;
                 Assert.True(overlay.IsAnimating);
             }
@@ -616,7 +637,8 @@ public sealed class PetAnimationAndEffectTests
             var indicator = new LabPet.Client.Views.MiniSleepZzzIndicator { Visibility = Visibility.Collapsed };
             Assert.Equal(20.0, indicator.Width);
             Assert.Equal(16.0, indicator.Height);
-            Assert.Equal(3, indicator.LetterCount);
+            Assert.Empty(indicator.Children.OfType<Border>());
+            Assert.Equal(new[] { "z", "z", "z" }, indicator.Children.OfType<TextBlock>().Select(letter => letter.Text));
             var window = new Window { Content = indicator, ShowActivated = false, ShowInTaskbar = false };
             try
             {

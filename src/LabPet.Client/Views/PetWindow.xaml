@@ -363,7 +363,7 @@
             <ModelVisual3D x:Name="PetVisual" />
         </Viewport3D>
 
-        <!-- 5분 무입력 수면 상태 플로팅 ZZZ 방울 애니메이션 (Viewport 위에 겹치되 클릭을 방해하지 않음) -->
+        <!-- 5분 무입력 수면 상태의 ZZZ 글자 애니메이션 -->
         <Viewbox Grid.Row="0" Width="{Binding Width, ElementName=PetViewport}"
                  HorizontalAlignment="Center" VerticalAlignment="Top" IsHitTestVisible="False"
                  Opacity="{Binding PetOpacity}"

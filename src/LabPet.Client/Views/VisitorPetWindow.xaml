@@ -215,7 +215,7 @@
             <ModelVisual3D x:Name="VisitorPetVisual" />
         </Viewport3D>
 
-        <!-- 내 펫과 같은 우상단 수면 방울을 뷰포트 배율에 맞춰 배치한다. -->
+        <!-- 내 펫과 같은 우상단 수면 글자를 뷰포트 배율에 맞춰 배치한다. -->
         <Viewbox x:Name="VisitorSleepBadge" Grid.Row="0" Width="{Binding Width, ElementName=VisitorViewport}"
                  HorizontalAlignment="Center" VerticalAlignment="Top" IsHitTestVisible="False"
                  Visibility="Collapsed">
