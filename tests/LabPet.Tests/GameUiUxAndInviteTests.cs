@@ -463,6 +463,7 @@ public sealed class GameUiUxAndInviteTests : IAsyncLifetime
                     Assert.False(hubButton.Command.CanExecute(null));
                     Assert.False(visitButton.Command.CanExecute(null));
                     Assert.Equal("1초", state.Icon);
+                    Assert.False(await snowballs.SendAsync(_guestAsFriend));
                     await send.WaitAsync(TimeSpan.FromSeconds(4));
                     await WpfTestHost.FlushAsync();
                     Assert.Equal("❄", state.Icon);
@@ -1063,9 +1064,17 @@ public sealed class GameUiUxAndInviteTests : IAsyncLifetime
             Assert.Equal(GameScreen.Typing, requestedScreen);
             Assert.Equal(TypingPhase.Countdown, guestGames.TypingPhase);
 
-            await WaitUntilAsync(guestGames, () => guestGames.TypingPhase == TypingPhase.Result).WaitAsync(TimeSpan.FromSeconds(5));
+            await WaitUntilAsync(guestGames, () => guestGames.IsTypingRunning).WaitAsync(TimeSpan.FromSeconds(5));
+            guestGames.TypingPromptText = "###";
+            guestGames.TypingInputText = "###";
+            guestGames.TypingMyScore = int.MaxValue;
 
+            await WaitUntilAsync(guestGames, () => guestGames.TypingPhase == TypingPhase.Result).WaitAsync(TimeSpan.FromSeconds(5));
             await WaitUntilAsync(hostGames, () => hostGames.TypingPhase == TypingPhase.Result).WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.Equal(0, guestGames.TypingMyScore);
+            Assert.Equal(0, hostGames.TypingOpponentScore);
+            Assert.Equal(200, _guestProfile.SoloProgress.Coins);
+            Assert.Equal(200, _hostProfile.SoloProgress.Coins);
 
             // 2. 사다리 초대 수락 시 대시보드 없이 Lobby 진입
             guestGames.OpenGameScreenCommand.Execute(GameScreen.Dashboard);

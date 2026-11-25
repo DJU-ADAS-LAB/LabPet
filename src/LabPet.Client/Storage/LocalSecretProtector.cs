@@ -70,6 +70,7 @@ public static class LocalSecretProtector
         }
     }
 
+    [System.Reflection.Obfuscation(Exclude = false)]
     internal static byte[] ProtectBytes(byte[] plainBytes, byte[] entropy, string description)
     {
         var inputBlob = CreateBlob(plainBytes);
@@ -105,6 +106,7 @@ public static class LocalSecretProtector
         }
     }
 
+    [System.Reflection.Obfuscation(Exclude = false)]
     internal static byte[] UnprotectBytes(byte[] protectedBytes, byte[] entropy)
     {
         var inputBlob = CreateBlob(protectedBytes);

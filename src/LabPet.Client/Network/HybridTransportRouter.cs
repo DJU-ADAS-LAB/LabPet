@@ -44,6 +44,10 @@ public sealed class HybridTransportRouter : ISocialTransport
         }
     }
 
+    private readonly ConcurrentDictionary<string, long> _petSentAt = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, long> _petReceivedAt = new(StringComparer.OrdinalIgnoreCase);
+    private static readonly TimeSpan PetInteractionInterval = TimeSpan.FromSeconds(1);
+
     private readonly LanP2pTransport _lan;
     private readonly GcpSignalRTransport _gcp;
 
@@ -270,7 +274,28 @@ public sealed class HybridTransportRouter : ISocialTransport
         => SendRoutedAsync(friend, transport => transport.SendSnowballAsync(friend, eventId, cancellationToken));
 
     public Task<bool> SendPetInteractionAsync(FriendEntry friend, string interactionType, CancellationToken cancellationToken = default)
-        => SendRoutedAsync(friend, t => t.SendPetInteractionAsync(friend, interactionType, cancellationToken));
+        => interactionType == PetInteractionPayload.PetType && TryAcceptPetInteraction(_petSentAt, friend.PetId)
+            ? SendRoutedAsync(friend, t => t.SendPetInteractionAsync(friend, interactionType, cancellationToken))
+            : Task.FromResult(false);
+
+    [System.Reflection.Obfuscation(Exclude = false)]
+    private static bool TryAcceptPetInteraction(ConcurrentDictionary<string, long> timestamps, string petId)
+    {
+        while (true)
+        {
+            var now = System.Diagnostics.Stopwatch.GetTimestamp();
+            if (!timestamps.TryGetValue(petId, out var previous))
+            {
+                if (timestamps.TryAdd(petId, now)) return true;
+            }
+            else
+            {
+                if (System.Diagnostics.Stopwatch.GetElapsedTime(previous, now) < PetInteractionInterval)
+                    return false;
+                if (timestamps.TryUpdate(petId, now, previous)) return true;
+            }
+        }
+    }
 
     public Task<bool> SendGameEventAsync(FriendEntry friend, GameEventPayload payload, CancellationToken cancellationToken = default)
         => SendRoutedAsync(friend, t => t.SendGameEventAsync(friend, payload, cancellationToken));
@@ -455,8 +480,12 @@ public sealed class HybridTransportRouter : ISocialTransport
 
     private void OnSourceSnowballReceived(object? sender, SnowballReceivedEventArgs e) => SnowballReceived?.Invoke(this, e);
 
+    [System.Reflection.Obfuscation(Exclude = false)]
     private void OnSourcePetInteractionReceived(object? sender, PetInteractionReceivedEventArgs e)
-        => PetInteractionReceived?.Invoke(this, e);
+    {
+        if (e.InteractionType == PetInteractionPayload.PetType && TryAcceptPetInteraction(_petReceivedAt, e.SenderPetId))
+            PetInteractionReceived?.Invoke(this, e);
+    }
 
     private void OnSourceMusicFrameReceived(object? sender, MusicFrameReceivedEventArgs e)
         => MusicFrameReceived?.Invoke(this, e);

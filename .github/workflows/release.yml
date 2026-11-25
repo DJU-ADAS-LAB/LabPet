@@ -73,6 +73,20 @@ jobs:
           dotnet @publishArgs
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
+      - name: 배포용 클라이언트 난독화
+        shell: pwsh
+        run: |
+          ./tools/obfuscation/Protect-LabPetRelease.ps1 -PublishDirectory ./publish/win-x64 -WorkDirectory ./publish/obfuscation-work
+
+      - name: 난독화된 클라이언트 회귀 테스트
+        shell: pwsh
+        run: |
+          $testDir = New-Item -ItemType Directory -Path './publish/obfuscation-test' -Force
+          Copy-Item -Path './tests/LabPet.Tests/bin/Release/net10.0-windows/*' -Destination $testDir.FullName -Recurse -Force
+          Copy-Item -LiteralPath './publish/win-x64/LabPet.Client.dll' -Destination $testDir.FullName -Force
+          dotnet test (Join-Path $testDir.FullName 'LabPet.Tests.dll') --filter 'FullyQualifiedName~StorageAndMigratorTests|FullyQualifiedName~GameUiUxAndInviteTests|FullyQualifiedName~GameInviteTransportTests' --blame-hang-timeout 30s
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
       - name: Velopack CLI (vpk) 설치
         shell: pwsh
         run: |

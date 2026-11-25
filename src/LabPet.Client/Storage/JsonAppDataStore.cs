@@ -18,7 +18,7 @@ public sealed class JsonAppDataStore : IAppDataStore, IAsyncDisposable
     private const string ProfileProtectionMarker = "profile.protection-v1";
     private const string ProtectedProgressProperty = "protectedProgressV1";
     private const int MigrationResetLevel = 50;
-    private const long MigrationResetCoins = 100_000;
+    private const long MigrationResetCoins = 50_000;
 
     private static readonly Version MigrationResetRelease = new(0, 3, 15, 0);
     private static readonly byte[] ProgressEntropy = Encoding.UTF8.GetBytes("LabPet.ProfileProgress.v1");
@@ -135,6 +135,7 @@ public sealed class JsonAppDataStore : IAppDataStore, IAsyncDisposable
     internal static bool ShouldResetLegacyProgress(SoloProgress progress, Version? release) =>
         release == MigrationResetRelease && progress.Level > MigrationResetLevel && progress.Coins > MigrationResetCoins;
 
+    [System.Reflection.Obfuscation(Exclude = false)]
     private async Task<ProfileRead> ReadProfileAsync(string path, bool requireProtection, CancellationToken ct,
         bool captureDocument = false)
     {
@@ -189,6 +190,7 @@ public sealed class JsonAppDataStore : IAppDataStore, IAsyncDisposable
         return new ProfileRead(ok ? profile : null, migrated, hasProtection, ok ? document : null);
     }
 
+    [System.Reflection.Obfuscation(Exclude = false)]
     private async Task SaveProtectedProfileAsync(string path, PetProfile profile, bool markerExists,
         bool recovering, CancellationToken ct)
     {
@@ -227,6 +229,7 @@ public sealed class JsonAppDataStore : IAppDataStore, IAsyncDisposable
         }
     }
 
+    [System.Reflection.Obfuscation(Exclude = false)]
     private async Task BackupValidatedProfileAsync(string path, string backupPath, CancellationToken ct)
     {
         if (!File.Exists(path)) return;

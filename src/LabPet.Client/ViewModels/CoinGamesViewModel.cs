@@ -994,6 +994,7 @@ public sealed partial class CoinGamesViewModel : ObservableObject, IDisposable
     }
 
     [RelayCommand]
+    [System.Reflection.Obfuscation(Exclude = false)]
     private async Task CashOutHiLowAsync()
     {
         if (!CanCashOutHiLow)

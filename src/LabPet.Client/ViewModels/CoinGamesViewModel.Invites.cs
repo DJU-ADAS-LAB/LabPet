@@ -244,10 +244,13 @@ public sealed partial class CoinGamesViewModel
         await SettleMultiplayerWagerAsync(exchange.Session, refund);
     }
 
+    [System.Reflection.Obfuscation(Exclude = false)]
     private bool TryReserveMultiplayerWager(string session, int wager)
     {
         if (wager == 0)
             return true;
+        if (string.IsNullOrWhiteSpace(session) || !WagerOptions.Contains(wager))
+            return false;
         var progress = _profile.SoloProgress;
         lock (progress)
         {
@@ -259,6 +262,7 @@ public sealed partial class CoinGamesViewModel
         }
     }
 
+    [System.Reflection.Obfuscation(Exclude = false)]
     private async Task SettleMultiplayerWagerAsync(string? session, int payout)
     {
         if (session is null)
@@ -266,14 +270,18 @@ public sealed partial class CoinGamesViewModel
         var progress = _profile.SoloProgress;
         lock (progress)
         {
-            if (!progress.PendingGameWagers.Remove(session))
+            if (!progress.PendingGameWagers.TryGetValue(session, out var reserved)
+                || reserved <= 0 || payout < 0 || payout > (long)reserved * LabLadderEngine.MaxParticipants
+                || progress.Coins > long.MaxValue - payout)
                 return;
+            progress.PendingGameWagers.Remove(session);
             progress.Coins += payout;
         }
         NotifyCoinsChanged();
         await PersistProfileAsync();
     }
 
+    [System.Reflection.Obfuscation(Exclude = false)]
     private void RecoverInterruptedGameWagers(PetProfile profile)
     {
         if (string.Equals(_wagerRecoveryPetId, profile.PetId, StringComparison.Ordinal))

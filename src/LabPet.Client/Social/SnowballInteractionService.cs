@@ -10,6 +10,8 @@ namespace LabPet.Client.Social;
 /// <summary>세 발신 위치의 대상별 쿨다운과 인증 전송을 공유한다.</summary>
 public sealed class SnowballInteractionService : IDisposable
 {
+    private static readonly TimeSpan SendCooldown = TimeSpan.FromSeconds(1);
+    private readonly Dictionary<string, long> _lastSend = new(StringComparer.OrdinalIgnoreCase);
     private readonly ISocialTransport _transport;
     private readonly Dispatcher _dispatcher;
     private readonly Dictionary<string, SnowballAction> _actions = new(StringComparer.OrdinalIgnoreCase);
@@ -52,7 +54,11 @@ public sealed class SnowballInteractionService : IDisposable
     internal async Task<bool> SendAsync(FriendEntry friend)
     {
         _dispatcher.VerifyAccess();
-        if (_disposed) return false;
+        if (_disposed || GetCooldownRemaining(friend.PetId) > TimeSpan.Zero
+            || string.IsNullOrWhiteSpace(friend.PairSecretBase64)
+            || GetStatus(friend.PetId) != SnowballPeerStatus.Available)
+            return false;
+        _lastSend[friend.PetId] = Timestamp;
         using var attempt = CancellationTokenSource.CreateLinkedTokenSource(_stopping);
         attempt.CancelAfter(TimeSpan.FromSeconds(8));
         try
@@ -70,8 +76,15 @@ public sealed class SnowballInteractionService : IDisposable
         }
     }
 
-    internal long Timestamp => _clock.GetTimestamp();
-    internal TimeSpan ElapsedSince(long timestamp) => _clock.GetElapsedTime(timestamp, _clock.GetTimestamp());
+    private long Timestamp => _clock.GetTimestamp();
+
+    internal TimeSpan GetCooldownRemaining(string petId)
+    {
+        _dispatcher.VerifyAccess();
+        if (!_lastSend.TryGetValue(petId, out var previous)) return TimeSpan.Zero;
+        var remaining = SendCooldown - _clock.GetElapsedTime(previous, Timestamp);
+        return remaining > TimeSpan.Zero ? remaining : TimeSpan.Zero;
+    }
 
     private void OnPeersChanged(object? sender, IReadOnlyList<PeerSnapshot> peers)
     {
@@ -85,6 +98,7 @@ public sealed class SnowballInteractionService : IDisposable
         });
     }
 
+    [System.Reflection.Obfuscation(Exclude = false)]
     private void OnReceived(object? sender, SnowballReceivedEventArgs e)
     {
         if (_disposed || _dispatcher.HasShutdownStarted || !Guid.TryParse(e.SenderPetId, out var senderId)
@@ -136,10 +150,8 @@ public sealed class SnowballInteractionService : IDisposable
 
 public sealed class SnowballAction : ObservableObject
 {
-    private static readonly TimeSpan Cooldown = TimeSpan.FromSeconds(1);
     private readonly SnowballInteractionService _service;
     private FriendEntry _friend;
-    private long? _lastAttempt;
     private bool _waiting;
     private bool _failed;
 
@@ -178,20 +190,20 @@ public sealed class SnowballAction : ObservableObject
 
     private bool CanSend() => !_waiting && !string.IsNullOrWhiteSpace(_friend.PairSecretBase64)
         && _service.GetStatus(_friend.PetId) == SnowballPeerStatus.Available
-        && (_lastAttempt is not { } sent || _service.ElapsedSince(sent) >= Cooldown);
+        && _service.GetCooldownRemaining(_friend.PetId) == TimeSpan.Zero;
 
+    [System.Reflection.Obfuscation(Exclude = false)]
     private async Task ExecuteAsync()
     {
         if (!CanSend()) return;
-        var attemptedAt = _service.Timestamp;
-        _lastAttempt = attemptedAt;
+        var friend = _friend;
         _waiting = true;
         _failed = false;
         Refresh();
         try
         {
-            _failed = !await _service.SendAsync(_friend);
-            var remaining = Cooldown - _service.ElapsedSince(attemptedAt);
+            _failed = !await _service.SendAsync(friend);
+            var remaining = _service.GetCooldownRemaining(friend.PetId);
             if (remaining > TimeSpan.Zero) await Task.Delay(remaining);
         }
         finally

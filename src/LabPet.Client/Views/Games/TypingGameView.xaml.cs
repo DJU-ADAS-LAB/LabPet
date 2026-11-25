@@ -22,6 +22,10 @@ public partial class TypingGameView : UserControl
     public TypingGameView()
     {
         InitializeComponent();
+        DataObject.AddPastingHandler(TypingInputBox, (_, args) =>
+        {
+            if (_boundVm is { IsCompetitiveTypingRound: true }) args.CancelCommand();
+        });
         DataContextChanged += OnDataContextChanged;
         Loaded += OnLoaded;
         Unloaded += OnUnloaded;

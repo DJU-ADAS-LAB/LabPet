@@ -115,16 +115,25 @@ public sealed partial class CoinGamesViewModel
         TypingStatusText = "온라인 친구와 10초 타이핑 대결을 펼쳐 보세요!";
     }
 
+    internal bool IsCompetitiveTypingRound => _typingSessionId is not null && !_isTypingSoloPractice;
+
+    private long _typingStartedAt;
+    private int _typingLocalFinalScore;
+    private string _typingLastMatchedPrefix = string.Empty;
+
     private void BeginTypingSprint(bool isSoloPractice, FriendEntry? opponent, string? sessionId, int wager)
     {
         CancelTypingCountdown();
         _typingTimer.Stop();
+        _typingStartedAt = 0;
 
         _isTypingSoloPractice = isSoloPractice;
         _typingOpponent = opponent;
         _typingSessionId = sessionId;
         _typingActiveWager = wager;
         _typingCompletedScore = 0;
+        _typingLocalFinalScore = 0;
+        _typingLastMatchedPrefix = string.Empty;
         _typingCompletedPrompts.Clear();
         _typingMyFinished = false;
         _typingOpponentFinished = false;
@@ -227,6 +236,7 @@ public sealed partial class CoinGamesViewModel
         TypingPhase = TypingPhase.Running;
         IsTypingRunning = true;
         TypingStatusText = "문장을 정확히 입력하면 자동으로 다음 문장으로 넘어갑니다.";
+        _typingStartedAt = System.Diagnostics.Stopwatch.GetTimestamp();
         _typingTimer.Start();
     }
 
@@ -246,6 +256,7 @@ public sealed partial class CoinGamesViewModel
         CancelTypingCountdown();
         _typingSessionId = null;
         _typingTimer.Stop();
+        _typingStartedAt = 0;
         IsTypingRunning = false;
         TypingPhase = TypingPhase.Setup;
         TypingStatusText = message;
@@ -254,13 +265,14 @@ public sealed partial class CoinGamesViewModel
 
     partial void OnTypingInputTextChanged(string value)
     {
-        if (!IsTypingRunning)
-        {
+        if (!IsTypingRunning || _typingStartedAt == 0 || GetTypingSecondsRemaining() <= 0)
             return;
-        }
 
+        var expected = _typingSessionId is { } matchId
+            ? TypingSprintEngine.MatchPrompt(matchId, _typingCompletedPrompts.Count)
+            : TypingPromptText;
         // 정확히 일치하면 Enter 없이도 즉시 다음 문장으로 넘어간다.
-        var completed = TypingSprintEngine.EvaluateCompletedPrompt(TypingPromptText, value);
+        var completed = TypingSprintEngine.EvaluateCompletedPrompt(expected, value);
         if (completed > 0 && (_typingSessionId is null || _typingCompletedPrompts.Count < TypingSprintEngine.MaxCompletedPrompts))
         {
             _typingCompletedScore += completed;
@@ -268,7 +280,7 @@ public sealed partial class CoinGamesViewModel
             TypingMyScore = _typingCompletedScore;
             if (_typingSessionId is { } sessionId)
             {
-                _typingCompletedPrompts.Add(TypingPromptText);
+                _typingCompletedPrompts.Add(expected);
                 TypingPromptText = TypingSprintEngine.MatchPrompt(sessionId, _typingCompletedPrompts.Count);
             }
             else
@@ -276,12 +288,14 @@ public sealed partial class CoinGamesViewModel
                 TypingPromptText = TypingSprintEngine.PickPrompt(exclude: TypingPromptText);
             }
 
+            _typingLastMatchedPrefix = string.Empty;
             TypingInputText = string.Empty;
             SendTypingProgressIfNeeded(force: true);
             return;
         }
 
-        var partial = TypingSprintEngine.CountMatchedPrefixChars(TypingPromptText, value);
+        var partial = TypingSprintEngine.CountMatchedPrefixChars(expected, value);
+        _typingLastMatchedPrefix = expected[..partial];
         TypingMyScore = _typingCompletedScore + partial;
         SendTypingProgressIfNeeded(force: false);
     }
@@ -306,32 +320,38 @@ public sealed partial class CoinGamesViewModel
             SessionId = _typingSessionId,
             Action = "progress",
             WagerCoins = _typingActiveWager,
-            Data = TypingMyScore.ToString()
+            Data = FormattableString.Invariant($"{_typingCompletedScore + _typingLastMatchedPrefix.Length}")
         });
     }
 
+    [System.Reflection.Obfuscation(Exclude = false)]
+    private double GetTypingSecondsRemaining() => Math.Max(0,
+        TypingSprintDurationSeconds - System.Diagnostics.Stopwatch.GetElapsedTime(_typingStartedAt).TotalSeconds);
+
+    [System.Reflection.Obfuscation(Exclude = false)]
     private async void OnTypingTimerTick(object? sender, EventArgs e)
     {
-        if (!IsTypingRunning)
+        if (!IsTypingRunning || _typingStartedAt == 0)
         {
             _typingTimer.Stop();
             return;
         }
 
-        _typingRemainingSeconds = Math.Max(0, _typingRemainingSeconds - 0.1);
+        _typingRemainingSeconds = GetTypingSecondsRemaining();
         TypingTimeLeftText = $"{_typingRemainingSeconds:0.0}초";
         TypingTimeProgress = TypingSprintDurationSeconds > 0
             ? Math.Clamp(_typingRemainingSeconds / TypingSprintDurationSeconds, 0.0, 1.0)
             : 0.0;
 
-        if (_typingRemainingSeconds <= 0.001)
+        if (_typingRemainingSeconds <= 0)
         {
             _typingTimer.Stop();
+            _typingStartedAt = 0;
             IsTypingRunning = false;
-            _typingMyFinished = true;
 
             if (_isTypingSoloPractice)
             {
+                _typingMyFinished = true;
                 TypingPhase = TypingPhase.Result;
                 TypingResultHeadline = "연습 완료!";
                 TypingSettlementText = $"완료 문장 {TypingCompletedCount}개 · 총 {TypingMyScore}점";
@@ -340,25 +360,40 @@ public sealed partial class CoinGamesViewModel
                 return;
             }
 
-            TypingPhase = TypingPhase.WaitingOpponent;
-            TypingStatusText = $"종료! 내 점수 {TypingMyScore}점 · 상대 결과 집계 중...";
-            if (_typingOpponent is not null && _typingSessionId is not null)
+            if (_typingOpponent is not { } opponent || _typingSessionId is not { } session)
+                return;
+
+            var transcript = TypingSprintEngine.CreateTranscript(_typingCompletedPrompts, _typingLastMatchedPrefix);
+            if (!TypingSprintEngine.TryScoreTranscript(session, transcript, out _typingLocalFinalScore))
             {
-                await _social.SendGameEventAsync(_typingOpponent, new GameEventPayload
+                await _social.SendGameEventAsync(opponent, new GameEventPayload
                 {
-                    GameType = TypingSprintEngine.GameTypeId,
-                    SessionId = _typingSessionId,
-                    Action = "finish",
-                    WagerCoins = _typingActiveWager,
-                    Data = TypingSprintEngine.CreateTranscript(_typingCompletedPrompts,
-                        TypingPromptText[..TypingSprintEngine.CountMatchedPrefixChars(TypingPromptText, TypingInputText)])
+                    GameType = TypingSprintEngine.GameTypeId, SessionId = session,
+                    Action = "cancel", WagerCoins = _typingActiveWager
                 });
+                if (_typingSessionId == session)
+                    await RefundTypingRoundAsync("타이핑 점수를 검증할 수 없어 참가비를 반환했습니다.");
+                return;
             }
+
+            _typingMyFinished = true;
+            TypingMyScore = _typingLocalFinalScore;
+            TypingPhase = TypingPhase.WaitingOpponent;
+            TypingStatusText = $"종료! 내 점수 {_typingLocalFinalScore}점 · 상대 결과 집계 중...";
+            await _social.SendGameEventAsync(opponent, new GameEventPayload
+            {
+                GameType = TypingSprintEngine.GameTypeId,
+                SessionId = session,
+                Action = "finish",
+                WagerCoins = _typingActiveWager,
+                Data = transcript
+            });
 
             await TryResolveTypingMatchAsync();
         }
     }
 
+    [System.Reflection.Obfuscation(Exclude = false)]
     private async Task TryResolveTypingMatchAsync()
     {
         if (_typingSessionId is null || !_typingMyFinished || !_typingOpponentFinished)
@@ -371,25 +406,26 @@ public sealed partial class CoinGamesViewModel
         _typingSessionId = null;
 
         var oppName = _typingOpponent is null ? "상대" : _social.GetFriendDisplayName(_typingOpponent.PetId);
+        TypingMyScore = _typingLocalFinalScore;
         TypingOpponentScore = _typingOpponentFinalScore;
         TypingPhase = TypingPhase.Result;
 
-        if (TypingMyScore > _typingOpponentFinalScore)
+        if (_typingLocalFinalScore > _typingOpponentFinalScore)
         {
             var prize = _typingActiveWager * 2;
             await SettleMultiplayerWagerAsync(session, prize);
             TypingResultHeadline = "승리!";
             TypingSettlementText = $"+{prize} 코인 획득 (참가 {_typingActiveWager} 코인)";
-            TypingStatusText = $"승리! 나 {TypingMyScore}점 vs {oppName} {_typingOpponentFinalScore}점 (+{prize} 코인)";
+            TypingStatusText = $"승리! 나 {_typingLocalFinalScore}점 vs {oppName} {_typingOpponentFinalScore}점 (+{prize} 코인)";
             PetEmotionTriggered?.Invoke(this, true);
             GameNotification?.Invoke(this, $"{oppName}에게 타이핑 대결 승리! (+{prize} 코인)");
         }
-        else if (TypingMyScore == _typingOpponentFinalScore)
+        else if (_typingLocalFinalScore == _typingOpponentFinalScore)
         {
             await SettleMultiplayerWagerAsync(session, _typingActiveWager);
             TypingResultHeadline = "무승부";
             TypingSettlementText = $"배팅 {_typingActiveWager} 코인 반환";
-            TypingStatusText = $"무승부 · {TypingMyScore}점 동점 (배팅 {_typingActiveWager} 코인 반환)";
+            TypingStatusText = $"무승부 · {_typingLocalFinalScore}점 동점 (배팅 {_typingActiveWager} 코인 반환)";
             GameNotification?.Invoke(this, $"{oppName}와 타이핑 대결 무승부!");
         }
         else
@@ -397,7 +433,7 @@ public sealed partial class CoinGamesViewModel
             await SettleMultiplayerWagerAsync(session, 0);
             TypingResultHeadline = "아쉬운 패배";
             TypingSettlementText = $"-{_typingActiveWager} 코인 차감";
-            TypingStatusText = $"패배 · 나 {TypingMyScore}점 vs {oppName} {_typingOpponentFinalScore}점 (-{_typingActiveWager} 코인)";
+            TypingStatusText = $"패배 · 나 {_typingLocalFinalScore}점 vs {oppName} {_typingOpponentFinalScore}점 (-{_typingActiveWager} 코인)";
             PetEmotionTriggered?.Invoke(this, false);
             GameNotification?.Invoke(this, $"{oppName}에게 타이핑 대결 패배...");
         }

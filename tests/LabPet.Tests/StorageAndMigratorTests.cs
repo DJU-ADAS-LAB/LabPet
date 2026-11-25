@@ -77,10 +77,10 @@ public sealed class StorageAndMigratorTests : IDisposable
     }
 
     [Theory]
-    [InlineData(51, 100_001, true)]
-    [InlineData(50, 100_001, false)]
-    [InlineData(51, 100_000, false)]
-    [InlineData(50, 100_000, false)]
+    [InlineData(51, 50_001, true)]
+    [InlineData(50, 50_001, false)]
+    [InlineData(51, 50_000, false)]
+    [InlineData(50, 50_000, false)]
     public async Task LegacyProgressReset_RequiresBothThresholdsAndRunsOnce(int level, long coins, bool reset)
     {
         var profile = new PetProfile { PetName = "이전 모찌", IsOnboardingCompleted = true };
