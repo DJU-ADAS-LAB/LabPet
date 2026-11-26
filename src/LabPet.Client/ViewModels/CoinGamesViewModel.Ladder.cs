@@ -1322,14 +1322,17 @@ public sealed partial class CoinGamesViewModel
 
         var refunded = _ladderPaidCoins;
         _ladderPaidCoins = 0;
-        var finalMessage = refunded > 0
-            && !statusMessage.Contains("반환", StringComparison.Ordinal)
-            && !string.Equals(statusMessage, FriendOperationErrorCodes.PomodoroFocusMessage, StringComparison.Ordinal)
-            ? $"{statusMessage} (참가 {refunded} 코인 반환)"
-            : statusMessage;
-
+        var finalMessage = statusMessage;
         if (refunded > 0)
-            await SettleMultiplayerWagerAsync(sessionId, refunded);
+        {
+            var refundSettled = await SettleMultiplayerWagerAsync(sessionId, refunded);
+            finalMessage = !refundSettled
+                ? (RequiresGrowthRecovery ? PetEconomyService.GrowthRecoveryMessage : "참가 코인 반환 정산에 실패했습니다.")
+                : !statusMessage.Contains("반환", StringComparison.Ordinal)
+                  && !string.Equals(statusMessage, FriendOperationErrorCodes.PomodoroFocusMessage, StringComparison.Ordinal)
+                    ? $"{statusMessage} (참가 {refunded} 코인 반환)"
+                    : statusMessage;
+        }
 
         CloseLadderRoomState(finalMessage);
 
@@ -1375,8 +1378,10 @@ public sealed partial class CoinGamesViewModel
         {
             var refund = run.AbortRefundCoins;
             run.AbortRefundCoins = 0;
-            await SettleMultiplayerWagerAsync(run.SessionId, refund);
-            var fullMsg = $"{reasonMessage} ({refund} 코인 반환)";
+            var refundSettled = await SettleMultiplayerWagerAsync(run.SessionId, refund);
+            var fullMsg = refundSettled
+                ? $"{reasonMessage} ({refund} 코인 반환)"
+                : (RequiresGrowthRecovery ? PetEconomyService.GrowthRecoveryMessage : "참가 코인 반환 정산에 실패했습니다.");
             LadderStatusText = fullMsg;
             GameNotification?.Invoke(this, fullMsg);
         }
@@ -1399,8 +1404,7 @@ public sealed partial class CoinGamesViewModel
         }
 
         _ladderPaidCoins = 0;
-        await SettleMultiplayerWagerAsync(_ladderRoom?.SessionId, refund);
-        return refund;
+        return await SettleMultiplayerWagerAsync(_ladderRoom?.SessionId, refund) ? refund : 0;
     }
 
     private static bool TryReadLadderPayload<T>(string? json, out T? payload) where T : class
@@ -1645,13 +1649,41 @@ public sealed partial class CoinGamesViewModel
             if (settledNow)
             {
                 var jackpot = run.WagerCoins * run.Traces.Count;
+                bool settled;
                 if (run.IsMultiplayer)
-                    await SettleMultiplayerWagerAsync(run.SessionId, jackpot);
+                {
+                    settled = await SettleMultiplayerWagerAsync(run.SessionId, jackpot);
+                }
                 else
                 {
                     _progression.AddCoins(_profile, jackpot);
                     NotifyCoinsChanged();
-                    await PersistProfileAsync();
+                    settled = await PersistProfileAsync();
+                    if (!settled && !RequiresGrowthRecovery)
+                    {
+                        lock (_profile.GrowthSync)
+                        {
+                            if (!RequiresGrowthRecovery)
+                            {
+                                using var rollback = GrowthRateMonitor.BeginEconomyChange(_profile, DateTimeOffset.UtcNow);
+                                if (!RequiresGrowthRecovery && _profile.SoloProgress.Coins >= jackpot)
+                                {
+                                    _profile.SoloProgress.Coins -= jackpot;
+                                }
+                            }
+                        }
+                        NotifyCoinsChanged();
+                    }
+                }
+
+                if (!settled)
+                {
+                    _settledLadderSessions.Remove(run.SessionId);
+                    LadderResultHeadline = "정산 실패";
+                    LadderResultSettlementText = RequiresGrowthRecovery ? PetEconomyService.GrowthRecoveryMessage : "코인 정산에 실패했습니다.";
+                    LadderStatusText = LadderResultSettlementText;
+                    LadderStage = LadderStage.Result;
+                    return;
                 }
 
                 var prefix = run.IsMultiplayer ? "동시 사다리 당첨!" : "사다리 잭팟!";
@@ -1669,8 +1701,9 @@ public sealed partial class CoinGamesViewModel
             }
         }
 
+        var paidLoseSettled = true;
         if (run.IsMultiplayer && run.WagerCoins > 0)
-            await SettleMultiplayerWagerAsync(run.SessionId, 0);
+            paidLoseSettled = await SettleMultiplayerWagerAsync(run.SessionId, 0);
 
         if (myResult is not null)
         {
@@ -1688,7 +1721,9 @@ public sealed partial class CoinGamesViewModel
                 var modeLabel = run.WagerCoins > 0 ? "동시 사다리 결과" : "동시 사다리(무료) 결과";
                 LadderResultHeadline = $"{myResult.Participant}의 결과: {myResult.Prize}";
                 LadderResultSettlementText = run.WagerCoins > 0
-                    ? $"참가비 {run.WagerCoins} 코인 정산 완료"
+                    ? (paidLoseSettled
+                        ? $"참가비 {run.WagerCoins} 코인 정산 완료"
+                        : (RequiresGrowthRecovery ? PetEconomyService.GrowthRecoveryMessage : "코인 정산에 실패했습니다."))
                     : "무료 모드 · 코인 변동 없음";
                 LadderStatusText = $"{modeLabel}: {myResult.Participant} → {myResult.Prize}";
                 GameNotification?.Invoke(this, $"사다리 결과: {myResult.Prize}");

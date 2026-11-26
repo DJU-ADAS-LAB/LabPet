@@ -18,11 +18,15 @@ public sealed class SnowballInteractionService : IDisposable
     private readonly Dispatcher _dispatcher;
     private readonly Dictionary<string, SnowballAction> _actions = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<Guid, ReceivedWindow> _received = [];
+    private readonly object _receivedLock = new();
     private readonly CancellationTokenSource _stop = new();
     private readonly CancellationToken _stopping;
     private readonly TimeProvider _clock;
     private int _refreshQueued;
+    private long _rejectedBeforeDispatcherCount;
     private volatile bool _disposed;
+
+    internal long RejectedBeforeDispatcherCount => Interlocked.Read(ref _rejectedBeforeDispatcherCount);
 
     internal event EventHandler<SnowballReceivedEventArgs>? Received;
     internal event EventHandler? OutgoingReady;
@@ -195,17 +199,64 @@ public sealed class SnowballInteractionService : IDisposable
     {
         if (_disposed || _dispatcher.HasShutdownStarted || _social?.IsLocalFocusing == true
             || !Guid.TryParse(e.SenderPetId, out var senderId)
-            || senderId == Guid.Empty || e.EventId == Guid.Empty) return;
+            || senderId == Guid.Empty || e.EventId == Guid.Empty)
+        {
+            Interlocked.Increment(ref _rejectedBeforeDispatcherCount);
+            return;
+        }
+
+        if (_social is not null && !_social.HasFriend(e.SenderPetId))
+        {
+            Interlocked.Increment(ref _rejectedBeforeDispatcherCount);
+            return;
+        }
+
+        if ((_clock.GetUtcNow() - e.TimestampUtc).Duration() > TimeSpan.FromSeconds(10))
+        {
+            Interlocked.Increment(ref _rejectedBeforeDispatcherCount);
+            return;
+        }
+
+        var nowTicks = Timestamp;
+        bool admitted;
+        lock (_receivedLock)
+        {
+            if (_received.Count >= 256)
+            {
+                foreach (var kv in _received.ToArray())
+                {
+                    if (kv.Value.IsIdle(nowTicks, _clock))
+                    {
+                        _received.Remove(kv.Key);
+                    }
+                }
+            }
+
+            if (!_received.TryGetValue(senderId, out var window))
+            {
+                if (_received.Count >= 256)
+                {
+                    Interlocked.Increment(ref _rejectedBeforeDispatcherCount);
+                    return;
+                }
+
+                _received.Add(senderId, window = new ReceivedWindow(nowTicks));
+            }
+
+            admitted = window.TryAdmit(e.EventId, nowTicks, _clock);
+        }
+
+        if (!admitted)
+        {
+            Interlocked.Increment(ref _rejectedBeforeDispatcherCount);
+            return;
+        }
 
         _dispatcher.BeginInvoke(() =>
         {
-            if (_disposed || _social?.IsLocalFocusing == true
-                || (_clock.GetUtcNow() - e.TimestampUtc).Duration() > TimeSpan.FromSeconds(10))
+            if (_disposed || _social?.IsLocalFocusing == true)
                 return;
-            if (!_received.TryGetValue(senderId, out var window))
-                _received.Add(senderId, window = new ReceivedWindow(Timestamp));
-            if (window.TryAdmit(e.EventId, Timestamp, _clock))
-                Received?.Invoke(this, e);
+            Received?.Invoke(this, e);
         });
     }
 
@@ -231,6 +282,9 @@ public sealed class SnowballInteractionService : IDisposable
         private long _last = last;
         private readonly HashSet<Guid> _seen = [];
         private readonly Queue<(Guid EventId, long ReceivedAt)> _order = [];
+
+        internal bool IsIdle(long now, TimeProvider clock)
+            => clock.GetElapsedTime(_last, now) > TimeSpan.FromSeconds(30) && _order.Count == 0;
 
         internal bool TryAdmit(Guid eventId, long now, TimeProvider clock)
         {

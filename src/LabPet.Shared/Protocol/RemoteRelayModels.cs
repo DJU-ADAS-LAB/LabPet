@@ -18,6 +18,7 @@ public static class SocialHubConstants
     public const string RegisterPresenceMethod = "RegisterPresenceAsync";
     public const string UpdatePresenceMethod = "UpdatePresenceAsync";
     public const string SyncKnownFriendsMethod = "SyncKnownFriendsAsync";
+    public const string RemoveFriendMethod = "RemoveFriendAsync";
     public const string RelayControlPacketMethod = "RelayControlPacketAsync";
     public const string RelayMusicFrameMethod = "RelayMusicFrameAsync";
 
@@ -27,6 +28,7 @@ public static class SocialHubConstants
     public const string ReceiveFriendsSnapshotClientMethod = "ReceiveFriendsSnapshot";
     public const string ReceiveFriendPresenceChangedClientMethod = "ReceiveFriendPresenceChanged";
     public const string ReceiveFriendOfflineClientMethod = "ReceiveFriendOffline";
+    public const string ReceiveFriendRemovedClientMethod = "ReceiveFriendRemoved";
 }
 
 /// <summary>
@@ -89,6 +91,7 @@ public sealed class RemotePresenceUpdate
     public string AppVersion { get; set; } = "0.1.0";
     public int ProtocolVersion { get; set; } = ProtocolConstants.CurrentProtocolVersion;
     public List<string> KnownFriendPetIds { get; set; } = [];
+    public List<string> RemovedFriendPetIds { get; set; } = [];
 }
 
 /// <summary>

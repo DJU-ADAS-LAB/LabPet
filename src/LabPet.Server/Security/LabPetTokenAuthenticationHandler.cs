@@ -14,7 +14,8 @@ public static class LabPetAuthDefaults
 }
 
 /// <summary>
-/// HTTP Authorization: Bearer 및 SignalR WebSocket access_token 쿼리를 검증하는 경량 인증 핸들러.
+/// HTTP 및 SignalR WebSocket 요청의 Authorization Bearer 헤더만 검증한다.
+/// URL·프록시·서버 로그 유출 방지를 위해 쿼리스트링 access_token은 허용하지 않는다.
 /// </summary>
 public sealed class LabPetTokenAuthenticationHandler(
     IOptionsMonitor<AuthenticationSchemeOptions> options,
@@ -34,13 +35,6 @@ public sealed class LabPetTokenAuthenticationHandler(
             {
                 rawToken = header["Bearer ".Length..].Trim();
             }
-        }
-
-        if (string.IsNullOrEmpty(rawToken) &&
-            Request.Path.StartsWithSegments(SocialHubConstants.HubPath, StringComparison.OrdinalIgnoreCase) &&
-            Request.Query.TryGetValue("access_token", out var queryToken))
-        {
-            rawToken = queryToken.ToString().Trim();
         }
 
         if (string.IsNullOrEmpty(rawToken))

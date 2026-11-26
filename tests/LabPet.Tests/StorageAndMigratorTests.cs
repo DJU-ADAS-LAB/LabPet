@@ -224,25 +224,37 @@ public sealed class StorageAndMigratorTests : IDisposable
         profile.SoloProgress.Coins = 5;
         await store.SaveProfileAsync(profile);
 
+        // 1. 기본 파일이 훼손되어도 구버전 .bak(15)으로 롤백하지 않고 최신 봉인 금고(5)를 복구하며 훼손 파일은 보존한다.
         var root = JsonNode.Parse(await File.ReadAllTextAsync(path))!.AsObject();
         root["protectedProgressV1"] = "AQID";
         await File.WriteAllTextAsync(path, root.ToJsonString());
-        Assert.Equal(15, (await store.LoadProfileAsync()).SoloProgress.Coins);
+        Assert.Equal(5, (await store.LoadProfileAsync()).SoloProgress.Coins);
         Assert.Single(Directory.GetFiles(_tempDir, "profile.json.rejected-*"));
 
-        // profile.json과 .bak이 모두 평문(변조 코인 포함)으로 덮어쓰여도 봉인 스냅샷이 있으면 평문을 무시하고 진짜 값을 복구한다.
+        // 2. profile.json과 .bak이 모두 평문(변조 코인 포함)으로 덮어쓰여도 봉인 스냅샷이 있으면 평문을 무시하고 진짜 값을 복구한다.
         profile.SoloProgress.Coins = 999_999;
         var tamperedLegacy = JsonSerializer.Serialize(profile, ProtocolJson.StorageOptions);
         await File.WriteAllTextAsync(path, tamperedLegacy);
         await File.WriteAllTextAsync(path + ".bak", tamperedLegacy);
         var recoveredFromVault = await store.LoadProfileAsync();
-        Assert.Equal(15, recoveredFromVault.SoloProgress.Coins);
+        Assert.Equal(5, recoveredFromVault.SoloProgress.Coins);
         var resealedPrimary = JsonNode.Parse(await File.ReadAllTextAsync(path))!.AsObject();
         var resealedBackup = JsonNode.Parse(await File.ReadAllTextAsync(path + ".bak"))!.AsObject();
         Assert.True(resealedPrimary.ContainsKey("protectedProgressV1"));
         Assert.True(resealedBackup.ContainsKey("protectedProgressV1"));
 
-        // 봉인 스냅샷 없이 평문으로 바뀐 성장 값은 읽지 않고 기존 파일은 보존한다.
+        // 3. 봉인 금고에 스냅샷이 없는 구버전 마커("true") 상태에서 기본 파일이 훼손되면 검증된 .bak(15)으로 복구한다.
+        recoveredFromVault.SoloProgress.Coins = 15;
+        await store.SaveProfileAsync(recoveredFromVault);
+        recoveredFromVault.SoloProgress.Coins = 5;
+        await store.SaveProfileAsync(recoveredFromVault);
+        await File.WriteAllTextAsync(markerPath, "true");
+        var damagedPrimary = JsonNode.Parse(await File.ReadAllTextAsync(path))!.AsObject();
+        damagedPrimary["protectedProgressV1"] = "AQID";
+        await File.WriteAllTextAsync(path, damagedPrimary.ToJsonString());
+        Assert.Equal(15, (await store.LoadProfileAsync()).SoloProgress.Coins);
+
+        // 4. 봉인 스냅샷 없이 평문으로 바뀐 성장 값은 읽지 않고 기존 파일은 보존한다.
         await File.WriteAllTextAsync(markerPath, "true");
         await File.WriteAllTextAsync(path, tamperedLegacy);
         await File.WriteAllTextAsync(path + ".bak", tamperedLegacy);

@@ -70,6 +70,7 @@ public sealed class SocialCoordinatorService : IAsyncDisposable
     private readonly Dictionary<string, OutgoingFriendRequestState> _outgoingRequestStates = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> _respondingRequestIds = new(StringComparer.Ordinal);
     private readonly Dictionary<string, FriendEntry> _pendingUnsavedAccepts = new(StringComparer.Ordinal);
+    private readonly HashSet<string> _removedFriendPetIds = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, DateTimeOffset> _lastTransportNotifyAt = new(StringComparer.OrdinalIgnoreCase);
 
     private volatile PetProfile _localProfile = new();
@@ -159,13 +160,112 @@ public sealed class SocialCoordinatorService : IAsyncDisposable
             SocialNotification?.Invoke(this, "친구 데이터를 열거나 보호하지 못했습니다. 기존 파일을 보존하고 LAN 연결을 중단했습니다.");
             return;
         }
-        _friends = [.. friendsStore.Friends];
+        lock (_friendStateLock)
+        {
+            _friends = [.. friendsStore.Friends];
+            _removedFriendPetIds.Clear();
+            var activeIds = new HashSet<string>(_friends.Select(f => f.PetId), StringComparer.OrdinalIgnoreCase);
+            foreach (var removedId in friendsStore.RemovedFriendPetIds ?? [])
+            {
+                if (!string.IsNullOrWhiteSpace(removedId) && !activeIds.Contains(removedId))
+                {
+                    _removedFriendPetIds.Add(removedId.Trim());
+                }
+            }
+
+            _transport.SetPendingRemovedFriends([.. _removedFriendPetIds]);
+        }
+
         await _transport.StartAsync(_localProfile, _friends, cancellationToken).ConfigureAwait(false);
         if (friendsStore.UnreadableProtectedKeys > 0)
         {
             SocialNotification?.Invoke(this, "일부 친구 키를 열 수 없습니다. 원래 키를 저장한 Windows 계정에서 복구해 주세요.");
         }
         StateChanged?.Invoke(this, EventArgs.Empty);
+    }
+
+    public async Task<bool> RemoveFriendAsync(string friendPetId, CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(friendPetId))
+        {
+            return false;
+        }
+
+        var cleanId = friendPetId.Trim();
+        FriendEntry? removedFriend;
+        IReadOnlyCollection<string> pendingRemoved;
+        lock (_friendStateLock)
+        {
+            removedFriend = FindSharedFriend(cleanId)?.Clone();
+            if (removedFriend is null)
+            {
+                return false;
+            }
+
+            _friends = _friends.Where(f => !string.Equals(f.PetId, cleanId, StringComparison.OrdinalIgnoreCase)).ToArray();
+            if (_removedFriendPetIds.Count >= 256)
+            {
+                _removedFriendPetIds.Clear();
+            }
+
+            _removedFriendPetIds.Add(cleanId);
+            pendingRemoved = [.. _removedFriendPetIds];
+        }
+
+        var stopMusicFollow = false;
+        lock (_musicLock)
+        {
+            if (string.Equals(_followingHostPetId, cleanId, StringComparison.OrdinalIgnoreCase))
+            {
+                _followingHostPetId = null;
+                stopMusicFollow = true;
+            }
+        }
+
+        if (stopMusicFollow)
+        {
+            try
+            {
+                await _transport.SetMusicFollowAsync(removedFriend, enable: false, cancellationToken).ConfigureAwait(false);
+            }
+            catch
+            {
+                // 오프라인 등 일시 실패는 아래 삭제 전파로 마무리
+            }
+        }
+
+        _transport.UpdateKnownFriends(_friends);
+        _transport.SetPendingRemovedFriends(pendingRemoved);
+        StateChanged?.Invoke(this, EventArgs.Empty);
+
+        var saved = await TrySaveSocialStateAsync().ConfigureAwait(false);
+        await _transport.RemoveFriendAsync(cleanId, cancellationToken).ConfigureAwait(false);
+        return saved;
+    }
+
+    public string? TryGetFriendSafetyCode(string? friendPetId)
+    {
+        if (string.IsNullOrWhiteSpace(friendPetId))
+        {
+            return null;
+        }
+
+        var friend = FindSharedFriend(friendPetId.Trim());
+        if (friend is null)
+        {
+            return null;
+        }
+
+        lock (friend)
+        {
+            if (!string.IsNullOrWhiteSpace(friend.PairKeyFingerprint))
+            {
+                return friend.PairKeyFingerprint;
+            }
+
+            var code = PacketCrypto.ComputeSafetyCode(friend.PairSecretBase64);
+            return string.IsNullOrEmpty(code) ? null : code;
+        }
     }
 
     public static string FormatDisplayName(string? ownerName, string? petName)
@@ -652,6 +752,7 @@ public sealed class SocialCoordinatorService : IAsyncDisposable
                 LastKnownIp = accepted.RemoteIp,
                 LastKnownTcpPort = accepted.RemoteTcpPort,
                 PairSecretBase64 = accepted.PairSecretBase64,
+                PairKeyFingerprint = PacketCrypto.ComputeSafetyCode(accepted.PairSecretBase64),
                 CachedAppearance = accepted.Appearance.Clone(),
                 Intimacy = 1,
                 PairedAtUtc = DateTimeOffset.UtcNow,
@@ -935,6 +1036,17 @@ public sealed class SocialCoordinatorService : IAsyncDisposable
         {
             var dedupKey = $"{e.Operation}|{errCode}";
             var now = DateTimeOffset.UtcNow;
+            if (_lastTransportNotifyAt.Count >= 128)
+            {
+                foreach (var kv in _lastTransportNotifyAt)
+                {
+                    if (now - kv.Value >= TimeSpan.FromMinutes(1))
+                    {
+                        _lastTransportNotifyAt.TryRemove(kv.Key, out _);
+                    }
+                }
+            }
+
             if (!_lastTransportNotifyAt.TryGetValue(dedupKey, out var prev) || now - prev >= TimeSpan.FromSeconds(15))
             {
                 _lastTransportNotifyAt[dedupKey] = now;
@@ -1068,6 +1180,7 @@ public sealed class SocialCoordinatorService : IAsyncDisposable
             LastKnownIp = e.RemoteIp,
             LastKnownTcpPort = e.RemoteTcpPort,
             PairSecretBase64 = e.PairSecretBase64,
+            PairKeyFingerprint = PacketCrypto.ComputeSafetyCode(e.PairSecretBase64),
             CachedAppearance = e.Appearance.Clone(),
             Intimacy = 1,
             PairedAtUtc = DateTimeOffset.UtcNow,
@@ -1226,6 +1339,8 @@ public sealed class SocialCoordinatorService : IAsyncDisposable
             }
 
             _friends = [.. _friends, entry];
+            _removedFriendPetIds.Remove(entry.PetId);
+            _transport.SetPendingRemovedFriends([.. _removedFriendPetIds]);
             _transport.UpdateKnownFriends(_friends);
             return true;
         }
@@ -1308,8 +1423,20 @@ public sealed class SocialCoordinatorService : IAsyncDisposable
         await _friendSaveLock.WaitAsync().ConfigureAwait(false);
         try
         {
+            List<FriendEntry> friendsSnapshot;
+            List<string> removedSnapshot;
+            lock (_friendStateLock)
+            {
+                friendsSnapshot = [.. Friends];
+                removedSnapshot = [.. _removedFriendPetIds];
+            }
+
             // 저장 순서가 돌아왔을 때 최신 목록을 복사한다.
-            await _store.SaveFriendsAsync(new FriendsStore { Friends = [.. Friends] }).ConfigureAwait(false);
+            await _store.SaveFriendsAsync(new FriendsStore
+            {
+                Friends = friendsSnapshot,
+                RemovedFriendPetIds = removedSnapshot
+            }).ConfigureAwait(false);
             if (profile is not null)
             {
                 await _store.SaveProfileAsync(profile).ConfigureAwait(false);
@@ -1327,6 +1454,9 @@ public sealed class SocialCoordinatorService : IAsyncDisposable
             _friendSaveLock.Release();
         }
     }
+
+    internal bool HasFriend(string petId)
+        => !string.IsNullOrWhiteSpace(petId) && FindSharedFriend(petId) is not null;
 
     private FriendEntry? FindSharedFriend(string petId)
         => Array.Find(_friends, f => string.Equals(f.PetId, petId, StringComparison.OrdinalIgnoreCase));

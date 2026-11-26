@@ -281,7 +281,10 @@ public sealed partial class CoinGamesViewModel
         IsTypingRunning = false;
         TypingPhase = TypingPhase.Setup;
         TypingStatusText = message;
-        await SettleMultiplayerWagerAsync(session, _typingActiveWager);
+        if (!await SettleMultiplayerWagerAsync(session, _typingActiveWager) && _typingActiveWager > 0)
+        {
+            TypingStatusText = RequiresGrowthRecovery ? PetEconomyService.GrowthRecoveryMessage : "코인 반환 정산에 실패했습니다.";
+        }
     }
 
     partial void OnTypingInputTextChanged(string value)
@@ -434,29 +437,56 @@ public sealed partial class CoinGamesViewModel
         if (_typingLocalFinalScore > _typingOpponentFinalScore)
         {
             var prize = _typingActiveWager * 2;
-            await SettleMultiplayerWagerAsync(session, prize);
-            TypingResultHeadline = "승리!";
-            TypingSettlementText = $"+{prize} 코인 획득 (참가 {_typingActiveWager} 코인)";
-            TypingStatusText = $"승리! 나 {_typingLocalFinalScore}점 vs {oppName} {_typingOpponentFinalScore}점 (+{prize} 코인)";
-            PetEmotionTriggered?.Invoke(this, true);
-            GameNotification?.Invoke(this, $"{oppName}에게 타이핑 대결 승리! (+{prize} 코인)");
+            var settled = await SettleMultiplayerWagerAsync(session, prize) || _typingActiveWager == 0;
+            if (settled)
+            {
+                TypingResultHeadline = "승리!";
+                TypingSettlementText = $"+{prize} 코인 획득 (참가 {_typingActiveWager} 코인)";
+                TypingStatusText = $"승리! 나 {_typingLocalFinalScore}점 vs {oppName} {_typingOpponentFinalScore}점 (+{prize} 코인)";
+                PetEmotionTriggered?.Invoke(this, true);
+                GameNotification?.Invoke(this, $"{oppName}에게 타이핑 대결 승리! (+{prize} 코인)");
+            }
+            else
+            {
+                TypingResultHeadline = "정산 실패";
+                TypingSettlementText = RequiresGrowthRecovery ? PetEconomyService.GrowthRecoveryMessage : "코인 정산에 실패했습니다.";
+                TypingStatusText = TypingSettlementText;
+            }
         }
         else if (_typingLocalFinalScore == _typingOpponentFinalScore)
         {
-            await SettleMultiplayerWagerAsync(session, _typingActiveWager);
-            TypingResultHeadline = "무승부";
-            TypingSettlementText = $"배팅 {_typingActiveWager} 코인 반환";
-            TypingStatusText = $"무승부 · {_typingLocalFinalScore}점 동점 (배팅 {_typingActiveWager} 코인 반환)";
-            GameNotification?.Invoke(this, $"{oppName}와 타이핑 대결 무승부!");
+            var settled = await SettleMultiplayerWagerAsync(session, _typingActiveWager) || _typingActiveWager == 0;
+            if (settled)
+            {
+                TypingResultHeadline = "무승부";
+                TypingSettlementText = $"배팅 {_typingActiveWager} 코인 반환";
+                TypingStatusText = $"무승부 · {_typingLocalFinalScore}점 동점 (배팅 {_typingActiveWager} 코인 반환)";
+                GameNotification?.Invoke(this, $"{oppName}와 타이핑 대결 무승부!");
+            }
+            else
+            {
+                TypingResultHeadline = "정산 실패";
+                TypingSettlementText = RequiresGrowthRecovery ? PetEconomyService.GrowthRecoveryMessage : "코인 정산에 실패했습니다.";
+                TypingStatusText = TypingSettlementText;
+            }
         }
         else
         {
-            await SettleMultiplayerWagerAsync(session, 0);
-            TypingResultHeadline = "아쉬운 패배";
-            TypingSettlementText = $"-{_typingActiveWager} 코인 차감";
-            TypingStatusText = $"패배 · 나 {_typingLocalFinalScore}점 vs {oppName} {_typingOpponentFinalScore}점 (-{_typingActiveWager} 코인)";
-            PetEmotionTriggered?.Invoke(this, false);
-            GameNotification?.Invoke(this, $"{oppName}에게 타이핑 대결 패배...");
+            var settled = await SettleMultiplayerWagerAsync(session, 0) || _typingActiveWager == 0;
+            if (settled)
+            {
+                TypingResultHeadline = "아쉬운 패배";
+                TypingSettlementText = $"-{_typingActiveWager} 코인 차감";
+                TypingStatusText = $"패배 · 나 {_typingLocalFinalScore}점 vs {oppName} {_typingOpponentFinalScore}점 (-{_typingActiveWager} 코인)";
+                PetEmotionTriggered?.Invoke(this, false);
+                GameNotification?.Invoke(this, $"{oppName}에게 타이핑 대결 패배...");
+            }
+            else
+            {
+                TypingResultHeadline = "정산 실패";
+                TypingSettlementText = RequiresGrowthRecovery ? PetEconomyService.GrowthRecoveryMessage : "코인 정산에 실패했습니다.";
+                TypingStatusText = TypingSettlementText;
+            }
         }
     }
 }

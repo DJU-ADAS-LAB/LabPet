@@ -311,6 +311,8 @@ public sealed partial class CoinGamesViewModel
         lock (_profile.GrowthSync)
         {
             if (_profile.RequiresGrowthRecovery) return false;
+            using var approvedGrowth = GrowthRateMonitor.BeginEconomyChange(_profile, DateTimeOffset.UtcNow);
+            if (_profile.RequiresGrowthRecovery) return false;
             var progress = _profile.SoloProgress;
             if (progress.PendingGameWagers.ContainsKey(session) || progress.Coins < wager)
                 return false;
@@ -321,23 +323,56 @@ public sealed partial class CoinGamesViewModel
     }
 
     [System.Reflection.Obfuscation(Exclude = false)]
-    private async Task SettleMultiplayerWagerAsync(string? session, int payout)
+    private async Task<bool> SettleMultiplayerWagerAsync(string? session, int payout)
     {
         if (session is null)
-            return;
+            return false;
+
+        int reservedSnapshot;
         lock (_profile.GrowthSync)
         {
-            if (_profile.RequiresGrowthRecovery) return;
+            if (_profile.RequiresGrowthRecovery) return false;
+            using var approvedGrowth = GrowthRateMonitor.BeginEconomyChange(_profile, DateTimeOffset.UtcNow);
+            if (_profile.RequiresGrowthRecovery) return false;
             var progress = _profile.SoloProgress;
             if (!progress.PendingGameWagers.TryGetValue(session, out var reserved)
                 || reserved <= 0 || payout < 0 || payout > (long)reserved * LabLadderEngine.MaxParticipants
                 || progress.Coins > long.MaxValue - payout)
-                return;
+                return false;
+            reservedSnapshot = reserved;
             progress.PendingGameWagers.Remove(session);
             progress.Coins += payout;
         }
+
         NotifyCoinsChanged();
-        await PersistProfileAsync();
+        if (await PersistProfileAsync())
+        {
+            return true;
+        }
+
+        if (!_profile.RequiresGrowthRecovery)
+        {
+            lock (_profile.GrowthSync)
+            {
+                if (!_profile.RequiresGrowthRecovery)
+                {
+                    using var rollbackGrowth = GrowthRateMonitor.BeginEconomyChange(_profile, DateTimeOffset.UtcNow);
+                    if (!_profile.RequiresGrowthRecovery)
+                    {
+                        var progress = _profile.SoloProgress;
+                        if (!progress.PendingGameWagers.ContainsKey(session) && progress.Coins >= payout)
+                        {
+                            progress.Coins -= payout;
+                            progress.PendingGameWagers[session] = reservedSnapshot;
+                        }
+                    }
+                }
+            }
+
+            NotifyCoinsChanged();
+        }
+
+        return false;
     }
 
     [System.Reflection.Obfuscation(Exclude = false)]
@@ -347,6 +382,8 @@ public sealed partial class CoinGamesViewModel
         {
             if (profile.RequiresGrowthRecovery || string.Equals(_wagerRecoveryPetId, profile.PetId, StringComparison.Ordinal))
                 return;
+            using var approvedGrowth = GrowthRateMonitor.BeginEconomyChange(profile, DateTimeOffset.UtcNow);
+            if (profile.RequiresGrowthRecovery) return;
             _wagerRecoveryPetId = profile.PetId;
             var progress = profile.SoloProgress;
             progress.PendingGameWagers ??= [];

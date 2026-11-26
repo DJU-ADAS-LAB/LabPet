@@ -10,6 +10,7 @@ public sealed class FriendsStore
 {
     public int SchemaVersion { get; set; } = ProtocolConstants.CurrentStorageSchemaVersion;
     public List<FriendEntry> Friends { get; set; } = [];
+    public List<string> RemovedFriendPetIds { get; set; } = [];
     public DateTimeOffset UpdatedAtUtc { get; set; } = DateTimeOffset.UtcNow;
     [JsonIgnore] public int UnreadableProtectedKeys { get; set; }
 }
@@ -27,6 +28,9 @@ public sealed class FriendEntry
 
     /// <summary>친구 전용 패킷 HMAC-SHA256 서명 검증에 사용하는 32바이트 공유 비밀키(Base64).</summary>
     public string PairSecretBase64 { get; set; } = string.Empty;
+
+    /// <summary>선택적 최초 수락/키 변경 확인용 6자리 안전 코드(XXX-XXX).</summary>
+    public string? PairKeyFingerprint { get; set; }
 
     /// <summary>오프라인 상태에서도 표시할 수 있도록 캐시된 3D 외형.</summary>
     public PetAppearance CachedAppearance { get; set; } = new();

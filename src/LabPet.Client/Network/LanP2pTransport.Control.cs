@@ -16,18 +16,14 @@ public sealed partial class LanP2pTransport
         bool IsTransient,
         string? Detail = null);
 
-    private Task TcpAcceptLoopAsync(TcpListener listener, CancellationToken ct)
-        => Task.WhenAll(Enumerable.Range(0, MaxConcurrentControlConnections)
-            .Select(_ => TcpControlWorkerAsync(listener, ct)));
-
-    private async Task TcpControlWorkerAsync(TcpListener listener, CancellationToken ct)
+    private async Task TcpAcceptLoopAsync(TcpListener listener, CancellationToken ct)
     {
         while (!ct.IsCancellationRequested)
         {
             try
             {
                 var client = await listener.AcceptTcpClientAsync(ct).ConfigureAwait(false);
-                await HandleIncomingTcpClientAsync(client, ct).ConfigureAwait(false);
+                TryDispatchAcceptedTcpClient(client, ct);
             }
             catch (OperationCanceledException)
             {
@@ -44,7 +40,184 @@ public sealed partial class LanP2pTransport
         }
     }
 
-    private async Task HandleIncomingTcpClientAsync(TcpClient client, CancellationToken shutdownToken)
+    private void TryDispatchAcceptedTcpClient(TcpClient client, CancellationToken ct)
+    {
+        var acquiredTotal = false;
+        var acquiredUnauth = false;
+        var incrementedIp = false;
+        var remoteIp = string.Empty;
+
+        try
+        {
+            var remoteEndPoint = client.Client.RemoteEndPoint as IPEndPoint;
+            remoteIp = remoteEndPoint is not null
+                ? (remoteEndPoint.Address.IsIPv4MappedToIPv6 ? remoteEndPoint.Address.MapToIPv4().ToString() : remoteEndPoint.Address.ToString())
+                : string.Empty;
+
+            if (string.IsNullOrWhiteSpace(remoteIp))
+            {
+                client.Dispose();
+                return;
+            }
+
+            if (!_tcpRequestLimiter.Allow("ip|" + remoteIp, 1000L, _dosOptions.TcpRequestsPerIpPerSecond)
+                || !_tcpRequestLimiter.Allow("global", 1000L, _dosOptions.TcpRequestsGlobalPerSecond))
+            {
+                Interlocked.Increment(ref _droppedTcpConnectionsByLimit);
+                client.Dispose();
+                return;
+            }
+
+            var isFriendIp = IsKnownFriendIp(remoteIp);
+            if (!isFriendIp)
+            {
+                if (!_unauthenticatedTcpSlots.Wait(0))
+                {
+                    Interlocked.Increment(ref _droppedTcpConnectionsByLimit);
+                    client.Dispose();
+                    return;
+                }
+
+                acquiredUnauth = true;
+            }
+
+            if (!_totalTcpSlots.Wait(0))
+            {
+                Interlocked.Increment(ref _droppedTcpConnectionsByLimit);
+                client.Dispose();
+                return;
+            }
+
+            acquiredTotal = true;
+
+            var maxPerIp = isFriendIp
+                ? Math.Clamp(_dosOptions.MaxConcurrentTcpPerIp, 1, 64)
+                : Math.Clamp(_dosOptions.MaxConcurrentUnauthenticatedTcpPerIp, 1, 64);
+
+            var activeForIp = _activeTcpByIp.AddOrUpdate(remoteIp, 1, static (_, prev) => prev + 1);
+            incrementedIp = true;
+            if (activeForIp > maxPerIp)
+            {
+                Interlocked.Increment(ref _droppedTcpConnectionsByLimit);
+                client.Dispose();
+                return;
+            }
+
+            var operation = BeginBackgroundWork(out var shutdownToken);
+            if (operation is null || ct.IsCancellationRequested)
+            {
+                operation?.Dispose();
+                client.Dispose();
+                return;
+            }
+
+            _ = HandleAcceptedTcpClientWithSlotsAsync(
+                client,
+                remoteIp,
+                acquiredUnauth,
+                operation,
+                shutdownToken);
+            // 소유권이 비동기 핸들러로 이관됨
+            acquiredTotal = false;
+            acquiredUnauth = false;
+            incrementedIp = false;
+        }
+        catch
+        {
+            client.Dispose();
+        }
+        finally
+        {
+            if (incrementedIp && !string.IsNullOrEmpty(remoteIp))
+            {
+                DecrementActiveTcpIp(remoteIp);
+            }
+
+            if (acquiredTotal)
+            {
+                _totalTcpSlots.Release();
+            }
+
+            if (acquiredUnauth)
+            {
+                _unauthenticatedTcpSlots.Release();
+            }
+        }
+    }
+
+    private async Task HandleAcceptedTcpClientWithSlotsAsync(
+        TcpClient client,
+        string remoteIp,
+        bool acquiredUnauthSlot,
+        IDisposable backgroundWork,
+        CancellationToken shutdownToken)
+    {
+        try
+        {
+            using (backgroundWork)
+            {
+                await HandleIncomingTcpClientAsync(client, remoteIp, shutdownToken).ConfigureAwait(false);
+            }
+        }
+        finally
+        {
+            DecrementActiveTcpIp(remoteIp);
+            _totalTcpSlots.Release();
+            if (acquiredUnauthSlot)
+            {
+                _unauthenticatedTcpSlots.Release();
+            }
+        }
+    }
+
+    private void DecrementActiveTcpIp(string remoteIp)
+    {
+        while (_activeTcpByIp.TryGetValue(remoteIp, out var current))
+        {
+            if (current <= 1)
+            {
+                if (_activeTcpByIp.TryRemove(new KeyValuePair<string, int>(remoteIp, current)))
+                {
+                    break;
+                }
+            }
+            else if (_activeTcpByIp.TryUpdate(remoteIp, current - 1, current))
+            {
+                break;
+            }
+        }
+    }
+
+    private bool IsKnownFriendIp(string remoteIp)
+    {
+        foreach (var friend in _friendsByPetId.Values)
+        {
+            string? knownIp;
+            lock (friend)
+            {
+                knownIp = friend.LastKnownIp;
+            }
+
+            if (!string.IsNullOrWhiteSpace(knownIp)
+                && string.Equals(knownIp, remoteIp, StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+
+        foreach (var peer in _peers.Values)
+        {
+            if (peer.IsFriend && !string.IsNullOrWhiteSpace(peer.IpAddress)
+                && string.Equals(peer.IpAddress, remoteIp, StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private async Task HandleIncomingTcpClientAsync(TcpClient client, string remoteIp, CancellationToken shutdownToken)
     {
         using (client)
         {
@@ -54,13 +227,10 @@ public sealed partial class LanP2pTransport
                 timeout.CancelAfter(InboundControlTimeout);
                 var ct = timeout.Token;
 
-                var remoteEndPoint = client.Client.RemoteEndPoint as IPEndPoint;
-                var remoteIp = remoteEndPoint is not null
-                    ? (remoteEndPoint.Address.IsIPv4MappedToIPv6 ? remoteEndPoint.Address.MapToIPv4().ToString() : remoteEndPoint.Address.ToString())
-                    : string.Empty;
                 await using var stream = client.GetStream();
 
-                var envelope = await ReadFramedJsonAsync<ControlPacketEnvelope>(stream, ct).ConfigureAwait(false);
+                var envelope = await ReadFramedJsonAsync<ControlPacketEnvelope>(stream, _dosOptions.MaxControlTcpBytes, ct)
+                    .ConfigureAwait(false);
                 if (envelope?.Header is null)
                 {
                     return;
@@ -193,6 +363,12 @@ public sealed partial class LanP2pTransport
                     return RejectAck(header.MessageId, FriendOperationErrorCodes.InvalidPairingEnvelope);
                 }
 
+                if (!_featureLimiter.Allow("fr|ip|" + remoteIp, 60_000L, _dosOptions.FriendRequestPerIpPerMinute)
+                    || !_featureLimiter.Allow("fr|global", 60_000L, _dosOptions.FriendRequestGlobalPerMinute))
+                {
+                    return RejectAck(header.MessageId, FriendOperationErrorCodes.RateLimited);
+                }
+
                 if (_localPresence.IsFocusing)
                 {
                     return RejectAck(header.MessageId, FriendOperationErrorCodes.PomodoroFocusBlocked);
@@ -230,6 +406,11 @@ public sealed partial class LanP2pTransport
 
             case PacketType.BubbleMessage:
             {
+                if (!_featureLimiter.Allow("msg|" + header.SenderPetId, 10_000L, _dosOptions.MessagePerSenderPer10Seconds))
+                {
+                    return RejectAck(header.MessageId, FriendOperationErrorCodes.RateLimited);
+                }
+
                 if (_localPresence.IsFocusing)
                 {
                     return RejectAck(header.MessageId, FriendOperationErrorCodes.PomodoroFocusBlocked);
@@ -248,6 +429,11 @@ public sealed partial class LanP2pTransport
 
             case PacketType.QuickReaction:
             {
+                if (!_featureLimiter.Allow("msg|" + header.SenderPetId, 10_000L, _dosOptions.MessagePerSenderPer10Seconds))
+                {
+                    return RejectAck(header.MessageId, FriendOperationErrorCodes.RateLimited);
+                }
+
                 if (_localPresence.IsFocusing)
                 {
                     return RejectAck(header.MessageId, FriendOperationErrorCodes.PomodoroFocusBlocked);
@@ -262,6 +448,11 @@ public sealed partial class LanP2pTransport
 
             case PacketType.PetInteraction:
             {
+                if (!_featureLimiter.Allow("act|" + header.SenderPetId, 10_000L, _dosOptions.InteractionPerSenderPer10Seconds))
+                {
+                    return RejectAck(header.MessageId, FriendOperationErrorCodes.RateLimited);
+                }
+
                 if (_localPresence.IsFocusing)
                 {
                     return RejectAck(header.MessageId, FriendOperationErrorCodes.PomodoroFocusBlocked);
@@ -285,6 +476,11 @@ public sealed partial class LanP2pTransport
 
             case PacketType.MusicFollowOn:
             {
+                if (!_featureLimiter.Allow("musctrl|" + header.SenderPetId, 10_000L, _dosOptions.MusicControlPerSenderPer10Seconds))
+                {
+                    return RejectAck(header.MessageId, FriendOperationErrorCodes.RateLimited);
+                }
+
                 if (_localPresence.IsFocusing)
                 {
                     return RejectAck(header.MessageId, FriendOperationErrorCodes.PomodoroFocusBlocked);
@@ -307,6 +503,11 @@ public sealed partial class LanP2pTransport
 
             case PacketType.MusicFollowOff:
             {
+                if (!_featureLimiter.Allow("musctrl|" + header.SenderPetId, 10_000L, _dosOptions.MusicControlPerSenderPer10Seconds))
+                {
+                    return RejectAck(header.MessageId, FriendOperationErrorCodes.RateLimited);
+                }
+
                 var p = JsonSerializer.Deserialize<MusicFollowPayload>(effectivePayloadJson, ProtocolJson.PacketOptions);
                 if (_musicSubscribers.TryGetValue(header.SenderPetId, out var subscriber)
                     && subscriber.SubscriptionId == p?.SubscriptionId
@@ -320,6 +521,11 @@ public sealed partial class LanP2pTransport
 
             case PacketType.GameEvent:
             {
+                if (!_featureLimiter.Allow("game|" + header.SenderPetId, 10_000L, _dosOptions.GameEventPerSenderPer10Seconds))
+                {
+                    return RejectAck(header.MessageId, FriendOperationErrorCodes.RateLimited);
+                }
+
                 var p = JsonSerializer.Deserialize<GameEventPayload>(effectivePayloadJson, ProtocolJson.PacketOptions);
                 if (p is null || string.IsNullOrWhiteSpace(p.GameType) || string.IsNullOrWhiteSpace(p.Action))
                 {
@@ -436,7 +642,8 @@ public sealed partial class LanP2pTransport
             await using var stream = client.GetStream();
 
             await WriteFramedJsonAsync(stream, envelope, timeoutCts.Token).ConfigureAwait(false);
-            var ackEnvelope = await ReadFramedJsonAsync<ControlPacketEnvelope>(stream, timeoutCts.Token).ConfigureAwait(false);
+            var ackEnvelope = await ReadFramedJsonAsync<ControlPacketEnvelope>(stream, _dosOptions.MaxControlTcpBytes, timeoutCts.Token)
+                .ConfigureAwait(false);
             return InspectAckEnvelope(
                 ackEnvelope,
                 header.MessageId,
@@ -591,7 +798,7 @@ public sealed partial class LanP2pTransport
         await stream.FlushAsync(ct).ConfigureAwait(false);
     }
 
-    private static async Task<T?> ReadFramedJsonAsync<T>(NetworkStream stream, CancellationToken ct)
+    private static async Task<T?> ReadFramedJsonAsync<T>(NetworkStream stream, int maxFrameBytes, CancellationToken ct)
     {
         var lengthPrefix = new byte[4];
         if (!await ReadExactAsync(stream, lengthPrefix, ct).ConfigureAwait(false))
@@ -599,8 +806,9 @@ public sealed partial class LanP2pTransport
             return default;
         }
 
+        var limit = Math.Clamp(maxFrameBytes, 1024, 65536);
         var length = BinaryPrimitives.ReadInt32BigEndian(lengthPrefix);
-        if (length <= 0 || length > 65536)
+        if (length <= 0 || length > limit)
         {
             return default;
         }

@@ -11,7 +11,40 @@ namespace LabPet.Shared.Protocol;
 public static class PacketCrypto
 {
     private static readonly byte[] AesKeyDerivationInfo = Encoding.UTF8.GetBytes("LabPet-v3-AES256GCM-ControlPayload");
+    private static readonly byte[] SafetyCodeDomainBytes = Encoding.UTF8.GetBytes("LabPet-v3-SafetyCode");
     private const int P256PublicKeyBase64Length = 124;
+
+    /// <summary>
+    /// 합의된 친구 비밀키(PairSecretBase64)에서 6자리 선택적 안전 확인 코드(XXX-XXX)를 결정적으로 계산한다.
+    /// </summary>
+    public static string ComputeSafetyCode(string? pairSecretBase64)
+    {
+        if (string.IsNullOrWhiteSpace(pairSecretBase64))
+        {
+            return string.Empty;
+        }
+
+        byte[] secretBytes;
+        try
+        {
+            secretBytes = Convert.FromBase64String(pairSecretBase64);
+        }
+        catch (FormatException)
+        {
+            return string.Empty;
+        }
+
+        try
+        {
+            var hash = HMACSHA256.HashData(secretBytes, SafetyCodeDomainBytes);
+            var code = System.Buffers.Binary.BinaryPrimitives.ReadUInt32BigEndian(hash) % 1_000_000u;
+            return $"{code / 1000:D3}-{code % 1000:D3}";
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(secretBytes);
+        }
+    }
 
     public static bool IsPairingPublicKey(string? encodedKey)
     {

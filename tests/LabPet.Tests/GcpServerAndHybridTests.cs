@@ -570,15 +570,19 @@ public sealed class GcpServerAndHybridTests : IAsyncLifetime
             }
         }
 
-        // 모든 연결 종료 후 활성 연결과 온라인 펫 수가 0으로 깔끔히 회수되는지 /health로 확인
+        // 모든 연결 종료 후 활성 연결과 온라인 펫 수가 0으로 깔끔히 회수되는지 확인 및 공개 /health 최소 응답 검증
+        var presence = _server!.Services.GetRequiredService<LabPet.Server.Services.ConnectionPresenceManager>();
+        await WaitUntilAsync(() =>
+            presence.OnlinePetCount == 0 && presence.ActiveConnectionCount == 0,
+            TimeSpan.FromSeconds(5));
+
         using var http = new HttpClient { BaseAddress = new Uri(ServerUrl) };
-        await WaitUntilAsync(async () =>
-        {
-            var json = await http.GetStringAsync(SocialHubConstants.HealthPath);
-            using var doc = JsonDocument.Parse(json);
-            return doc.RootElement.GetProperty("onlinePets").GetInt32() == 0
-                && doc.RootElement.GetProperty("activeConnections").GetInt32() == 0;
-        }, TimeSpan.FromSeconds(5));
+        var healthJson = await http.GetStringAsync(SocialHubConstants.HealthPath);
+        using var doc = JsonDocument.Parse(healthJson);
+        Assert.Equal("ok", doc.RootElement.GetProperty("status").GetString());
+        Assert.False(doc.RootElement.TryGetProperty("onlinePets", out _));
+        Assert.False(doc.RootElement.TryGetProperty("activeConnections", out _));
+        Assert.False(doc.RootElement.TryGetProperty("overloadLevel", out _));
     }
 
     [Fact]

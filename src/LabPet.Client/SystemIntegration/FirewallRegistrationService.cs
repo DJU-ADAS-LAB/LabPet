@@ -110,6 +110,72 @@ public static class FirewallRegistrationService
             "if ($old.Count -gt 0) { $old | Remove-NetFirewallRule }";
     }
 
+    public static string BuildPowerShellRemoveCommand()
+        => "$ErrorActionPreference = 'SilentlyContinue'; " +
+           $"Get-NetFirewallRule | Where-Object {{ $_.DisplayName -in @('{UdpRuleName}', '{TcpRuleName}') }} | Remove-NetFirewallRule -ErrorAction SilentlyContinue";
+
+    internal static string ResolveSystemDirectory()
+    {
+        var sysDir = Environment.GetFolderPath(Environment.SpecialFolder.System);
+        if (!string.IsNullOrWhiteSpace(sysDir) && Directory.Exists(sysDir))
+        {
+            return sysDir;
+        }
+
+        var winDir = Environment.GetFolderPath(Environment.SpecialFolder.Windows);
+        return Path.Combine(string.IsNullOrWhiteSpace(winDir) ? @"C:\Windows" : winDir, "System32");
+    }
+
+    internal static string ResolveSystemPowerShellPath()
+        => Path.Combine(ResolveSystemDirectory(), "WindowsPowerShell", "v1.0", "powershell.exe");
+
+    internal static string ResolveSystemNetshPath()
+        => Path.Combine(ResolveSystemDirectory(), "netsh.exe");
+
+    internal static ProcessStartInfo BuildRegisterProcessStartInfo(string? executablePath)
+    {
+        var script = BuildPowerShellRegisterCommand(executablePath);
+        var encoded = Convert.ToBase64String(Encoding.Unicode.GetBytes(script));
+        return new ProcessStartInfo(ResolveSystemPowerShellPath(), $"-NoProfile -NonInteractive -EncodedCommand {encoded}")
+        {
+            WorkingDirectory = ResolveSystemDirectory(),
+            UseShellExecute = true,
+            Verb = "runas",
+            WindowStyle = ProcessWindowStyle.Hidden
+        };
+    }
+
+    internal static ProcessStartInfo BuildRemoveProcessStartInfo()
+    {
+        var encoded = Convert.ToBase64String(Encoding.Unicode.GetBytes(BuildPowerShellRemoveCommand()));
+        return new ProcessStartInfo(ResolveSystemPowerShellPath(), $"-NoProfile -NonInteractive -EncodedCommand {encoded}")
+        {
+            WorkingDirectory = ResolveSystemDirectory(),
+            UseShellExecute = true,
+            Verb = "runas",
+            WindowStyle = ProcessWindowStyle.Hidden
+        };
+    }
+
+    internal static ProcessStartInfo BuildQueryProcessStartInfo(string ruleName)
+    {
+        var psi = new ProcessStartInfo
+        {
+            FileName = ResolveSystemNetshPath(),
+            WorkingDirectory = ResolveSystemDirectory(),
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            CreateNoWindow = true
+        };
+        psi.ArgumentList.Add("advfirewall");
+        psi.ArgumentList.Add("firewall");
+        psi.ArgumentList.Add("show");
+        psi.ArgumentList.Add("rule");
+        psi.ArgumentList.Add($"name={ruleName}");
+        psi.ArgumentList.Add("verbose");
+        return psi;
+    }
+
     public static bool TryRegisterRulesElevated() => TryRegisterRulesElevated(out _);
 
     public static bool TryRegisterRulesElevated(out string error)
@@ -117,14 +183,13 @@ public static class FirewallRegistrationService
         const string failed = "Windows 방화벽에서 두 규칙을 모두 확인하지 못했습니다.";
         try
         {
-            var script = BuildPowerShellRegisterCommand(Environment.ProcessPath);
-            var encoded = Convert.ToBase64String(Encoding.Unicode.GetBytes(script));
-            var psi = new ProcessStartInfo("powershell.exe", $"-NoProfile -NonInteractive -EncodedCommand {encoded}")
+            var psi = BuildRegisterProcessStartInfo(Environment.ProcessPath);
+            if (!File.Exists(psi.FileName))
             {
-                UseShellExecute = true,
-                Verb = "runas",
-                WindowStyle = ProcessWindowStyle.Hidden
-            };
+                error = "시스템 PowerShell 실행 파일을 찾을 수 없습니다.";
+                return false;
+            }
+
             using var process = Process.Start(psi);
             if (process is null || !process.WaitForExit(15000))
             {
@@ -168,16 +233,11 @@ public static class FirewallRegistrationService
                 return;
             }
 
-            var cmd =
-                $"netsh advfirewall firewall delete rule name=\"{UdpRuleName}\" >nul 2>&1 & " +
-                $"netsh advfirewall firewall delete rule name=\"{TcpRuleName}\" >nul 2>&1";
-
-            var psi = new ProcessStartInfo("cmd.exe", $"/c {cmd}")
+            var psi = BuildRemoveProcessStartInfo();
+            if (!File.Exists(psi.FileName))
             {
-                UseShellExecute = true,
-                Verb = "runas",
-                WindowStyle = ProcessWindowStyle.Hidden
-            };
+                return;
+            }
 
             using var proc = Process.Start(psi);
             proc?.WaitForExit(8000);
@@ -193,12 +253,11 @@ public static class FirewallRegistrationService
         output = string.Empty;
         try
         {
-            var psi = new ProcessStartInfo("netsh", $"advfirewall firewall show rule name=\"{ruleName}\" verbose")
+            var psi = BuildQueryProcessStartInfo(ruleName);
+            if (!File.Exists(psi.FileName))
             {
-                UseShellExecute = false,
-                RedirectStandardOutput = true,
-                CreateNoWindow = true
-            };
+                return false;
+            }
 
             using var proc = Process.Start(psi);
             if (proc is null)

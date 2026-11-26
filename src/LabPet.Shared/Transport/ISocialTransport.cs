@@ -38,6 +38,13 @@ public interface ISocialTransport : IAsyncDisposable
     /// <summary>친구 목록 변경 시 전송 계층의 인증 캐시를 갱신한다.</summary>
     void UpdateKnownFriends(IReadOnlyList<FriendEntry> friends);
 
+    /// <summary>친구 삭제를 원격/로컬 전송 계층에 반영해 서버 관계 및 구독을 즉시 해제한다.</summary>
+    Task<bool> RemoveFriendAsync(string friendPetId, CancellationToken cancellationToken = default)
+        => Task.FromResult(false);
+
+    /// <summary>오프라인 상태에서 삭제된 친구 ID 대기 목록을 설정한다.</summary>
+    void SetPendingRemovedFriends(IReadOnlyCollection<string> removedPetIds) { }
+
     /// <summary>현재 관측된 온라인 피어 목록 스냅샷을 반환한다.</summary>
     IReadOnlyList<PeerSnapshot> GetDiscoveredPeers();
 

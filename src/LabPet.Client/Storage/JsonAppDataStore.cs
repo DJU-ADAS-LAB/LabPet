@@ -29,9 +29,9 @@ public sealed class JsonAppDataStore : IAppDataStore, IAsyncDisposable
     internal const string MigrationResetRelease = "0.3.17";
     private static readonly byte[] ProgressEntropy = Encoding.UTF8.GetBytes("LabPet.ProfileProgress.v1");
 
-    private sealed record ProtectedProgress(string PetId, SoloProgress Progress, string? ResetReceipt = null);
+    private sealed record ProtectedProgress(string PetId, SoloProgress Progress, string? ResetReceipt = null, long SnapshotRevision = 0);
     private sealed record ProfileRead(PetProfile? Profile, bool RequiresSave, bool HasProtection, JsonObject? Document,
-        string? FailureReason = null, PetProfile? Shell = null);
+        string? FailureReason = null, PetProfile? Shell = null, long SnapshotRevision = 0);
     private sealed record ProtectionVaultState(bool Exists, bool HasSealedBlob, ProtectedProgress? Progress,
         string? FailureReason = null, string? PetId = null);
 
@@ -95,18 +95,19 @@ public sealed class JsonAppDataStore : IAppDataStore, IAsyncDisposable
         var expectedId = new[] { recoverySession?.PetId, primary.Shell?.PetId, vault.PetId, backup.Shell?.PetId, settings?.PetId }
             .FirstOrDefault(id => !string.IsNullOrWhiteSpace(id));
         var source = primary is { Profile: not null, HasProtection: true } && SamePet(primary.Profile.PetId, expectedId)
-            ? primary : backup is { Profile: not null, HasProtection: true } && SamePet(backup.Profile.PetId, expectedId)
-            ? backup : null;
+            ? primary : null;
+        if (backup is { Profile: not null, HasProtection: true } && SamePet(backup.Profile.PetId, expectedId))
+        {
+            if (source is null || IsCandidateSnapshotNewer(backup.Profile!, backup.SnapshotRevision, source.Profile!, source.SnapshotRevision))
+                source = backup;
+        }
+
         var protectedBackup = vault.Progress is { } sealedProgress && SamePet(sealedProgress.PetId, expectedId)
             ? sealedProgress : null;
 
-        // 검사 전 백업을 다시 넣어도 같은 펫의 검사 완료 스냅샷을 우선 사용한다.
+        // 검사 전 백업·구버전 스냅샷으로 덮어써도 같은 펫의 최신/검사 완료 스냅샷을 우선 사용한다.
         var useVault = protectedBackup is not null && (source is null
-            || (source.Profile!.GrowthResetReceipt != MigrationResetRelease && protectedBackup.ResetReceipt == MigrationResetRelease));
-        if (!useVault && source?.Profile?.GrowthResetReceipt != MigrationResetRelease
-            && backup.Profile is { GrowthResetReceipt: MigrationResetRelease } checkedBackup
-            && SamePet(checkedBackup.PetId, expectedId))
-            source = backup;
+            || IsVaultSnapshotNewer(protectedBackup, source));
 
         var recoverySettings = MatchingShell(settings, expectedId);
         var shell = recoverySession ?? recoverySettings ?? MatchingShell(primary.Shell, expectedId)
@@ -133,11 +134,13 @@ public sealed class JsonAppDataStore : IAppDataStore, IAsyncDisposable
         {
             profile.SoloProgress = protectedBackup!.Progress;
             profile.GrowthResetReceipt = protectedBackup.ResetReceipt;
+            profile.ProtectionRevision = Math.Max(protectedBackup.SnapshotRevision, source?.SnapshotRevision ?? 0);
         }
         else if (source?.HasProtection == true)
         {
             profile.SoloProgress = source.Profile!.SoloProgress;
             profile.GrowthResetReceipt = source.Profile.GrowthResetReceipt;
+            profile.ProtectionRevision = Math.Max(source.SnapshotRevision, protectedBackup?.SnapshotRevision ?? 0);
         }
         var requiresSave = NormalizeProfileShell(profile) | NormalizeProfileInvariants(profile);
         var checkedThisRelease = ApplyGrowthReset(profile, _releaseVersion);
@@ -159,7 +162,8 @@ public sealed class JsonAppDataStore : IAppDataStore, IAsyncDisposable
                     refreshBackupFromCurrent: useVault || checkedThisRelease || recoverySession is not null).ConfigureAwait(false);
             }
             else if (protectedBackup is null
-                     || (profile.GrowthResetReceipt == MigrationResetRelease && protectedBackup.ResetReceipt != MigrationResetRelease))
+                     || (profile.GrowthResetReceipt == MigrationResetRelease && protectedBackup.ResetReceipt != MigrationResetRelease)
+                     || protectedBackup.SnapshotRevision < profile.ProtectionRevision)
             {
                 await WriteProtectionVaultAsync(markerPath, profile, ct).ConfigureAwait(false);
             }
@@ -368,6 +372,53 @@ public sealed class JsonAppDataStore : IAppDataStore, IAsyncDisposable
             root.Remove(name);
     }
 
+    private static bool IsCandidateSnapshotNewer(
+        PetProfile candidateProfile, long candidateRevision,
+        PetProfile currentProfile, long currentRevision)
+    {
+        if (currentProfile.GrowthResetReceipt != MigrationResetRelease && candidateProfile.GrowthResetReceipt == MigrationResetRelease)
+        {
+            return true;
+        }
+
+        if (currentProfile.GrowthResetReceipt == MigrationResetRelease && candidateProfile.GrowthResetReceipt != MigrationResetRelease)
+        {
+            return false;
+        }
+
+        var candidateDetections = candidateProfile.SoloProgress.GrowthAudit?.DetectionCount ?? 0;
+        var currentDetections = currentProfile.SoloProgress.GrowthAudit?.DetectionCount ?? 0;
+        if (candidateDetections != currentDetections)
+        {
+            return candidateDetections > currentDetections;
+        }
+
+        return candidateRevision > currentRevision;
+    }
+
+    private static bool IsVaultSnapshotNewer(ProtectedProgress vault, ProfileRead source)
+    {
+        var sourceProfile = source.Profile!;
+        if (sourceProfile.GrowthResetReceipt != MigrationResetRelease && vault.ResetReceipt == MigrationResetRelease)
+        {
+            return true;
+        }
+
+        if (sourceProfile.GrowthResetReceipt == MigrationResetRelease && vault.ResetReceipt != MigrationResetRelease)
+        {
+            return false;
+        }
+
+        var vaultDetections = vault.Progress.GrowthAudit?.DetectionCount ?? 0;
+        var sourceDetections = sourceProfile.SoloProgress.GrowthAudit?.DetectionCount ?? 0;
+        if (vaultDetections != sourceDetections)
+        {
+            return vaultDetections > sourceDetections;
+        }
+
+        return vault.SnapshotRevision > source.SnapshotRevision;
+    }
+
     [System.Reflection.Obfuscation(Exclude = false)]
     private async Task<ProfileRead> ReadProfileAsync(string path, bool requireProtection, CancellationToken ct,
         bool captureDocument = false, bool ignoreTransientReadError = false, bool captureShell = false)
@@ -376,6 +427,7 @@ public sealed class JsonAppDataStore : IAppDataStore, IAsyncDisposable
         JsonObject? document = null;
         PetProfile? shell = null;
         string? resetReceipt = null;
+        long snapshotRevision = 0;
         string? failureReason = null;
         var (ok, profile, migrated) = await TryReadAndMigrateAsync<PetProfile>(path, root =>
         {
@@ -427,6 +479,7 @@ public sealed class JsonAppDataStore : IAppDataStore, IAsyncDisposable
 
                 if (captureDocument) document = (JsonObject)root.DeepClone();
                 resetReceipt = progress.ResetReceipt;
+                snapshotRevision = progress.SnapshotRevision;
 
                 // 평문이나 외부 스키마 번호의 수정이 보호된 성장 상태에 영향을 주지 않게 한다.
                 foreach (var name in root.Select(pair => pair.Key)
@@ -444,8 +497,12 @@ public sealed class JsonAppDataStore : IAppDataStore, IAsyncDisposable
                 throw new JsonException(failureReason, ex);
             }
         }, ct, requireReadableFile: !ignoreTransientReadError).ConfigureAwait(false);
-        if (profile is not null) profile.GrowthResetReceipt = resetReceipt;
-        return new ProfileRead(ok ? profile : null, migrated, hasProtection, ok ? document : null, ok ? null : failureReason, shell);
+        if (profile is not null)
+        {
+            profile.GrowthResetReceipt = resetReceipt;
+            profile.ProtectionRevision = snapshotRevision;
+        }
+        return new ProfileRead(ok ? profile : null, migrated, hasProtection, ok ? document : null, ok ? null : failureReason, shell, snapshotRevision);
     }
 
     [System.Reflection.Obfuscation(Exclude = false)]
@@ -463,7 +520,12 @@ public sealed class JsonAppDataStore : IAppDataStore, IAsyncDisposable
         lock (profile.GrowthSync)
         {
             document = CreateProfileShellDocument(profile);
-            var protectedBlob = ProtectProgressBlob(profile.PetId, profile.SoloProgress, profile.GrowthResetReceipt);
+            var nextRevision = profile.ProtectionRevision < long.MaxValue
+                ? profile.ProtectionRevision + 1
+                : long.MaxValue;
+            profile.ProtectionRevision = nextRevision;
+            var protectedBlob = ProtectProgressBlob(
+                profile.PetId, profile.SoloProgress, profile.GrowthResetReceipt, nextRevision);
             document[ProtectedProgressProperty] = protectedBlob;
             vaultDocument = CreateProtectionVaultDocument(profile.PetId, protectedBlob);
         }
@@ -483,9 +545,9 @@ public sealed class JsonAppDataStore : IAppDataStore, IAsyncDisposable
     }
 
     [System.Reflection.Obfuscation(Exclude = false)]
-    private static string ProtectProgressBlob(string petId, SoloProgress soloProgress, string? resetReceipt)
+    private static string ProtectProgressBlob(string petId, SoloProgress soloProgress, string? resetReceipt, long snapshotRevision = 0)
     {
-        var plain = JsonSerializer.SerializeToUtf8Bytes(new ProtectedProgress(petId, soloProgress, resetReceipt),
+        var plain = JsonSerializer.SerializeToUtf8Bytes(new ProtectedProgress(petId, soloProgress, resetReceipt, snapshotRevision),
             ProtocolJson.StorageOptions);
         try
         {
@@ -538,7 +600,8 @@ public sealed class JsonAppDataStore : IAppDataStore, IAsyncDisposable
         JsonObject vaultDocument;
         lock (profile.GrowthSync)
         {
-            var protectedBlob = ProtectProgressBlob(profile.PetId, profile.SoloProgress, profile.GrowthResetReceipt);
+            var protectedBlob = ProtectProgressBlob(
+                profile.PetId, profile.SoloProgress, profile.GrowthResetReceipt, profile.ProtectionRevision);
             vaultDocument = CreateProtectionVaultDocument(profile.PetId, protectedBlob);
         }
 
@@ -678,6 +741,7 @@ public sealed class JsonAppDataStore : IAppDataStore, IAsyncDisposable
                 cancellationToken, preserveUnreadableFiles: true).ConfigureAwait(false);
 
             store.Friends ??= [];
+            store.RemovedFriendPetIds ??= [];
             await ProtectExistingFriendBackupAsync(path + ".bak", cancellationToken).ConfigureAwait(false);
 
             // friends.json에 저장된 DPAPI 비밀키 복호화 및 기존 평문 비밀키 자동 마이그레이션
@@ -752,6 +816,11 @@ public sealed class JsonAppDataStore : IAppDataStore, IAsyncDisposable
         {
             SchemaVersion = friendsStore.SchemaVersion,
             UpdatedAtUtc = friendsStore.UpdatedAtUtc,
+            RemovedFriendPetIds = (friendsStore.RemovedFriendPetIds ?? [])
+                .Where(id => !string.IsNullOrWhiteSpace(id))
+                .Select(id => id.Trim())
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList(),
             Friends = (friendsStore.Friends ?? []).Select(friend =>
             {
                 var clone = friend.Clone();

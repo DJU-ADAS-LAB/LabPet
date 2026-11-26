@@ -69,6 +69,11 @@ public sealed class MusicFramePacket
     public float Mid { get; set; }
     public float Treble { get; set; }
     public bool IsBeat { get; set; }
+
+    /// <summary>원격 GCP 중계 시 단일 구독자 대상 라우팅을 위한 선택적 수신자 PetId. HMAC 서명 입력에는 포함하지 않는다.</summary>
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public string? TargetPetId { get; set; }
+
     public string SignatureBase64 { get; set; } = string.Empty;
 }
 

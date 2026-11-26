@@ -22,6 +22,9 @@ public sealed class SocialHub(
     ConnectionPresenceManager presence,
     PendingFriendRequestStore pendingRequests,
     RateLimiterAndDedupService rateLimiter,
+    ServerOverloadProtectionService overload,
+    RemoteMusicRelayDispatcher musicDispatcher,
+    ThrottledLogService throttledLog,
     ILogger<SocialHub> logger) : Hub
 {
     private const int MaxPayloadJsonLength = 14 * 1024;
@@ -31,18 +34,27 @@ public sealed class SocialHub(
     {
         var petId = GetAuthenticatedPetId();
         var error = "UNAUTHENTICATED";
-        if (string.IsNullOrEmpty(petId) || !presence.TryAddConnection(petId, Context.ConnectionId, out error))
+        if (string.IsNullOrEmpty(petId)
+            || (!overload.AllowNewConnections && (error = "SERVER_OVERLOADED") is not null)
+            || !presence.TryAddConnection(petId, Context.ConnectionId, out error))
         {
-            logger.LogWarning("연결 거부: {Error}", error);
+            if (error == "SERVER_OVERLOADED")
+            {
+                overload.RecordRejection();
+            }
+
+            throttledLog.LogWarning(logger, "HubConnect", error, "연결 거부: {Error}", error);
             Context.Abort();
             return;
         }
 
+        overload.EvaluateNow();
         await base.OnConnectedAsync().ConfigureAwait(false);
     }
 
     public override async Task OnDisconnectedAsync(Exception? exception)
     {
+        musicDispatcher.RemoveConnection(Context.ConnectionId);
         var (petId, becameOffline) = presence.RemoveConnection(Context.ConnectionId);
         if (becameOffline && !string.IsNullOrEmpty(petId))
         {
@@ -55,40 +67,81 @@ public sealed class SocialHub(
             }
         }
 
+        overload.EvaluateNow();
         await base.OnDisconnectedAsync(exception).ConfigureAwait(false);
     }
 
     public async Task<IReadOnlyList<RemoteFriendStateDto>> RegisterPresenceAsync(RemotePresenceUpdate update)
     {
         var petId = RequireAuthenticatedPetId();
+        if (!RemoteDtoValidator.ValidatePresenceUpdate(update, options.MaxDeclaredFriendsPerPet))
+        {
+            throw new HubException(FriendOperationErrorCodes.InvalidRequest);
+        }
+
         registry.UpdateIdentityProfile(petId, update.FriendCode, update.OwnerName, update.PetName);
+        if (update.RemovedFriendPetIds is { Count: > 0 } removedIds)
+        {
+            foreach (var targetId in removedIds
+                         .Select(id => id.Trim())
+                         .Distinct(StringComparer.OrdinalIgnoreCase))
+            {
+                await ApplyFriendRemovalAsync(petId, targetId).ConfigureAwait(false);
+            }
+        }
+
         if (update.KnownFriendPetIds is { Count: > 0 } knownIds)
         {
             registry.SyncDeclaredFriends(petId, knownIds);
         }
 
         presence.UpdatePresence(petId, update);
-        await NotifyPresenceChangedAsync(petId, includeNonFriends: true).ConfigureAwait(false);
-        return presence.GetVisibleOnlinePeers(petId, registry, options.MaxPublicDiscoveryPeers);
+        var allowDiscovery = overload.AllowPublicDiscovery;
+        await NotifyPresenceChangedAsync(petId, includeNonFriends: allowDiscovery).ConfigureAwait(false);
+        return presence.GetVisibleOnlinePeers(petId, registry, options.MaxPublicDiscoveryPeers, allowDiscovery);
     }
 
     public async Task UpdatePresenceAsync(RemotePresenceUpdate update)
     {
         var petId = RequireAuthenticatedPetId();
+        if (!RemoteDtoValidator.ValidatePresenceUpdate(update, options.MaxDeclaredFriendsPerPet))
+        {
+            throw new HubException(FriendOperationErrorCodes.InvalidRequest);
+        }
+
         registry.UpdateIdentityProfile(petId, update.FriendCode, update.OwnerName, update.PetName);
         var (anyChanged, publicChanged) = presence.UpdatePresence(petId, update);
         if (anyChanged)
         {
-            await NotifyPresenceChangedAsync(petId, includeNonFriends: publicChanged).ConfigureAwait(false);
+            await NotifyPresenceChangedAsync(petId, includeNonFriends: publicChanged && overload.AllowPublicDiscovery).ConfigureAwait(false);
         }
     }
 
     public async Task<IReadOnlyList<RemoteFriendStateDto>> SyncKnownFriendsAsync(List<string> friendPetIds)
     {
         var petId = RequireAuthenticatedPetId();
+        var maxList = Math.Max(options.MaxDeclaredFriendsPerPet * 2, 32);
+        if (!RemoteDtoValidator.ValidatePetIdCollection(friendPetIds, maxList))
+        {
+            throw new HubException(FriendOperationErrorCodes.InvalidRequest);
+        }
+
         registry.SyncDeclaredFriends(petId, friendPetIds ?? []);
-        await NotifyPresenceChangedAsync(petId, includeNonFriends: true).ConfigureAwait(false);
-        return presence.GetVisibleOnlinePeers(petId, registry, options.MaxPublicDiscoveryPeers);
+        var allowDiscovery = overload.AllowPublicDiscovery;
+        await NotifyPresenceChangedAsync(petId, includeNonFriends: allowDiscovery).ConfigureAwait(false);
+        return presence.GetVisibleOnlinePeers(petId, registry, options.MaxPublicDiscoveryPeers, allowDiscovery);
+    }
+
+    public async Task RemoveFriendAsync(string targetPetId)
+    {
+        var petId = RequireAuthenticatedPetId();
+        if (!RemoteDtoValidator.ValidatePetId(targetPetId)
+            || string.Equals(targetPetId.Trim(), petId, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new HubException(FriendOperationErrorCodes.InvalidRequest);
+        }
+
+        await ApplyFriendRemovalAsync(petId, targetPetId.Trim()).ConfigureAwait(false);
     }
 
     public async Task<RelayDeliveryResult> RelayControlPacketAsync(RelayControlEnvelopeRequest request)
@@ -96,9 +149,7 @@ public sealed class SocialHub(
         var senderPetId = RequireAuthenticatedPetId();
         var sw = Stopwatch.StartNew();
 
-        if (request is null || request.Envelope?.Header is null || string.IsNullOrWhiteSpace(request.TargetPetId)
-            || request.TargetPetId.Length > 64
-            || string.Equals(request.TargetPetId, senderPetId, StringComparison.OrdinalIgnoreCase))
+        if (!RemoteDtoValidator.ValidateRelayControlRequest(request, senderPetId))
         {
             logger.LogWarning("제어 패킷 중계 거부: Stage=Validation, ErrorCode=INVALID_REQUEST, ElapsedMs={ElapsedMs}", sw.ElapsedMilliseconds);
             return new RelayDeliveryResult(false, FriendOperationErrorCodes.InvalidRequest);
@@ -110,9 +161,17 @@ public sealed class SocialHub(
 
         RelayDeliveryResult RejectAndLog(string stage, string errorCode)
         {
+            if (errorCode is FriendOperationErrorCodes.RateLimited or "PAYLOAD_TOO_LARGE" or FriendOperationErrorCodes.PendingCapacityFull)
+            {
+                overload.RecordRejection();
+            }
+
             if (IsPairingPacket(header.PacketType) || errorCode is not FriendOperationErrorCodes.RateLimited)
             {
-                logger.LogWarning(
+                throttledLog.LogWarning(
+                    logger,
+                    "RelayReject",
+                    $"{senderPetId}|{header.PacketType}|{errorCode}",
                     "제어 패킷 중계 거부: RequestId={RequestId}, MessageId={MessageId}, PacketType={PacketType}, Stage={Stage}, ErrorCode={ErrorCode}, ElapsedMs={ElapsedMs}",
                     pairingRequestId ?? "-",
                     header.MessageId,
@@ -153,7 +212,8 @@ public sealed class SocialHub(
             return RejectAndLog("Validation", "PAYLOAD_TOO_LARGE");
         }
 
-        if (!rateLimiter.AllowControlPacket(senderPetId))
+        if (!rateLimiter.AllowControlPacket(senderPetId)
+            || !rateLimiter.AllowControlFeature(senderPetId, header.PacketType))
         {
             return RejectAndLog("Validation", FriendOperationErrorCodes.RateLimited);
         }
@@ -187,7 +247,10 @@ public sealed class SocialHub(
                 }
 
                 pairingRequestId = reqPayload.RequestId;
-                pendingRequests.RecordRequest(pairingRequestId, senderPetId, targetPetId);
+                if (!pendingRequests.TryRecordRequest(pairingRequestId, senderPetId, targetPetId))
+                {
+                    return RejectAndLog("Validation", FriendOperationErrorCodes.PendingCapacityFull);
+                }
                 logger.LogInformation(
                     "친구 신청 검증 완료: RequestId={RequestId}, MessageId={MessageId}, PacketType={PacketType}, Stage=Validation, ElapsedMs={ElapsedMs}",
                     pairingRequestId,
@@ -464,33 +527,92 @@ public sealed class SocialHub(
         PacketType.FriendAccept or
         PacketType.FriendReject;
 
-    public async Task RelayMusicFrameAsync(MusicFramePacket packet)
+    public Task RelayMusicFrameAsync(MusicFramePacket packet)
     {
         var senderPetId = RequireAuthenticatedPetId();
-        if (packet is null
-            || !string.Equals(packet.SenderPetId, senderPetId, StringComparison.OrdinalIgnoreCase)
-            || ProtocolConstants.EvaluateCompatibility(packet.ProtocolVersion) != ProtocolCompatibility.Compatible
-            || string.IsNullOrWhiteSpace(packet.SignatureBase64)
-            || packet.SubscriptionId.Length > 64)
+        if (!overload.AllowMusicRelay)
+        {
+            return Task.CompletedTask;
+        }
+
+        if (!RemoteDtoValidator.ValidateMusicFramePacket(packet, senderPetId))
+        {
+            return Task.CompletedTask;
+        }
+
+        // 해당 서명을 검증할 수 있는 단일 구독자에게만 전달해 다수 구독자 중복 브로드캐스트를 원천 차단
+        string? targetPetId = string.IsNullOrWhiteSpace(packet.TargetPetId) ? null : packet.TargetPetId.Trim();
+        if (targetPetId is null)
+        {
+            var followerIds = presence.GetMusicFollowerPetIds(senderPetId, registry);
+            if (followerIds.Count != 1)
+            {
+                return Task.CompletedTask;
+            }
+
+            targetPetId = followerIds[0];
+        }
+        else if (!presence.IsMusicFollower(senderPetId, targetPetId) || !registry.AreMutualFriends(senderPetId, targetPetId))
+        {
+            return Task.CompletedTask;
+        }
+
+        if (!rateLimiter.AllowMusicRelay(senderPetId, targetPetId))
+        {
+            return Task.CompletedTask;
+        }
+
+        if (!musicDispatcher.TryAcceptSequence(senderPetId, targetPetId, packet.SubscriptionId, packet.Sequence))
+        {
+            return Task.CompletedTask;
+        }
+
+        var targetConnections = presence.GetConnectionIdsForPet(targetPetId);
+        foreach (var connId in targetConnections)
+        {
+            musicDispatcher.TryEnqueue(connId, packet);
+        }
+
+        return Task.CompletedTask;
+    }
+
+    private async Task ApplyFriendRemovalAsync(string actorPetId, string targetPetId)
+    {
+        if (string.Equals(actorPetId, targetPetId, StringComparison.OrdinalIgnoreCase))
         {
             return;
         }
 
-        if (!rateLimiter.AllowMusicFrame(senderPetId))
+        registry.RevokeFriendship(actorPetId, targetPetId);
+        presence.RevokeMusicSubscriptionsBetween(actorPetId, targetPetId);
+
+        var targetConnections = presence.GetConnectionIdsForPet(targetPetId);
+        if (targetConnections.Count > 0)
         {
-            return;
+            await Clients.Clients(targetConnections)
+                .SendAsync(SocialHubConstants.ReceiveFriendRemovedClientMethod, actorPetId)
+                .ConfigureAwait(false);
+
+            var actorPublicDto = presence.BuildFriendDto(actorPetId, includePrivateStates: false);
+            if (actorPublicDto is not null && overload.AllowPublicDiscovery)
+            {
+                await Clients.Clients(targetConnections)
+                    .SendAsync(SocialHubConstants.ReceiveFriendPresenceChangedClientMethod, actorPublicDto)
+                    .ConfigureAwait(false);
+            }
         }
 
-        // 원격 구독자가 1명 이상 있을 때만 릴레이하여 네트워크 이그레스 절감
-        var subscriberConnIds = presence.GetMusicFollowerConnectionIds(senderPetId, registry);
-        if (subscriberConnIds.Count == 0)
+        var actorConnections = presence.GetConnectionIdsForPet(actorPetId);
+        if (actorConnections.Count > 0)
         {
-            return;
+            var targetPublicDto = presence.BuildFriendDto(targetPetId, includePrivateStates: false);
+            if (targetPublicDto is not null && overload.AllowPublicDiscovery)
+            {
+                await Clients.Clients(actorConnections)
+                    .SendAsync(SocialHubConstants.ReceiveFriendPresenceChangedClientMethod, targetPublicDto)
+                    .ConfigureAwait(false);
+            }
         }
-
-        await Clients.Clients(subscriberConnIds)
-            .SendAsync(SocialHubConstants.ReceiveMusicFrameClientMethod, packet)
-            .ConfigureAwait(false);
     }
 
     private async Task NotifyPresenceChangedAsync(string petId, bool includeNonFriends)

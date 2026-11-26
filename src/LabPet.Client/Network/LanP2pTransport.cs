@@ -42,12 +42,39 @@ public sealed partial class LanP2pTransport : ISocialTransport
     private readonly int _udpDiscoveryPort;
     private readonly int _udpMusicPort;
     private readonly int _tcpControlPort;
+    private readonly LanDosProtectionOptions _dosOptions;
 
     private readonly ConcurrentDictionary<string, PeerSnapshot> _peers = new(StringComparer.OrdinalIgnoreCase);
     private volatile Dictionary<string, FriendEntry> _friendsByPetId = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, MusicSubscriber> _musicSubscribers = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, MusicSequenceWindow> _musicReceiveWindows = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, ControlReplayWindow> _replayWindows = new(StringComparer.OrdinalIgnoreCase);
+
+    private readonly BoundedSlidingRateLimiter _discoveryLimiter;
+    private readonly BoundedSlidingRateLimiter _musicLimiter;
+    private readonly BoundedSlidingRateLimiter _tcpRequestLimiter;
+    private readonly BoundedSlidingRateLimiter _featureLimiter;
+    private readonly SemaphoreSlim _totalTcpSlots;
+    private readonly SemaphoreSlim _unauthenticatedTcpSlots;
+    private readonly ConcurrentDictionary<string, int> _activeTcpByIp = new(StringComparer.OrdinalIgnoreCase);
+
+    private readonly object _peersChangedLock = new();
+    private Timer? _peersChangedTimer;
+    private long _lastPeersChangedSentMs;
+    private bool _peersChangedPending;
+
+    private long _droppedOversizedDiscoveryPackets;
+    private long _droppedRateLimitedDiscoveryPackets;
+    private long _droppedOversizedMusicPackets;
+    private long _droppedRateLimitedMusicPackets;
+    private long _droppedTcpConnectionsByLimit;
+
+    internal long DroppedOversizedDiscoveryPackets => Interlocked.Read(ref _droppedOversizedDiscoveryPackets);
+    internal long DroppedRateLimitedDiscoveryPackets => Interlocked.Read(ref _droppedRateLimitedDiscoveryPackets);
+    internal long DroppedOversizedMusicPackets => Interlocked.Read(ref _droppedOversizedMusicPackets);
+    internal long DroppedRateLimitedMusicPackets => Interlocked.Read(ref _droppedRateLimitedMusicPackets);
+    internal long DroppedTcpConnectionsByLimit => Interlocked.Read(ref _droppedTcpConnectionsByLimit);
+    internal int ActiveTcpConnectionCount => _activeTcpByIp.Values.Sum();
 
     private readonly SemaphoreSlim _lifecycle = new(1, 1);
     private AsyncOperationLifetime _background = new();
@@ -81,11 +108,24 @@ public sealed partial class LanP2pTransport : ISocialTransport
     public LanP2pTransport(
         int udpDiscoveryPort = ProtocolConstants.UdpDiscoveryPort,
         int udpMusicPort = ProtocolConstants.UdpMusicFramePort,
-        int tcpControlPort = ProtocolConstants.TcpControlPort)
+        int tcpControlPort = ProtocolConstants.TcpControlPort,
+        LanDosProtectionOptions? dosOptions = null)
     {
         _udpDiscoveryPort = udpDiscoveryPort;
         _udpMusicPort = udpMusicPort;
         _tcpControlPort = tcpControlPort;
+        _dosOptions = dosOptions ?? new LanDosProtectionOptions();
+
+        var maxBuckets = Math.Clamp(_dosOptions.MaxTrackedRateBuckets, 16, 16_384);
+        _discoveryLimiter = new BoundedSlidingRateLimiter(maxBuckets);
+        _musicLimiter = new BoundedSlidingRateLimiter(maxBuckets);
+        _tcpRequestLimiter = new BoundedSlidingRateLimiter(maxBuckets);
+        _featureLimiter = new BoundedSlidingRateLimiter(maxBuckets);
+
+        var maxTotalTcp = Math.Clamp(_dosOptions.MaxTotalControlConnections, 2, 128);
+        var reservedFriend = Math.Clamp(_dosOptions.ReservedFriendControlConnections, 1, maxTotalTcp - 1);
+        _totalTcpSlots = new SemaphoreSlim(maxTotalTcp, maxTotalTcp);
+        _unauthenticatedTcpSlots = new SemaphoreSlim(maxTotalTcp - reservedFriend, maxTotalTcp - reservedFriend);
     }
 
     public int BoundTcpPort => _boundTcpPort;
@@ -204,6 +244,16 @@ public sealed partial class LanP2pTransport : ISocialTransport
             _musicSubscribers.Clear();
             _musicReceiveWindows.Clear();
             _replayWindows.Clear();
+            _discoveryLimiter.Clear();
+            _musicLimiter.Clear();
+            _tcpRequestLimiter.Clear();
+            _featureLimiter.Clear();
+            lock (_peersChangedLock)
+            {
+                _peersChangedPending = false;
+                _peersChangedTimer?.Dispose();
+                _peersChangedTimer = null;
+            }
             lock (_pairingLock)
             {
                 foreach (var pair in _outgoingPairings.Values) pair.Dispose();
@@ -225,16 +275,31 @@ public sealed partial class LanP2pTransport : ISocialTransport
             _musicSubscribers.Clear();
         }
 
-        if (IsRunning && (previous.IsSleeping != presence.IsSleeping
-            || previous.IsMusicActive != presence.IsMusicActive
-            || previous.IsFocusing != presence.IsFocusing
-            || previous.Level != presence.Level))
+        if (IsRunning)
         {
-            var operation = BeginBackgroundWork(out var ct);
-            if (operation is not null)
+            var publicChanged = previous.Level != presence.Level
+                || !string.Equals(previous.OwnerName, presence.OwnerName, StringComparison.Ordinal)
+                || !string.Equals(previous.PetName, presence.PetName, StringComparison.Ordinal);
+            var privateChanged = previous.IsSleeping != presence.IsSleeping
+                || previous.IsMusicActive != presence.IsMusicActive
+                || previous.IsFocusing != presence.IsFocusing;
+
+            if (publicChanged || privateChanged)
             {
-                _ = BroadcastPresenceAsync(operation, ct);
-                PushPresenceToOnlineFriends(ct);
+                var operation = BeginBackgroundWork(out var ct);
+                if (operation is not null)
+                {
+                    if (publicChanged)
+                    {
+                        _ = BroadcastPresenceAsync(operation, ct);
+                    }
+                    else
+                    {
+                        operation.Dispose();
+                    }
+
+                    PushPresenceToOnlineFriends(ct);
+                }
             }
         }
 
@@ -282,6 +347,8 @@ public sealed partial class LanP2pTransport : ISocialTransport
             if (!friendsByPetId.ContainsKey(petId))
             {
                 _replayWindows.TryRemove(petId, out _);
+                _musicSubscribers.TryRemove(petId, out _);
+                _musicReceiveWindows.TryRemove(petId, out _);
             }
         }
 
@@ -301,6 +368,36 @@ public sealed partial class LanP2pTransport : ISocialTransport
             RaisePeersChanged();
         }
     }
+
+    public Task<bool> RemoveFriendAsync(string friendPetId, CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(friendPetId))
+        {
+            return Task.FromResult(false);
+        }
+
+        var cleanId = friendPetId.Trim();
+        var next = new Dictionary<string, FriendEntry>(_friendsByPetId, StringComparer.OrdinalIgnoreCase);
+        var removed = next.Remove(cleanId);
+        _friendsByPetId = next;
+
+        _replayWindows.TryRemove(cleanId, out _);
+        _musicSubscribers.TryRemove(cleanId, out _);
+        _musicReceiveWindows.TryRemove(cleanId, out _);
+        _presenceInFlight.TryRemove(cleanId, out _);
+        _presenceResendPending.TryRemove(cleanId, out _);
+        ClearPairingsForPeer(cleanId);
+
+        var peerRemoved = _peers.TryRemove(cleanId, out _);
+        if (removed || peerRemoved)
+        {
+            RaisePeersChanged();
+        }
+
+        return Task.FromResult(removed || peerRemoved);
+    }
+
+    public void SetPendingRemovedFriends(IReadOnlyCollection<string> removedPetIds) { }
 
     public IReadOnlyList<PeerSnapshot> GetDiscoveredPeers()
         => _peers.Values.Where(peer => peer.IsFriend == _friendsByPetId.ContainsKey(peer.PetId))
@@ -600,9 +697,9 @@ public sealed partial class LanP2pTransport : ISocialTransport
             PetName = presence.PetName,
             Appearance = presence.Appearance.Clone(),
             Level = presence.Level,
-            IsMusicActive = presence.IsMusicActive,
-            IsSleeping = presence.IsSleeping,
-            IsFocusing = presence.IsFocusing,
+            IsMusicActive = false,
+            IsSleeping = false,
+            IsFocusing = false,
             TcpPort = _boundTcpPort,
             TimestampUtc = DateTimeOffset.UtcNow
         };
@@ -636,11 +733,25 @@ public sealed partial class LanP2pTransport : ISocialTransport
             try
             {
                 var result = await udp.ReceiveAsync(ct).ConfigureAwait(false);
+                if (result.Buffer.Length <= 0 || result.Buffer.Length > _dosOptions.MaxDiscoveryUdpBytes)
+                {
+                    Interlocked.Increment(ref _droppedOversizedDiscoveryPackets);
+                    continue;
+                }
+
+                var address = result.RemoteEndPoint.Address;
+                var remoteIp = (address.IsIPv4MappedToIPv6 ? address.MapToIPv4() : address).ToString();
+                if (!_discoveryLimiter.Allow("ip|" + remoteIp, 1000L, _dosOptions.DiscoveryPerIpPerSecond)
+                    || !_discoveryLimiter.Allow("global", 1000L, _dosOptions.DiscoveryGlobalPerSecond))
+                {
+                    Interlocked.Increment(ref _droppedRateLimitedDiscoveryPackets);
+                    continue;
+                }
+
                 var hello = JsonSerializer.Deserialize<DiscoveryHelloPacket>(result.Buffer, ProtocolJson.PacketOptions);
                 if (hello is not null)
                 {
-                    var address = result.RemoteEndPoint.Address;
-                    HandleDiscoveryHello(hello, (address.IsIPv4MappedToIPv6 ? address.MapToIPv4() : address).ToString(), ct);
+                    HandleDiscoveryHello(hello, remoteIp, ct);
                 }
             }
             catch (OperationCanceledException)
@@ -671,8 +782,31 @@ public sealed partial class LanP2pTransport : ISocialTransport
             try
             {
                 var result = await udp.ReceiveAsync(ct).ConfigureAwait(false);
+                if (result.Buffer.Length <= 0 || result.Buffer.Length > _dosOptions.MaxMusicUdpBytes)
+                {
+                    Interlocked.Increment(ref _droppedOversizedMusicPackets);
+                    continue;
+                }
+
+                var address = result.RemoteEndPoint.Address;
+                var remoteIp = (address.IsIPv4MappedToIPv6 ? address.MapToIPv4() : address).ToString();
+                if (!_musicLimiter.Allow("ip|" + remoteIp, 1000L, _dosOptions.MusicPerIpPerSecond)
+                    || !_musicLimiter.Allow("global", 1000L, _dosOptions.MusicGlobalPerSecond))
+                {
+                    Interlocked.Increment(ref _droppedRateLimitedMusicPackets);
+                    continue;
+                }
+
                 var packet = JsonSerializer.Deserialize<MusicFramePacket>(result.Buffer, ProtocolJson.PacketOptions);
-                if (packet is null || string.IsNullOrWhiteSpace(packet.SenderPetId))
+                if (packet is null
+                    || string.IsNullOrWhiteSpace(packet.SenderPetId)
+                    || packet.SenderPetId.Length > 64
+                    || packet.SubscriptionId.Length > 64
+                    || string.IsNullOrWhiteSpace(packet.SignatureBase64)
+                    || packet.SignatureBase64.Length > 88
+                    || !float.IsFinite(packet.Bass)
+                    || !float.IsFinite(packet.Mid)
+                    || !float.IsFinite(packet.Treble))
                 {
                     continue;
                 }
@@ -682,9 +816,15 @@ public sealed partial class LanP2pTransport : ISocialTransport
                     continue;
                 }
 
-                // 인증된 친구 패킷만 HMAC 검증 후 허용
+                // 인증된 친구 패킷만 발신자별 빈도·HMAC 검증 후 허용 (30Hz 정상 동기화 유지)
                 if (!_friendsByPetId.TryGetValue(packet.SenderPetId, out var friend))
                 {
+                    continue;
+                }
+
+                if (!_musicLimiter.Allow("friend|" + packet.SenderPetId, 1000L, _dosOptions.MusicPerFriendPerSecond))
+                {
+                    Interlocked.Increment(ref _droppedRateLimitedMusicPackets);
                     continue;
                 }
 
@@ -740,35 +880,95 @@ public sealed partial class LanP2pTransport : ISocialTransport
         return false;
     }
 
-    private void PruneStalePeers()
+    internal int PruneStalePeers()
     {
         lock (_pairingLock)
         {
             PrunePairings(DateTimeOffset.UtcNow);
         }
-        var cutoff = DateTimeOffset.UtcNow - TimeSpan.FromSeconds(ProtocolConstants.PeerOfflineTimeoutSeconds);
-        var removed = false;
+
+        _discoveryLimiter.Prune(60_000L);
+        _musicLimiter.Prune(10_000L);
+        _tcpRequestLimiter.Prune(10_000L);
+        _featureLimiter.Prune(60_000L);
+
+        var now = DateTimeOffset.UtcNow;
+        var friendCutoff = now - TimeSpan.FromSeconds(ProtocolConstants.PeerOfflineTimeoutSeconds);
+        var unauthTtl = Math.Clamp(_dosOptions.UnauthenticatedPeerTtlSeconds, 1, ProtocolConstants.PeerOfflineTimeoutSeconds);
+        var unauthCutoff = now - TimeSpan.FromSeconds(unauthTtl);
+        var removedCount = 0;
 
         foreach (var kv in _peers)
         {
+            var cutoff = kv.Value.IsFriend ? friendCutoff : unauthCutoff;
             if (kv.Value.LastSeenUtc < cutoff)
             {
                 if (_peers.TryRemove(kv.Key, out _))
                 {
                     _musicSubscribers.TryRemove(kv.Key, out _);
-                    removed = true;
+                    removedCount++;
                 }
             }
         }
 
-        if (removed)
+        if (removedCount > 0)
         {
             RaisePeersChanged();
         }
+
+        return removedCount;
     }
 
     private void RaisePeersChanged()
     {
+        var minIntervalMs = _dosOptions.PeersChangedMinIntervalMs;
+        if (minIntervalMs <= 0)
+        {
+            PeersChanged?.Invoke(this, GetDiscoveredPeers());
+            return;
+        }
+
+        var raiseNow = false;
+        lock (_peersChangedLock)
+        {
+            var nowMs = Environment.TickCount64;
+            var elapsed = nowMs - _lastPeersChangedSentMs;
+            if (elapsed >= minIntervalMs || _lastPeersChangedSentMs == 0)
+            {
+                _lastPeersChangedSentMs = nowMs;
+                _peersChangedPending = false;
+                _peersChangedTimer?.Change(Timeout.Infinite, Timeout.Infinite);
+                raiseNow = true;
+            }
+            else if (!_peersChangedPending)
+            {
+                _peersChangedPending = true;
+                var delayMs = (int)Math.Clamp(minIntervalMs - elapsed, 1, minIntervalMs);
+                _peersChangedTimer ??= new Timer(OnPeersChangedTimerCallback, null, Timeout.Infinite, Timeout.Infinite);
+                _peersChangedTimer.Change(delayMs, Timeout.Infinite);
+            }
+        }
+
+        if (raiseNow)
+        {
+            PeersChanged?.Invoke(this, GetDiscoveredPeers());
+        }
+    }
+
+    private void OnPeersChangedTimerCallback(object? _)
+    {
+        lock (_peersChangedLock)
+        {
+            if (!_peersChangedPending || !IsRunning)
+            {
+                _peersChangedPending = false;
+                return;
+            }
+
+            _peersChangedPending = false;
+            _lastPeersChangedSentMs = Environment.TickCount64;
+        }
+
         PeersChanged?.Invoke(this, GetDiscoveredPeers());
     }
 

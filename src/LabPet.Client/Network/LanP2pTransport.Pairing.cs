@@ -109,7 +109,7 @@ public sealed partial class LanP2pTransport
                 return FriendOperationResult.Fail(FriendOperationStage.Validation, FriendOperationErrorCodes.AlreadyFriends, false, PeerTransportKind.Lan);
             }
 
-            if (_outgoingPairings.Values.Any(pair => SamePetId(pair.PeerId, target.PetId)))
+            if (_outgoingPairings.Values.Any(pair => pair.ConfirmationKey is null && SamePetId(pair.PeerId, target.PetId)))
             {
                 return FriendOperationResult.Fail(FriendOperationStage.Validation, FriendOperationErrorCodes.DuplicatePendingRequest, false, PeerTransportKind.Lan);
             }
@@ -481,6 +481,24 @@ public sealed partial class LanP2pTransport
 
         FriendRejected?.Invoke(this, new FriendRejectedEventArgs(envelope.Header.SenderPetId, payload.Reason, payload.RequestId));
         return true;
+    }
+
+    private void ClearPairingsForPeer(string petId)
+    {
+        lock (_pairingLock)
+        {
+            foreach (var kv in _outgoingPairings.Where(kv => SamePetId(kv.Value.PeerId, petId)).ToArray())
+            {
+                _outgoingPairings.Remove(kv.Key);
+                kv.Value.Dispose();
+            }
+
+            foreach (var kv in _incomingPairings.Where(kv => SamePetId(kv.Value.Request.RequesterPetId, petId) && !kv.Value.IsResponding).ToArray())
+            {
+                _incomingPairings.Remove(kv.Key);
+                kv.Value.Dispose();
+            }
+        }
     }
 
     private void PrunePairings(DateTimeOffset now)

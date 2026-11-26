@@ -6,7 +6,7 @@ on:
       - "v*.*.*"
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: labpet-windows-release
@@ -15,15 +15,17 @@ concurrency:
 jobs:
   release:
     runs-on: windows-latest
+    permissions:
+      contents: write
     timeout-minutes: 20
     env:
       DOTNET_NOLOGO: "true"
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           persist-credentials: false
 
-      - uses: actions/setup-dotnet@v5
+      - uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5
         with:
           global-json-file: global.json
 
@@ -68,7 +70,12 @@ jobs:
             '-o', './publish/win-x64'
           )
           if (-not [string]::IsNullOrWhiteSpace($env:LABPET_SERVER_URL)) {
-            $publishArgs += "-p:LabPetDefaultServerUrl=$($env:LABPET_SERVER_URL.Trim())"
+            $trimmedUrl = $env:LABPET_SERVER_URL.Trim()
+            $parsedUri = $null
+            if (-not [Uri]::TryCreate($trimmedUrl, [UriKind]::Absolute, [ref]$parsedUri) -or $parsedUri.Scheme -ne 'https') {
+              throw "운영 배포 LABPET_SERVER_URL은 https:// URL이어야 합니다."
+            }
+            $publishArgs += "-p:LabPetDefaultServerUrl=$trimmedUrl"
           }
           dotnet @publishArgs
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
@@ -79,7 +86,7 @@ jobs:
           ./tools/obfuscation/Protect-LabPetRelease.ps1 -PublishDirectory ./publish/win-x64 -WorkDirectory ./publish/obfuscation-work
 
       - name: 난독화 매핑 및 원본 심볼 보관
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: labpet-symbols-${{ steps.meta.outputs.tag }}
           path: |
@@ -105,9 +112,19 @@ jobs:
 
       - name: 이전 릴리스 다운로드 및 단일 Velopack 패키징
         shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           $ErrorActionPreference = 'Stop'
           $PSNativeCommandUseErrorActionPreference = $false
+
+          $forbidden = Get-ChildItem -Path './publish/win-x64' -Recurse -File | Where-Object {
+            $_.Name -in @('.env', 'server.json', 'device_identity.json', 'friends.json', 'profile.json', 'profile.protection-v1', 'Mapping.txt') -or
+            $_.Extension -in @('.pdb', '.pfx', '.snk', '.key')
+          }
+          if ($forbidden) {
+            throw ("배포 폴더에 포함될 수 없는 민감/디버그 파일이 발견되었습니다: " + (($forbidden | Select-Object -ExpandProperty Name) -join ', '))
+          }
 
           $ver = "${{ steps.meta.outputs.version }}"
           $repoUrl = "${{ github.server_url }}/${{ github.repository }}"
@@ -117,7 +134,7 @@ jobs:
           $hasPrevious = $false
           vpk download github `
             --repoUrl $repoUrl `
-            --token "${{ github.token }}" `
+            --token $env:GITHUB_TOKEN `
             --outputDir $releasesDir
           if ($LASTEXITCODE -eq 0 -and @(Get-ChildItem -LiteralPath $releasesDir -File -Filter 'LabPet-*-full.nupkg').Count -gt 0) {
             $hasPrevious = $true
@@ -165,10 +182,12 @@ jobs:
 
       - name: GitHub Release 업로드 및 공개
         shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           vpk upload github `
             --repoUrl "${{ github.server_url }}/${{ github.repository }}" `
-            --token "${{ github.token }}" `
+            --token $env:GITHUB_TOKEN `
             --outputDir ./Releases `
             --publish `
             --tag "${{ steps.meta.outputs.tag }}" `

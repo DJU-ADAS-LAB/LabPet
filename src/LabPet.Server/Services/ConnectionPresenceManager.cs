@@ -76,19 +76,30 @@ public sealed class ConnectionPresenceManager(ServerOptions options)
 
     public (bool AnyChanged, bool PublicProfileChanged) UpdatePresence(string petId, RemotePresenceUpdate update)
     {
+        var appearance = (update.Appearance ?? new PetAppearance()).Clone();
+        appearance.SpeciesId = TrimMax(appearance.SpeciesId, 32);
+        appearance.BodyColorHex = TrimMax(appearance.BodyColorHex, 16);
+        appearance.AccentColorHex = TrimMax(appearance.AccentColorHex, 16);
+        appearance.ExpressionId = TrimMax(appearance.ExpressionId, 32);
+        appearance.HeadAccessoryId = TrimMax(appearance.HeadAccessoryId, 32);
+        appearance.AuraEffectId = TrimMax(appearance.AuraEffectId, 32);
+
+        var petName = TrimMax(update.PetName, 32);
+        var appVersion = TrimMax(update.AppVersion, 24);
         var copy = new RemotePresenceUpdate
         {
-            FriendCode = (update.FriendCode ?? string.Empty).Trim().ToUpperInvariant(),
-            OwnerName = (update.OwnerName ?? string.Empty).Trim(),
-            PetName = string.IsNullOrWhiteSpace(update.PetName) ? "LabPet" : update.PetName.Trim(),
-            Appearance = (update.Appearance ?? new PetAppearance()).Clone(),
-            Level = Math.Max(1, update.Level),
+            FriendCode = TrimMax(update.FriendCode, 32).ToUpperInvariant(),
+            OwnerName = TrimMax(update.OwnerName, 32),
+            PetName = string.IsNullOrWhiteSpace(petName) ? "LabPet" : petName,
+            Appearance = appearance,
+            Level = Math.Clamp(update.Level, 1, 9999),
             IsMusicActive = update.IsMusicActive,
             IsSleeping = update.IsSleeping,
             IsFocusing = update.IsFocusing,
-            AppVersion = string.IsNullOrWhiteSpace(update.AppVersion) ? "0.1.0" : update.AppVersion.Trim(),
+            AppVersion = string.IsNullOrWhiteSpace(appVersion) ? "0.1.0" : appVersion,
             ProtocolVersion = update.ProtocolVersion,
-            KnownFriendPetIds = update.KnownFriendPetIds ?? []
+            KnownFriendPetIds = [],
+            RemovedFriendPetIds = []
         };
 
         lock (_lock)
@@ -193,9 +204,10 @@ public sealed class ConnectionPresenceManager(ServerOptions options)
     public IReadOnlyList<RemoteFriendStateDto> GetVisibleOnlinePeers(
         string callerPetId,
         IdentityRegistryStore registry,
-        int maxNonFriends = 50)
+        int maxNonFriends = 50,
+        bool allowPublicDiscovery = true)
     {
-        var nonFriendCap = Math.Clamp(maxNonFriends, 0, 200);
+        var nonFriendCap = allowPublicDiscovery ? Math.Clamp(maxNonFriends, 0, 200) : 0;
         var mutualCandidateSet = new HashSet<string>(
             registry.GetPotentialMutualFriendIds(callerPetId),
             StringComparer.OrdinalIgnoreCase);
@@ -326,7 +338,45 @@ public sealed class ConnectionPresenceManager(ServerOptions options)
         }
     }
 
-    public IReadOnlyList<string> GetMusicFollowerConnectionIds(string hostPetId, IdentityRegistryStore registry)
+    public void RevokeMusicSubscriptionsBetween(string petA, string petB)
+    {
+        if (string.IsNullOrWhiteSpace(petA) || string.IsNullOrWhiteSpace(petB))
+        {
+            return;
+        }
+
+        lock (_lock)
+        {
+            if (_musicSubscribersByHost.TryGetValue(petA, out var followersA))
+            {
+                followersA.Remove(petB);
+                if (followersA.Count == 0)
+                {
+                    _musicSubscribersByHost.Remove(petA);
+                }
+            }
+
+            if (_musicSubscribersByHost.TryGetValue(petB, out var followersB))
+            {
+                followersB.Remove(petA);
+                if (followersB.Count == 0)
+                {
+                    _musicSubscribersByHost.Remove(petB);
+                }
+            }
+        }
+    }
+
+    public bool IsMusicFollower(string hostPetId, string followerPetId)
+    {
+        lock (_lock)
+        {
+            return _musicSubscribersByHost.TryGetValue(hostPetId, out var set)
+                && set.Contains(followerPetId);
+        }
+    }
+
+    public IReadOnlyList<string> GetMusicFollowerPetIds(string hostPetId, IdentityRegistryStore registry)
     {
         List<string> followerIds;
         lock (_lock)
@@ -339,14 +389,22 @@ public sealed class ConnectionPresenceManager(ServerOptions options)
             followerIds = [.. set];
         }
 
+        return followerIds
+            .Where(followerId => registry.AreMutualFriends(hostPetId, followerId))
+            .ToList();
+    }
+
+    public IReadOnlyList<string> GetMusicFollowerConnectionIds(string hostPetId, IdentityRegistryStore registry)
+    {
+        var followerIds = GetMusicFollowerPetIds(hostPetId, registry);
+        if (followerIds.Count == 0)
+        {
+            return [];
+        }
+
         var connIds = new List<string>();
         foreach (var followerId in followerIds)
         {
-            if (!registry.AreMutualFriends(hostPetId, followerId))
-            {
-                continue;
-            }
-
             lock (_lock)
             {
                 if (_sessionsByPetId.TryGetValue(followerId, out var session))
@@ -357,5 +415,16 @@ public sealed class ConnectionPresenceManager(ServerOptions options)
         }
 
         return connIds;
+    }
+
+    private static string TrimMax(string? value, int maxLen)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return string.Empty;
+        }
+
+        var trimmed = value.Trim();
+        return trimmed.Length <= maxLen ? trimmed : trimmed[..maxLen];
     }
 }

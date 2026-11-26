@@ -21,6 +21,17 @@ public sealed class ServerTokenService
     private readonly byte[] _signingKey;
     private readonly TimeSpan _tokenLifetime;
 
+    private static readonly string[] WeakSecretPlaceholders =
+    [
+        "changeme",
+        "replace",
+        "default",
+        "example",
+        "secret123",
+        "password",
+        "labpet-dev"
+    ];
+
     public ServerTokenService(ServerOptions options)
     {
         if (string.IsNullOrWhiteSpace(options.ServerSecret))
@@ -36,10 +47,43 @@ public sealed class ServerTokenService
         }
         else
         {
-            _signingKey = SHA256.HashData(Encoding.UTF8.GetBytes(options.ServerSecret.Trim()));
+            var trimmedSecret = options.ServerSecret.Trim();
+            if (options.RequireConfiguredSecret)
+            {
+                ValidateConfiguredSecret(trimmedSecret);
+            }
+
+            _signingKey = SHA256.HashData(Encoding.UTF8.GetBytes(trimmedSecret));
         }
 
         _tokenLifetime = TimeSpan.FromMinutes(Math.Clamp(options.TokenLifetimeMinutes, 10, 1440));
+    }
+
+    internal static void ValidateConfiguredSecret(string secret)
+    {
+        if (string.IsNullOrWhiteSpace(secret))
+        {
+            throw new InvalidOperationException("서버 비밀키가 비어 있습니다.");
+        }
+
+        if (Encoding.UTF8.GetByteCount(secret) < 32)
+        {
+            throw new InvalidOperationException("운영 환경 서버 비밀키는 UTF-8 기준 32바이트 이상이어야 합니다.");
+        }
+
+        var distinctChars = secret.Distinct().Count();
+        if (distinctChars < 10)
+        {
+            throw new InvalidOperationException("운영 환경 서버 비밀키의 엔트로피(고유 문자 수)가 부족합니다.");
+        }
+
+        foreach (var placeholder in WeakSecretPlaceholders)
+        {
+            if (secret.Contains(placeholder, StringComparison.OrdinalIgnoreCase))
+            {
+                throw new InvalidOperationException("운영 환경 서버 비밀키에 기본 또는 플레이스홀더 문자열을 사용할 수 없습니다.");
+            }
+        }
     }
 
     public (string Token, DateTimeOffset ExpiresAtUtc) IssueToken(string petId, string keyThumbprint, string friendCode)

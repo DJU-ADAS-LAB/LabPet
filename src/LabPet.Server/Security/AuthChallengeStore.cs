@@ -1,4 +1,3 @@
-using System.Collections.Concurrent;
 using System.Security.Cryptography;
 using LabPet.Server.Options;
 using LabPet.Shared.Protocol;
@@ -6,22 +5,25 @@ using LabPet.Shared.Protocol;
 namespace LabPet.Server.Security;
 
 /// <summary>
-/// 메모리 기반 1회용 논스 챌린지 저장소 (상한 2,048개, TTL 60초, 재사용 불가).
+/// 메모리 기반 1회용 논스 챌린지 저장소 (전체·IP별 상한, TTL, 재사용 불가).
 /// </summary>
 public sealed class AuthChallengeStore(ServerOptions options)
 {
-    private const int MaxPendingChallenges = 2048;
-
     private sealed record ChallengeEntry(
         string PetId,
         string PublicKeyBase64,
+        string? RemoteIp,
         DateTimeOffset IssuedAtUtc,
         DateTimeOffset ExpiresAtUtc);
 
-    private readonly ConcurrentDictionary<string, ChallengeEntry> _challenges = new(StringComparer.Ordinal);
+    private readonly object _sync = new();
+    private readonly Dictionary<string, ChallengeEntry> _challenges = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, int> _ipCounts = new(StringComparer.OrdinalIgnoreCase);
+    private readonly int _maxPending = Math.Clamp(options.MaxPendingChallenges, 32, 32_768);
+    private readonly int _maxPendingPerIp = Math.Clamp(options.MaxPendingChallengesPerIp, 4, 2048);
     private readonly TimeSpan _lifetime = TimeSpan.FromSeconds(Math.Clamp(options.ChallengeLifetimeSeconds, 15, 300));
 
-    public AuthChallengeResponse? IssueChallenge(string petId, string devicePublicKeyBase64)
+    public AuthChallengeResponse? IssueChallenge(string petId, string devicePublicKeyBase64, string? remoteIp = null)
     {
         if (string.IsNullOrWhiteSpace(petId) || petId.Length > 64
             || !RemoteAuthSigner.IsValidDevicePublicKey(devicePublicKeyBase64))
@@ -29,26 +31,42 @@ public sealed class AuthChallengeStore(ServerOptions options)
             return null;
         }
 
-        if (_challenges.Count >= MaxPendingChallenges)
+        var now = DateTimeOffset.UtcNow;
+        var normalizedIp = string.IsNullOrWhiteSpace(remoteIp) ? null : remoteIp.Trim();
+
+        lock (_sync)
         {
-            PruneExpired(DateTimeOffset.UtcNow);
-            if (_challenges.Count >= MaxPendingChallenges)
+            if (_challenges.Count >= _maxPending
+                || (normalizedIp is not null && _ipCounts.TryGetValue(normalizedIp, out var ipCount) && ipCount >= _maxPendingPerIp))
+            {
+                PruneExpiredLocked(now);
+            }
+
+            if (_challenges.Count >= _maxPending)
             {
                 return null;
             }
+
+            if (normalizedIp is not null && _ipCounts.TryGetValue(normalizedIp, out var afterPruneIpCount) && afterPruneIpCount >= _maxPendingPerIp)
+            {
+                return null;
+            }
+
+            var nonce = Convert.ToHexString(RandomNumberGenerator.GetBytes(24));
+            var expires = now + _lifetime;
+            _challenges[nonce] = new ChallengeEntry(petId.Trim(), devicePublicKeyBase64, normalizedIp, now, expires);
+            if (normalizedIp is not null)
+            {
+                _ipCounts[normalizedIp] = _ipCounts.GetValueOrDefault(normalizedIp) + 1;
+            }
+
+            return new AuthChallengeResponse
+            {
+                Nonce = nonce,
+                IssuedAtUtc = now,
+                ExpiresAtUtc = expires
+            };
         }
-
-        var nonce = Convert.ToHexString(RandomNumberGenerator.GetBytes(24));
-        var now = DateTimeOffset.UtcNow;
-        var expires = now + _lifetime;
-        _challenges[nonce] = new ChallengeEntry(petId.Trim(), devicePublicKeyBase64, now, expires);
-
-        return new AuthChallengeResponse
-        {
-            Nonce = nonce,
-            IssuedAtUtc = now,
-            ExpiresAtUtc = expires
-        };
     }
 
     public bool TryConsumeChallenge(
@@ -63,9 +81,15 @@ public sealed class AuthChallengeStore(ServerOptions options)
             return false;
         }
 
-        if (!_challenges.TryRemove(nonce, out var entry))
+        ChallengeEntry? entry;
+        lock (_sync)
         {
-            return false;
+            if (!_challenges.Remove(nonce, out entry))
+            {
+                return false;
+            }
+
+            DecrementIpCountLocked(entry.RemoteIp);
         }
 
         if (entry.ExpiresAtUtc < DateTimeOffset.UtcNow)
@@ -85,12 +109,37 @@ public sealed class AuthChallengeStore(ServerOptions options)
 
     public void PruneExpired(DateTimeOffset now)
     {
-        foreach (var kv in _challenges)
+        lock (_sync)
         {
-            if (kv.Value.ExpiresAtUtc < now)
+            PruneExpiredLocked(now);
+        }
+    }
+
+    private void PruneExpiredLocked(DateTimeOffset now)
+    {
+        foreach (var kv in _challenges.Where(kv => kv.Value.ExpiresAtUtc < now).ToArray())
+        {
+            if (_challenges.Remove(kv.Key, out var removed))
             {
-                _challenges.TryRemove(kv.Key, out _);
+                DecrementIpCountLocked(removed.RemoteIp);
             }
+        }
+    }
+
+    private void DecrementIpCountLocked(string? remoteIp)
+    {
+        if (remoteIp is null || !_ipCounts.TryGetValue(remoteIp, out var count))
+        {
+            return;
+        }
+
+        if (count <= 1)
+        {
+            _ipCounts.Remove(remoteIp);
+        }
+        else
+        {
+            _ipCounts[remoteIp] = count - 1;
         }
     }
 }

@@ -13,10 +13,14 @@ public sealed partial class LanP2pTransport
 
     internal void HandleDiscoveryHello(DiscoveryHelloPacket hello, string ip, CancellationToken ct)
     {
-        if (string.IsNullOrWhiteSpace(hello.PetId) || hello.PetId.Length > 64 || SamePetId(hello.PetId, _localPetId))
+        if (string.IsNullOrWhiteSpace(hello.PetId)
+            || hello.PetId.Length > 64
+            || SamePetId(hello.PetId, _localPetId)
+            || !IsValidPort(hello.TcpPort))
         {
             return;
         }
+
         if (_friendsByPetId.TryGetValue(hello.PetId, out var friend))
         {
             if (!ct.IsCancellationRequested)
@@ -26,16 +30,135 @@ public sealed partial class LanP2pTransport
             return;
         }
 
-        _peers[hello.PetId] = new PeerSnapshot
+        var now = DateTimeOffset.UtcNow;
+        var cleanOwner = TrimText(hello.OwnerName, 32);
+        var cleanPet = TrimText(hello.PetName, 32);
+        var cleanAppVer = TrimText(hello.AppVersion, 24);
+        var cleanLevel = Math.Clamp(hello.Level, 1, 9999);
+        var compat = ProtocolConstants.EvaluateCompatibility(hello.ProtocolVersion);
+        var appearance = (hello.Appearance ?? new PetAppearance()).Clone();
+
+        if (_peers.TryGetValue(hello.PetId, out var existing))
         {
-            PetId = hello.PetId, OwnerName = hello.OwnerName ?? string.Empty, PetName = hello.PetName,
-            Appearance = hello.Appearance ?? new PetAppearance(), Level = hello.Level, IsMusicActive = hello.IsMusicActive,
-            IsSleeping = hello.IsSleeping, IsFocusing = hello.IsFocusing, IpAddress = ip, TcpPort = hello.TcpPort,
-            ProtocolVersion = hello.ProtocolVersion, AppVersion = hello.AppVersion,
-            Compatibility = ProtocolConstants.EvaluateCompatibility(hello.ProtocolVersion), LastSeenUtc = DateTimeOffset.UtcNow
+            if (existing.IsFriend)
+            {
+                return;
+            }
+
+            var unchanged = string.Equals(existing.OwnerName, cleanOwner, StringComparison.Ordinal)
+                && string.Equals(existing.PetName, cleanPet, StringComparison.Ordinal)
+                && existing.Level == cleanLevel
+                && !existing.IsMusicActive
+                && !existing.IsSleeping
+                && !existing.IsFocusing
+                && string.Equals(existing.IpAddress, ip, StringComparison.OrdinalIgnoreCase)
+                && existing.TcpPort == hello.TcpPort
+                && existing.ProtocolVersion == hello.ProtocolVersion
+                && string.Equals(existing.AppVersion, cleanAppVer, StringComparison.Ordinal)
+                && existing.Compatibility == compat
+                && AppearanceEquals(existing.Appearance, appearance);
+
+            existing.LastSeenUtc = now;
+            if (unchanged)
+            {
+                return;
+            }
+
+            existing.OwnerName = cleanOwner;
+            existing.PetName = cleanPet;
+            existing.Appearance = appearance;
+            existing.Level = cleanLevel;
+            existing.IsMusicActive = false;
+            existing.IsSleeping = false;
+            existing.IsFocusing = false;
+            existing.IpAddress = ip;
+            existing.TcpPort = hello.TcpPort;
+            existing.ProtocolVersion = hello.ProtocolVersion;
+            existing.AppVersion = cleanAppVer;
+            existing.Compatibility = compat;
+            RaisePeersChanged();
+            return;
+        }
+
+        var maxUnauthenticated = Math.Clamp(_dosOptions.MaxUnauthenticatedPeers, 1, 2048);
+        if (CountUnauthenticatedPeers() >= maxUnauthenticated)
+        {
+            PruneUnauthenticatedPeers(now);
+            if (CountUnauthenticatedPeers() >= maxUnauthenticated)
+            {
+                return;
+            }
+        }
+
+        var snapshot = new PeerSnapshot
+        {
+            PetId = hello.PetId.Trim(),
+            OwnerName = cleanOwner,
+            PetName = cleanPet,
+            Appearance = appearance,
+            Level = cleanLevel,
+            IsMusicActive = false,
+            IsSleeping = false,
+            IsFocusing = false,
+            IpAddress = ip,
+            TcpPort = hello.TcpPort,
+            ProtocolVersion = hello.ProtocolVersion,
+            AppVersion = cleanAppVer,
+            Compatibility = compat,
+            LastSeenUtc = now
         };
-        RaisePeersChanged();
+
+        if (_peers.TryAdd(snapshot.PetId, snapshot))
+        {
+            RaisePeersChanged();
+        }
     }
+
+    private int CountUnauthenticatedPeers()
+    {
+        var count = 0;
+        foreach (var peer in _peers.Values)
+        {
+            if (!peer.IsFriend)
+            {
+                count++;
+            }
+        }
+
+        return count;
+    }
+
+    private void PruneUnauthenticatedPeers(DateTimeOffset now)
+    {
+        var unauthTtl = Math.Clamp(_dosOptions.UnauthenticatedPeerTtlSeconds, 1, ProtocolConstants.PeerOfflineTimeoutSeconds);
+        var cutoff = now - TimeSpan.FromSeconds(unauthTtl);
+        foreach (var kv in _peers)
+        {
+            if (!kv.Value.IsFriend && kv.Value.LastSeenUtc < cutoff)
+            {
+                _peers.TryRemove(kv.Key, out _);
+            }
+        }
+    }
+
+    private static string TrimText(string? value, int maxLen)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return string.Empty;
+        }
+
+        var trimmed = value.Trim();
+        return trimmed.Length <= maxLen ? trimmed : trimmed[..maxLen];
+    }
+
+    private static bool AppearanceEquals(PetAppearance a, PetAppearance b)
+        => string.Equals(a.SpeciesId, b.SpeciesId, StringComparison.Ordinal)
+           && string.Equals(a.BodyColorHex, b.BodyColorHex, StringComparison.OrdinalIgnoreCase)
+           && string.Equals(a.AccentColorHex, b.AccentColorHex, StringComparison.OrdinalIgnoreCase)
+           && string.Equals(a.ExpressionId, b.ExpressionId, StringComparison.Ordinal)
+           && string.Equals(a.HeadAccessoryId, b.HeadAccessoryId, StringComparison.Ordinal)
+           && string.Equals(a.AuraEffectId, b.AuraEffectId, StringComparison.Ordinal);
 
     private void PushPresenceToOnlineFriends(CancellationToken ct)
     {

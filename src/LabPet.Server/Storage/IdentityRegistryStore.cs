@@ -22,6 +22,7 @@ internal sealed class RegistryDocument
     public int SchemaVersion { get; set; } = 1;
     public Dictionary<string, PetIdentityRecord> Identities { get; set; } = new(StringComparer.OrdinalIgnoreCase);
     public HashSet<string> ApprovedFriendships { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+    public Dictionary<string, DateTimeOffset> RevokedFriendships { get; set; } = new(StringComparer.OrdinalIgnoreCase);
     public Dictionary<string, List<string>> DeclaredFriends { get; set; } = new(StringComparer.OrdinalIgnoreCase);
     public DateTimeOffset UpdatedAtUtc { get; set; } = DateTimeOffset.UtcNow;
 }
@@ -36,6 +37,9 @@ public sealed class IdentityRegistryStore
 
     private readonly string _filePath;
     private readonly int _maxDeclaredFriendsPerPet;
+    private readonly int _maxRegisteredIdentities;
+    private readonly int _maxApprovedFriendships;
+    private readonly long _maxRegistryFileBytes;
     private readonly ILogger<IdentityRegistryStore>? _logger;
     private readonly object _lock = new();
     private readonly RegistryDocument _doc;
@@ -49,7 +53,33 @@ public sealed class IdentityRegistryStore
         Directory.CreateDirectory(dataDir);
         _filePath = Path.Combine(dataDir, FileName);
         _maxDeclaredFriendsPerPet = Math.Clamp(options.MaxDeclaredFriendsPerPet, 10, 1000);
-        _doc = LoadOrCreate(_filePath);
+        _maxRegisteredIdentities = Math.Clamp(options.MaxRegisteredIdentities, 10, 100_000);
+        _maxApprovedFriendships = Math.Clamp(options.MaxApprovedFriendships, 10, 500_000);
+        _maxRegistryFileBytes = Math.Clamp(options.MaxRegistryFileBytes, 64 * 1024L, 100L * 1024 * 1024);
+        _doc = LoadOrCreate(_filePath, _maxRegistryFileBytes);
+    }
+
+    public int RegisteredIdentityCount
+    {
+        get { lock (_lock) return _doc.Identities.Count; }
+    }
+
+    public int ApprovedFriendshipCount
+    {
+        get { lock (_lock) return _doc.ApprovedFriendships.Count; }
+    }
+
+    public bool IsKnownIdentity(string? petId)
+    {
+        if (string.IsNullOrWhiteSpace(petId))
+        {
+            return false;
+        }
+
+        lock (_lock)
+        {
+            return _doc.Identities.ContainsKey(petId.Trim());
+        }
     }
 
     public bool TryAuthenticateOrRegister(
@@ -105,6 +135,12 @@ public sealed class IdentityRegistryStore
                 SaveAtomicLocked();
                 record = CloneRecord(existing);
                 return true;
+            }
+
+            if (_doc.Identities.Count >= _maxRegisteredIdentities)
+            {
+                errorCode = "REGISTRY_CAPACITY_REACHED";
+                return false;
             }
 
             var created = new PetIdentityRecord
@@ -176,7 +212,14 @@ public sealed class IdentityRegistryStore
         var key = BuildPairKey(petA, petB);
         lock (_lock)
         {
-            var changed = _doc.ApprovedFriendships.Add(key);
+            if (!_doc.ApprovedFriendships.Contains(key) && _doc.ApprovedFriendships.Count >= _maxApprovedFriendships)
+            {
+                _logger?.LogWarning("친구 관계 승인 저장소 상한 도달: Stage=FriendshipRegistry, Limit={Limit}", _maxApprovedFriendships);
+                return false;
+            }
+
+            var wasRevoked = _doc.RevokedFriendships.Remove(key);
+            var changed = wasRevoked | _doc.ApprovedFriendships.Add(key);
             changed |= AddDeclaredLocked(petA, petB);
             changed |= AddDeclaredLocked(petB, petA);
             if (!changed)
@@ -200,6 +243,39 @@ public sealed class IdentityRegistryStore
         }
     }
 
+    public bool RevokeFriendship(string actorPetId, string targetPetId)
+    {
+        if (string.IsNullOrWhiteSpace(actorPetId) || string.IsNullOrWhiteSpace(targetPetId)
+            || string.Equals(actorPetId, targetPetId, StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        var actor = actorPetId.Trim();
+        var target = targetPetId.Trim();
+        var key = BuildPairKey(actor, target);
+        lock (_lock)
+        {
+            _doc.ApprovedFriendships.Remove(key);
+            RemoveDeclaredLocked(actor, target);
+            RemoveDeclaredLocked(target, actor);
+
+            var maxRevoked = Math.Max(_maxApprovedFriendships, 1000);
+            if (!_doc.RevokedFriendships.ContainsKey(key) && _doc.RevokedFriendships.Count >= maxRevoked)
+            {
+                var oldestKey = _doc.RevokedFriendships.OrderBy(kv => kv.Value).Select(kv => kv.Key).FirstOrDefault();
+                if (oldestKey is not null)
+                {
+                    _doc.RevokedFriendships.Remove(oldestKey);
+                }
+            }
+
+            _doc.RevokedFriendships[key] = DateTimeOffset.UtcNow;
+            _doc.UpdatedAtUtc = DateTimeOffset.UtcNow;
+            return SaveAtomicLocked();
+        }
+    }
+
     public void SyncDeclaredFriends(string petId, IReadOnlyCollection<string> friendPetIds)
     {
         if (string.IsNullOrWhiteSpace(petId))
@@ -207,7 +283,7 @@ public sealed class IdentityRegistryStore
             return;
         }
 
-        var normalized = friendPetIds
+        var candidateIds = friendPetIds
             .Where(id => !string.IsNullOrWhiteSpace(id) && id.Length <= 64 && !string.Equals(id, petId, StringComparison.OrdinalIgnoreCase))
             .Select(id => id.Trim())
             .Distinct(StringComparer.OrdinalIgnoreCase)
@@ -216,6 +292,10 @@ public sealed class IdentityRegistryStore
 
         lock (_lock)
         {
+            var normalized = candidateIds
+                .Where(id => !_doc.RevokedFriendships.ContainsKey(BuildPairKey(petId, id)))
+                .ToList();
+
             if (_doc.DeclaredFriends.TryGetValue(petId, out var existing)
                 && existing.Count == normalized.Count
                 && new HashSet<string>(existing, StringComparer.OrdinalIgnoreCase).SetEquals(normalized))
@@ -240,6 +320,11 @@ public sealed class IdentityRegistryStore
         var key = BuildPairKey(petA, petB);
         lock (_lock)
         {
+            if (_doc.RevokedFriendships.ContainsKey(key))
+            {
+                return false;
+            }
+
             if (_doc.ApprovedFriendships.Contains(key))
             {
                 return true;
@@ -261,6 +346,11 @@ public sealed class IdentityRegistryStore
 
             foreach (var key in _doc.ApprovedFriendships)
             {
+                if (_doc.RevokedFriendships.ContainsKey(key))
+                {
+                    continue;
+                }
+
                 var sep = key.IndexOf('|');
                 if (sep <= 0) continue;
                 var a = key[..sep];
@@ -273,7 +363,8 @@ public sealed class IdentityRegistryStore
             {
                 foreach (var otherId in declared)
                 {
-                    if (_doc.DeclaredFriends.TryGetValue(otherId, out var otherDeclared)
+                    if (!_doc.RevokedFriendships.ContainsKey(BuildPairKey(petId, otherId))
+                        && _doc.DeclaredFriends.TryGetValue(otherId, out var otherDeclared)
                         && otherDeclared.Any(id => string.Equals(id, petId, StringComparison.OrdinalIgnoreCase)))
                     {
                         result.Add(otherId);
@@ -282,6 +373,14 @@ public sealed class IdentityRegistryStore
             }
 
             return result.ToList();
+        }
+    }
+
+    private void RemoveDeclaredLocked(string ownerId, string friendId)
+    {
+        if (_doc.DeclaredFriends.TryGetValue(ownerId, out var list))
+        {
+            list.RemoveAll(x => string.Equals(x, friendId, StringComparison.OrdinalIgnoreCase));
         }
     }
 
@@ -348,7 +447,7 @@ public sealed class IdentityRegistryStore
         LastAuthenticatedAtUtc = src.LastAuthenticatedAtUtc
     };
 
-    private static RegistryDocument LoadOrCreate(string path)
+    private static RegistryDocument LoadOrCreate(string path, long maxFileBytes)
     {
         foreach (var candidate in new[] { path, path + ".bak" })
         {
@@ -359,12 +458,18 @@ public sealed class IdentityRegistryStore
 
             try
             {
+                if (new FileInfo(candidate).Length > maxFileBytes)
+                {
+                    continue;
+                }
+
                 var json = File.ReadAllText(candidate, Encoding.UTF8);
                 var doc = JsonSerializer.Deserialize<RegistryDocument>(json, ProtocolJson.StorageOptions);
                 if (doc is not null)
                 {
                     doc.Identities ??= new(StringComparer.OrdinalIgnoreCase);
                     doc.ApprovedFriendships ??= new(StringComparer.OrdinalIgnoreCase);
+                    doc.RevokedFriendships ??= new(StringComparer.OrdinalIgnoreCase);
                     doc.DeclaredFriends ??= new(StringComparer.OrdinalIgnoreCase);
                     return doc;
                 }

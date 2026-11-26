@@ -2,6 +2,7 @@ using System.IO;
 using System.Reflection;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using LabPet.Client.Storage;
 using LabPet.Shared.Protocol;
 
@@ -20,6 +21,10 @@ public sealed class ServerConnectionOptions
     public bool Enabled { get; set; }
     public string ServerUrl { get; set; } = string.Empty;
 
+    /// <summary>개발·테스트 목적으로 비-루프백 평문 http:// 연결을 명시적으로 허용할지 여부 (설정 파일 역직렬화로 변경 불가).</summary>
+    [JsonIgnore]
+    public bool AllowInsecureHttp { get; set; }
+
     public bool IsConfigured => Enabled && TryGetBaseUri(out _);
 
     public bool TryGetBaseUri(out Uri? uri)
@@ -35,8 +40,11 @@ public sealed class ServerConnectionOptions
             return false;
         }
 
-        if (!string.Equals(parsed.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase)
-            && !string.Equals(parsed.Scheme, Uri.UriSchemeHttp, StringComparison.OrdinalIgnoreCase))
+        var isHttps = string.Equals(parsed.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase);
+        var isAllowedHttp = string.Equals(parsed.Scheme, Uri.UriSchemeHttp, StringComparison.OrdinalIgnoreCase)
+            && (parsed.IsLoopback || AllowInsecureHttp);
+
+        if (!isHttps && !isAllowedHttp)
         {
             return false;
         }

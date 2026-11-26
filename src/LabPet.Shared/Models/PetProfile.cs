@@ -43,6 +43,9 @@ public sealed class PetProfile
     public string? GrowthResetReceipt { get; set; }
 
     [JsonIgnore]
+    public long ProtectionRevision { get; set; }
+
+    [JsonIgnore]
     public object GrowthSync { get; } = new();
 
     /// <summary>향후 GCP 클라우드 동기화용 메타데이터.</summary>

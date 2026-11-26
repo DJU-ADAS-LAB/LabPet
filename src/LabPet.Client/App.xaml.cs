@@ -34,6 +34,8 @@ public partial class App : Application
     private SnowballInteractionService? _snowballs;
     private readonly Dictionary<string, VisitorPetWindow> _visitorWindows = new(StringComparer.OrdinalIgnoreCase);
     private readonly VisitorPopupOrder _visitorPopupOrder = new();
+    private readonly BoundedSlidingRateLimiter _incomingUiMessageLimiter = new(256);
+    private int _snowballStateRefreshQueued;
     private bool _crashHooksAttached;
 
     protected override async void OnStartup(StartupEventArgs e)
@@ -239,9 +241,10 @@ public partial class App : Application
 
     private void OnSnowballSocialStateChanged(object? sender, EventArgs e)
     {
-        if (Dispatcher.HasShutdownStarted) return;
+        if (Dispatcher.HasShutdownStarted || Interlocked.Exchange(ref _snowballStateRefreshQueued, 1) != 0) return;
         Dispatcher.BeginInvoke(() =>
         {
+            Interlocked.Exchange(ref _snowballStateRefreshQueued, 0);
             if (_snowballScene is { } scene && _social is { } social)
                 scene.RemoveOfflineSenders(social.DiscoveredPeers.Select(peer => peer.PetId));
         });
@@ -249,7 +252,10 @@ public partial class App : Application
 
     private void OnSocialFriendMessageReceived(object? sender, ReceivedFriendMessage message)
     {
-        if (Dispatcher.HasShutdownStarted || Dispatcher.HasShutdownFinished)
+        if (Dispatcher.HasShutdownStarted || Dispatcher.HasShutdownFinished
+            || _social?.IsLocalFocusing == true
+            || (_social is not null && !_social.HasFriend(message.SenderPetId))
+            || !_incomingUiMessageLimiter.Allow(message.SenderPetId, 10_000L, 12))
         {
             return;
         }

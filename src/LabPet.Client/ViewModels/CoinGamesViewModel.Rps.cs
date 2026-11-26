@@ -1,5 +1,6 @@
 using CommunityToolkit.Mvvm.Input;
 using LabPet.Client.Games;
+using LabPet.Client.Solo;
 using LabPet.Shared.Models;
 using LabPet.Shared.Protocol;
 
@@ -67,7 +68,10 @@ public sealed partial class CoinGamesViewModel
         RpsLastOutcome = null;
         RpsSettlementText = string.Empty;
         RpsStatusText = message;
-        await SettleMultiplayerWagerAsync(session, _rpsActiveWager);
+        if (!await SettleMultiplayerWagerAsync(session, _rpsActiveWager) && _rpsActiveWager > 0)
+        {
+            RpsStatusText = RequiresGrowthRecovery ? PetEconomyService.GrowthRecoveryMessage : "코인 반환 정산에 실패했습니다.";
+        }
     }
 
     [RelayCommand]
@@ -207,26 +211,50 @@ public sealed partial class CoinGamesViewModel
         {
             case RpsOutcome.Win:
                 var winPrize = _rpsActiveWager * 2;
-                await SettleMultiplayerWagerAsync(session, winPrize);
-                RpsSettlementText = $"+{winPrize} 코인 획득 (참가 {_rpsActiveWager} 코인)";
-                RpsStatusText = $"승리! {RpsGameEngine.FormatKorean(mine)} vs {RpsGameEngine.FormatKorean(opp)} (+{winPrize} 코인 획득)";
-                PetEmotionTriggered?.Invoke(this, true);
-                GameNotification?.Invoke(this, $"{oppName}에게 가위바위보 승리! (+{winPrize} 코인)");
+                var winSettled = await SettleMultiplayerWagerAsync(session, winPrize) || _rpsActiveWager == 0;
+                if (winSettled)
+                {
+                    RpsSettlementText = $"+{winPrize} 코인 획득 (참가 {_rpsActiveWager} 코인)";
+                    RpsStatusText = $"승리! {RpsGameEngine.FormatKorean(mine)} vs {RpsGameEngine.FormatKorean(opp)} (+{winPrize} 코인 획득)";
+                    PetEmotionTriggered?.Invoke(this, true);
+                    GameNotification?.Invoke(this, $"{oppName}에게 가위바위보 승리! (+{winPrize} 코인)");
+                }
+                else
+                {
+                    RpsSettlementText = RequiresGrowthRecovery ? PetEconomyService.GrowthRecoveryMessage : "코인 정산에 실패했습니다.";
+                    RpsStatusText = RpsSettlementText;
+                }
                 break;
 
             case RpsOutcome.Draw:
-                await SettleMultiplayerWagerAsync(session, _rpsActiveWager);
-                RpsSettlementText = $"배팅 {_rpsActiveWager} 코인 반환 (무승부)";
-                RpsStatusText = $"무승부! {RpsGameEngine.FormatKorean(mine)} vs {RpsGameEngine.FormatKorean(opp)} (배팅 {_rpsActiveWager} 코인 반환)";
-                GameNotification?.Invoke(this, $"{oppName}와 가위바위보 무승부!");
+                var drawSettled = await SettleMultiplayerWagerAsync(session, _rpsActiveWager) || _rpsActiveWager == 0;
+                if (drawSettled)
+                {
+                    RpsSettlementText = $"배팅 {_rpsActiveWager} 코인 반환 (무승부)";
+                    RpsStatusText = $"무승부! {RpsGameEngine.FormatKorean(mine)} vs {RpsGameEngine.FormatKorean(opp)} (배팅 {_rpsActiveWager} 코인 반환)";
+                    GameNotification?.Invoke(this, $"{oppName}와 가위바위보 무승부!");
+                }
+                else
+                {
+                    RpsSettlementText = RequiresGrowthRecovery ? PetEconomyService.GrowthRecoveryMessage : "코인 정산에 실패했습니다.";
+                    RpsStatusText = RpsSettlementText;
+                }
                 break;
 
             case RpsOutcome.Lose:
-                await SettleMultiplayerWagerAsync(session, 0);
-                RpsSettlementText = $"-{_rpsActiveWager} 코인 차감 (상대 승리)";
-                RpsStatusText = $"패배 · {RpsGameEngine.FormatKorean(mine)} vs {RpsGameEngine.FormatKorean(opp)} (-{_rpsActiveWager} 코인)";
-                PetEmotionTriggered?.Invoke(this, false);
-                GameNotification?.Invoke(this, $"{oppName}에게 가위바위보 패배...");
+                var loseSettled = await SettleMultiplayerWagerAsync(session, 0) || _rpsActiveWager == 0;
+                if (loseSettled)
+                {
+                    RpsSettlementText = $"-{_rpsActiveWager} 코인 차감 (상대 승리)";
+                    RpsStatusText = $"패배 · {RpsGameEngine.FormatKorean(mine)} vs {RpsGameEngine.FormatKorean(opp)} (-{_rpsActiveWager} 코인)";
+                    PetEmotionTriggered?.Invoke(this, false);
+                    GameNotification?.Invoke(this, $"{oppName}에게 가위바위보 패배...");
+                }
+                else
+                {
+                    RpsSettlementText = RequiresGrowthRecovery ? PetEconomyService.GrowthRecoveryMessage : "코인 정산에 실패했습니다.";
+                    RpsStatusText = RpsSettlementText;
+                }
                 break;
         }
     }

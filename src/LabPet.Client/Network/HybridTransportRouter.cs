@@ -57,6 +57,8 @@ public sealed class HybridTransportRouter : ISocialTransport
     private readonly BoundedEventDedup _pairingRequestDedup = new(256, TimeSpan.FromMinutes(3));
     private readonly BoundedEventDedup _pairingOutcomeDedup = new(256, TimeSpan.FromSeconds(30));
     private readonly BoundedEventDedup _gameEventDedup = new(512, TimeSpan.FromMilliseconds(1200));
+    private readonly BoundedEventDedup _snowballEventDedup = new(512, TimeSpan.FromSeconds(30));
+    private readonly BoundedSlidingRateLimiter _quickReactionReceiveLimiter = new(512);
 
     internal LanP2pTransport LanTransport => _lan;
     internal GcpSignalRTransport GcpTransport => _gcp;
@@ -122,6 +124,44 @@ public sealed class HybridTransportRouter : ISocialTransport
     {
         _lan.UpdateKnownFriends(friends);
         _gcp.UpdateKnownFriends(friends);
+
+        if (_petSentAt.Count > 256 || _petReceivedAt.Count > 256)
+        {
+            var known = new HashSet<string>(friends.Select(f => f.PetId), StringComparer.OrdinalIgnoreCase);
+            foreach (var key in _petSentAt.Keys)
+            {
+                if (!known.Contains(key)) _petSentAt.TryRemove(key, out _);
+            }
+
+            foreach (var key in _petReceivedAt.Keys)
+            {
+                if (!known.Contains(key)) _petReceivedAt.TryRemove(key, out _);
+            }
+        }
+    }
+
+    public async Task<bool> RemoveFriendAsync(string friendPetId, CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(friendPetId))
+        {
+            return false;
+        }
+
+        var cleanId = friendPetId.Trim();
+        _musicFollowRoutes.TryRemove(cleanId, out _);
+        _petSentAt.TryRemove(cleanId, out _);
+        _petReceivedAt.TryRemove(cleanId, out _);
+
+        var results = await Task.WhenAll(
+            _lan.RemoveFriendAsync(cleanId, cancellationToken),
+            _gcp.RemoveFriendAsync(cleanId, cancellationToken)).ConfigureAwait(false);
+        return results[0] || results[1];
+    }
+
+    public void SetPendingRemovedFriends(IReadOnlyCollection<string> removedPetIds)
+    {
+        _lan.SetPendingRemovedFriends(removedPetIds);
+        _gcp.SetPendingRemovedFriends(removedPetIds);
     }
 
     public IReadOnlyList<PeerSnapshot> GetDiscoveredPeers()
@@ -480,6 +520,7 @@ public sealed class HybridTransportRouter : ISocialTransport
 
     private void OnLanFriendRequestReceived(object? sender, FriendRequestReceivedEventArgs e)
     {
+        TrimIncomingRoutesIfFull();
         _incomingRequestRoutes[e.RequestId] = RouteKind.Lan;
         if (_pairingRequestDedup.TryAccept(e.RequestId))
         {
@@ -489,10 +530,24 @@ public sealed class HybridTransportRouter : ISocialTransport
 
     private void OnGcpFriendRequestReceived(object? sender, FriendRequestReceivedEventArgs e)
     {
+        TrimIncomingRoutesIfFull();
         _incomingRequestRoutes[e.RequestId] = RouteKind.Gcp;
         if (_pairingRequestDedup.TryAccept(e.RequestId))
         {
             FriendRequestReceived?.Invoke(this, e);
+        }
+    }
+
+    private void TrimIncomingRoutesIfFull()
+    {
+        if (_incomingRequestRoutes.Count < 256)
+        {
+            return;
+        }
+
+        foreach (var key in _incomingRequestRoutes.Keys.Take(64))
+        {
+            _incomingRequestRoutes.TryRemove(key, out _);
         }
     }
 
@@ -523,9 +578,20 @@ public sealed class HybridTransportRouter : ISocialTransport
     }
 
     private void OnSourceQuickReactionReceived(object? sender, QuickReactionReceivedEventArgs e)
-        => QuickReactionReceived?.Invoke(this, e);
+    {
+        if (_quickReactionReceiveLimiter.Allow("react|" + e.SenderPetId, 10_000L, 12))
+        {
+            QuickReactionReceived?.Invoke(this, e);
+        }
+    }
 
-    private void OnSourceSnowballReceived(object? sender, SnowballReceivedEventArgs e) => SnowballReceived?.Invoke(this, e);
+    private void OnSourceSnowballReceived(object? sender, SnowballReceivedEventArgs e)
+    {
+        if (_snowballEventDedup.TryAccept($"snow|{e.SenderPetId}|{e.EventId:N}"))
+        {
+            SnowballReceived?.Invoke(this, e);
+        }
+    }
 
     [System.Reflection.Obfuscation(Exclude = false)]
     private void OnSourcePetInteractionReceived(object? sender, PetInteractionReceivedEventArgs e)

@@ -215,7 +215,41 @@ public sealed partial class CoinGamesViewModel
             }
 
             NotifyCoinsChanged();
-            await PersistProfileAsync();
+            if (!await PersistProfileAsync())
+            {
+                if (!RequiresGrowthRecovery)
+                {
+                    lock (_profile.GrowthSync)
+                    {
+                        if (!RequiresGrowthRecovery)
+                        {
+                            using var rollbackGrowth = GrowthRateMonitor.BeginEconomyChange(_profile, DateTimeOffset.UtcNow);
+                            if (!RequiresGrowthRecovery)
+                            {
+                                _profile.SoloProgress.PendingSoloLadderSession = session;
+                                if (payout > 0 && _profile.SoloProgress.Coins >= payout)
+                                {
+                                    _profile.SoloProgress.Coins -= payout;
+                                }
+                            }
+                        }
+                    }
+                    _settledSoloLadderSessions.Remove(session.SessionId);
+                    NotifyCoinsChanged();
+                }
+
+                SoloLadderLastSpentText = $"{CompactNumberFormatter.FormatExact(session.BetCoins)} 코인";
+                SoloLadderLastPayoutText = "0 코인";
+                SoloLadderLastNetIsPositive = false;
+                SoloLadderLastNetText = "정산 실패";
+                SoloLadderLastOutcomeKey = "failed";
+                SoloLadderResultHeadline = "정산 실패";
+                SoloLadderResultDetailText = string.Empty;
+                SoloLadderStatusText = RequiresGrowthRecovery
+                    ? PetEconomyService.GrowthRecoveryMessage
+                    : "코인 정산에 실패했습니다.";
+                return;
+            }
 
             SoloLadderLastSpentText = $"{CompactNumberFormatter.FormatExact(session.BetCoins)} 코인";
             SoloLadderLastPayoutText = $"{CompactNumberFormatter.FormatExact(payout)} 코인";
