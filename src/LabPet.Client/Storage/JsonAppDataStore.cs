@@ -26,7 +26,7 @@ public sealed class JsonAppDataStore : IAppDataStore, IAsyncDisposable
     private const int ErrorSharingViolationHResult = unchecked((int)0x80070020);
     private const int ErrorLockViolationHResult = unchecked((int)0x80070021);
 
-    internal const string MigrationResetRelease = "0.3.16";
+    internal const string MigrationResetRelease = "0.3.17";
     private static readonly byte[] ProgressEntropy = Encoding.UTF8.GetBytes("LabPet.ProfileProgress.v1");
 
     private sealed record ProtectedProgress(string PetId, SoloProgress Progress, string? ResetReceipt = null);
@@ -43,9 +43,18 @@ public sealed class JsonAppDataStore : IAppDataStore, IAsyncDisposable
     public string DataDirectory { get; }
     internal event EventHandler<PetProfile>? GrowthRecoveryEntered;
 
-    public JsonAppDataStore(IStateMigrator migrator, string? customDataDirectory = null)
+    internal JsonAppDataStore(IStateMigrator migrator, string? customDataDirectory)
         : this(migrator, customDataDirectory, typeof(JsonAppDataStore).Assembly.GetName().Version)
     {
+    }
+
+    public JsonAppDataStore(IStateMigrator migrator)
+        : this(migrator, null, typeof(JsonAppDataStore).Assembly.GetName().Version)
+    {
+        // 외부 스크립트가 앱 DLL을 저장·재암호화 도구로 사용하는 것을 거부한다.
+        // 동일 사용자에 의한 DLL 패치나 비공개 리플렉션까지 막는 보안 경계는 아니다.
+        if (!ReferenceEquals(System.Reflection.Assembly.GetEntryAssembly(), typeof(JsonAppDataStore).Assembly))
+            throw new UnauthorizedAccessException("프로필 저장소는 LabPet 앱에서만 생성할 수 있습니다.");
     }
 
     internal JsonAppDataStore(IStateMigrator migrator, string? customDataDirectory, Version? releaseVersion)
@@ -132,6 +141,13 @@ public sealed class JsonAppDataStore : IAppDataStore, IAsyncDisposable
         }
         var requiresSave = NormalizeProfileShell(profile) | NormalizeProfileInvariants(profile);
         var checkedThisRelease = ApplyGrowthReset(profile, _releaseVersion);
+        lock (profile.GrowthSync)
+        {
+            var needsAudit = profile.SoloProgress.GrowthAudit is null;
+            var detected = LabPet.Client.Solo.GrowthRateMonitor.Observe(profile, DateTimeOffset.UtcNow);
+            requiresSave |= needsAudit || detected;
+            checkedThisRelease |= detected;
+        }
         var restoring = useVault || !ReferenceEquals(source, primary) || recoverySession is not null || recoverySettings is not null;
         try
         {
@@ -174,7 +190,10 @@ public sealed class JsonAppDataStore : IAppDataStore, IAsyncDisposable
             }
 
             lock (profile.GrowthSync)
+            {
+                LabPet.Client.Solo.GrowthRateMonitor.Observe(profile, DateTimeOffset.UtcNow);
                 NormalizeProfileInvariants(profile);
+            }
             var path = Path.Combine(DataDirectory, ProfileFileName);
             var markerExists = File.Exists(Path.Combine(DataDirectory, ProfileProtectionMarker));
             try
@@ -242,10 +261,10 @@ public sealed class JsonAppDataStore : IAppDataStore, IAsyncDisposable
             return false;
 
         var progress = profile.SoloProgress;
-        if (progress.Level > MigrationResetLevel)
-            progress.Level = SoloProgress.MinLevel;
-        if (progress.Coins > MigrationResetCoins)
+        if (progress.Level > MigrationResetLevel || progress.Coins > MigrationResetCoins)
         {
+            progress.Level = SoloProgress.MinLevel;
+            progress.Xp = 0;
             progress.Coins = 0;
             progress.PendingGameWagers = [];
             progress.PendingSoloLadderSession = null;

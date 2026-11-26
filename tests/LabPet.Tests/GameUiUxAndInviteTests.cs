@@ -166,7 +166,7 @@ public sealed class GameUiUxAndInviteTests : IAsyncLifetime
             OwnerName = "친구",
             PetName = "몽실",
             SoloProgress = { Coins = 200 },
-            Appearance = new PetAppearance { SpeciesId = PetSpeciesIds.ChibiCat, BodyColorHex = "#FFD8C8" }
+            Appearance = new PetAppearance { SpeciesId = PetSpeciesIds.PinkReference, BodyColorHex = "#FFF5F7" }
         };
 
         await _hostStore.SaveProfileAsync(_hostProfile);
@@ -419,6 +419,73 @@ public sealed class GameUiUxAndInviteTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task CompactOverlay_DebugFriendsPersistWithoutChangingRealFriends()
+    {
+#if DEBUG
+        await WpfTestHost.RunAsync(async () =>
+        {
+            await using var vm = new PetWindowViewModel(_hostStore, _hostSocial);
+            var realCount = _hostSocial.Friends.Count;
+            typeof(PetWindowViewModel).GetMethod("EnableDebugFriends",
+                System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!.Invoke(vm, null);
+            var samples = vm.QuickOverlayEntries.Where(e => e.PetId.StartsWith("debug-preview-")).ToArray();
+            Assert.Equal(5, samples.Length);
+            Assert.Contains(samples, e => e.Friend!.CachedAppearance.SpeciesId == PetSpeciesIds.Joey);
+            Assert.Contains(samples, e => e.Friend!.CachedAppearance.SpeciesId == PetSpeciesIds.PinkReference);
+            vm.RefreshQuickOverlayEntries();
+            Assert.All(samples, e => Assert.Contains(e, vm.QuickOverlayEntries));
+            Assert.Equal(realCount, _hostSocial.Friends.Count);
+            Assert.DoesNotContain(_hostSocial.Friends, f => f.PetId.StartsWith("debug-preview-"));
+        });
+#else
+        await Task.CompletedTask;
+#endif
+    }
+
+    [Fact]
+    public async Task CompactOverlay_PomodoroProgressAndPauseKeepLayoutStable()
+    {
+        await WpfTestHost.RunAsync(async () =>
+        {
+            var timer = new PomodoroTimerService();
+            var vm = new PetWindowViewModel(_hostStore, _hostSocial, pomodoro: timer);
+            var factory = new ProceduralPetMeshFactory();
+            using var audio = new TestAudioAnalyzer();
+            using var hook = new GlobalActivityHookService();
+            var pet = new PetWindow(vm, factory, new PetPortraitRenderer(factory), new PetAnimationController(),
+                audio, hook, new SoloProgressionService(), timer, _hostSocial);
+            vm.ApplyProfile(_hostProfile);
+            pet.Show();
+            try
+            {
+                var popup = Assert.IsType<System.Windows.Controls.Primitives.Popup>(pet.FindName("FriendOverlayPopup"));
+                popup.IsOpen = true;
+                await WpfTestHost.FlushAsync();
+                var card = Assert.IsType<Border>(pet.FindName("FriendOverlayCard"));
+                var indicator = Assert.IsType<Button>(pet.FindName("PomodoroOverlayIndicatorButton"));
+                vm.RefreshQuickOverlayEntries();
+                await WpfTestHost.FlushAsync();
+                var size = card.RenderSize;
+                var position = indicator.TranslatePoint(new Point(), card);
+                timer.StartOrPause();
+                var remaining = timer.Remaining;
+                await Task.Delay(1250);
+                await WpfTestHost.FlushAsync();
+                Assert.True(timer.Remaining < remaining);
+                Assert.Contains("집중 중", vm.PomodoroOverlayTooltip);
+                Assert.Equal(size, card.RenderSize);
+                Assert.Equal(position, indicator.TranslatePoint(new Point(), card));
+                timer.StartOrPause();
+                await WpfTestHost.FlushAsync();
+                Assert.Contains("일시정지", vm.PomodoroOverlayTooltip);
+                Assert.Equal(size, card.RenderSize);
+                Assert.Equal(position, indicator.TranslatePoint(new Point(), card));
+            }
+            finally { timer.Reset(); pet.Close(); await vm.DisposeAsync(); }
+        });
+    }
+
+    [Fact]
     public async Task SnowballButtons_ShareOneCommandAndCooldownAcrossAllThreeViews()
     {
         await WpfTestHost.RunAsync(async () =>
@@ -457,6 +524,48 @@ public sealed class GameUiUxAndInviteTests : IAsyncLifetime
                 await WpfTestHost.FlushAsync();
                 var quickButton = Assert.Single(Descendants<Button>(popup.Child),
                     button => AutomationName(button) == "눈던지기");
+                var card = Assert.IsType<Border>(pet.FindName("FriendOverlayCard"));
+                Assert.InRange(card.ActualWidth, 1, 262);
+                Assert.InRange(card.ActualHeight, 1, 122);
+                var collapsedSize = card.RenderSize;
+                var actions = Descendants<Button>(popup.Child)
+                    .Where(button => button.Width == 26 && button.Height == 24).ToArray();
+                Assert.Equal(5, actions.Length);
+                Assert.All(actions, button => Assert.True(button.IsVisible));
+                Assert.All(actions, button => Assert.NotNull(button.Command));
+                Assert.All(actions, button => Assert.InRange(button.FontSize, 14, 16));
+                var expectedName = $"{_guestAsFriend.OwnerName} ({_guestAsFriend.PetName})";
+                var name = Assert.Single(Descendants<TextBlock>(popup.Child),
+                    text => text.ToolTip as string == expectedName);
+                Assert.Equal($"{_guestAsFriend.OwnerName}\n({_guestAsFriend.PetName})", name.Text);
+                var appearanceToggle = Assert.IsType<System.Windows.Controls.Primitives.ToggleButton>(pet.FindName("AppearanceMenuToggle"));
+                appearanceToggle.SetCurrentValue(System.Windows.Controls.Primitives.ToggleButton.IsCheckedProperty, true);
+                await WpfTestHost.FlushAsync();
+                Assert.True(Assert.IsType<Border>(pet.FindName("AppearanceMenuPanel")).IsVisible);
+                Assert.Equal(collapsedSize.Width, card.ActualWidth);
+                Assert.Equal(2, Descendants<Slider>(card).Count());
+                System.Console.WriteLine($"설정 펼침 실측: {card.ActualWidth}x{card.ActualHeight} DIP");
+                appearanceToggle.SetCurrentValue(System.Windows.Controls.Primitives.ToggleButton.IsCheckedProperty, false);
+                await WpfTestHost.FlushAsync();
+                Assert.Equal(collapsedSize, card.RenderSize);
+                var originalEntries = vm.QuickOverlayEntries.ToArray();
+                for (var i = 0; i < 20; i++)
+                    vm.QuickOverlayEntries.Add(new QuickOverlayEntry
+                    {
+                        PetId = $"layout-{i}", DisplayTitle = $"친구{i} (펫{i})"
+                    });
+                await WpfTestHost.FlushAsync();
+                var friendScroll = Assert.Single(Descendants<ScrollViewer>(card),
+                    scroll => scroll.TemplatedParent is null);
+                Assert.InRange(friendScroll.ActualHeight, 1, 180);
+                Assert.True(friendScroll.ScrollableHeight > 0);
+                Assert.Equal(collapsedSize.Width, card.ActualWidth);
+                Assert.InRange(card.ActualHeight, 1, 280);
+                System.Console.WriteLine($"친구 21명 실측: {card.ActualWidth}x{card.ActualHeight} DIP");
+                foreach (var extra in vm.QuickOverlayEntries.Except(originalEntries).ToArray())
+                    vm.QuickOverlayEntries.Remove(extra);
+                await WpfTestHost.FlushAsync();
+                Assert.Equal(collapsedSize, card.RenderSize);
                 var hubButton = Assert.IsType<Button>(page.FindName("SnowballQuickReactionButton"));
                 var visitorMenu = Assert.IsType<Viewport3D>(visit.FindName("VisitorViewport")).ContextMenu;
                 var visitButton = Assert.Single(visitorMenu.Items.OfType<MenuItem>(),
@@ -465,21 +574,54 @@ public sealed class GameUiUxAndInviteTests : IAsyncLifetime
                 Assert.Same(state.Command, quickButton.Command);
                 Assert.Same(state.Command, hubButton.Command);
                 Assert.Same(state.Command, visitButton.Command);
+                var overlayButton = Assert.Single(Descendants<Button>(visit),
+                    button => AutomationName(button) == "눈덩이 던지기");
+                var greetButton = Assert.Single(Descendants<Button>(visit),
+                    button => AutomationName(button) == "인사하기");
+                Assert.Same(state.Command, overlayButton.Command);
+                var dismiss = Assert.IsType<Button>(visit.FindName("DismissButton"));
+                Assert.Equal(dismiss.Width, overlayButton.Width);
+                Assert.Equal(dismiss.Height, greetButton.Height);
+                var dismissPoint = dismiss.TranslatePoint(new Point(), visit);
+                var greetPoint = greetButton.TranslatePoint(new Point(), visit);
+                var snowPoint = overlayButton.TranslatePoint(new Point(), visit);
+                Assert.InRange(Math.Abs(dismissPoint.X - greetPoint.X), 0, 0.01);
+                Assert.InRange(Math.Abs(greetPoint.X - snowPoint.X), 0, 0.01);
+                Assert.True(greetPoint.Y >= dismissPoint.Y + dismiss.Height);
+                Assert.True(snowPoint.Y >= greetPoint.Y + greetButton.Height);
                 Assert.Equal(26, quickButton.ActualWidth);
                 Assert.Equal(24, quickButton.ActualHeight);
 
                 foreach (var command in new[] { quickButton.Command, hubButton.Command, visitButton.Command })
                 {
                     Assert.True(command.CanExecute(null));
-                    var send = state.Command.ExecuteAsync(null);
-                    Assert.False(quickButton.Command.CanExecute(null));
-                    Assert.False(hubButton.Command.CanExecute(null));
-                    Assert.False(visitButton.Command.CanExecute(null));
-                    Assert.Equal("1초", state.Icon);
-                    Assert.False(await snowballs.SendAsync(_guestAsFriend));
-                    await send.WaitAsync(TimeSpan.FromSeconds(4));
-                    await WpfTestHost.FlushAsync();
-                    Assert.Equal("❄", state.Icon);
+                    var cooldownEnded = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                    var observedDisabled = false;
+                    void OnCanExecuteChanged(object? sender, EventArgs e)
+                    {
+                        var canSend = state.Command.CanExecute(null);
+                        if (!canSend) observedDisabled = true;
+                        else if (observedDisabled) cooldownEnded.TrySetResult();
+                    }
+                    state.Command.CanExecuteChanged += OnCanExecuteChanged;
+                    try
+                    {
+                        var send = state.Command.ExecuteAsync(null);
+                        Assert.False(quickButton.Command.CanExecute(null));
+                        Assert.False(hubButton.Command.CanExecute(null));
+                        Assert.False(visitButton.Command.CanExecute(null));
+                        Assert.Equal("1초", state.Icon);
+                        Assert.False(await snowballs.SendAsync(_guestAsFriend));
+                        await send.WaitAsync(TimeSpan.FromSeconds(4));
+                        // 전송 완료가 아니라 쿨다운 만료 알림으로 자동 활성화를 검증한다.
+                        await cooldownEnded.Task.WaitAsync(TimeSpan.FromSeconds(4));
+                        await WpfTestHost.FlushAsync();
+                        Assert.True(quickButton.Command.CanExecute(null));
+                        Assert.True(hubButton.Command.CanExecute(null));
+                        Assert.True(visitButton.Command.CanExecute(null));
+                        Assert.Equal("❄", state.Icon);
+                    }
+                    finally { state.Command.CanExecuteChanged -= OnCanExecuteChanged; }
                 }
                 Assert.Equal(3, received.Distinct().Count());
             }
@@ -641,16 +783,20 @@ public sealed class GameUiUxAndInviteTests : IAsyncLifetime
                 while (animator.IsReactingToSnowball && recovery.Elapsed < TimeSpan.FromSeconds(2))
                     await Task.Delay(15);
                 Assert.False(animator.IsReactingToSnowball);
+                var composer = Assert.IsType<System.Windows.Controls.Primitives.Popup>(visit.FindName("VisitorChatComposerPopup"));
+                composer.Closed += (_, _) => System.Diagnostics.Trace.WriteLine("Snowball composer closed: " + Environment.StackTrace);
                 visit.OpenChatComposer();
+                Assert.True(visit.IsChatComposerOpen, "채팅창 열기 직후 실패");
                 visit.ChatComposerInputText = "보내지 않은 메시지";
                 Assert.True(visit.ShowChatMessage("투척 중 유지할 말풍선", 12_000));
                 await WpfTestHost.FlushAsync();
+                Assert.True(visit.IsChatComposerOpen, "눈덩이 수신 전 이미 채팅창이 닫혔습니다.");
                 var position = new Point(visit.Left, visit.Top);
                 Assert.True(scene.TryReceive(sender, Guid.NewGuid(), _guestAsFriend.CachedAppearance));
                 Assert.Empty(GetOverlay().Scene.Children.OfType<SnowballPetVisual>());
                 await WaitForHitAsync();
                 Assert.Equal(position, new Point(visit.Left, visit.Top));
-                Assert.True(visit.IsChatComposerOpen);
+                Assert.True(visit.IsChatComposerOpen, "눈덩이 피격 대기 중 방문 펫 채팅창이 닫혔습니다.");
                 Assert.Equal("보내지 않은 메시지", visit.ChatComposerInputText);
                 Assert.False(visit.CurrentBubblePhysicalBounds.IsEmpty);
                 scene.RemoveVisitor(_guestProfile.PetId);

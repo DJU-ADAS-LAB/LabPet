@@ -11,7 +11,7 @@ public sealed class TerminalChristmasTreeTests
     [Fact]
     public void EnsureScriptFile_WritesUtf8BomPowerShell5CompatibleScriptOutsideBaseDirectory()
     {
-        var defaultService = new TerminalChristmasTreeService(new JsonAppDataStore(new StateMigrator()));
+        var defaultService = new TerminalChristmasTreeService(new JsonAppDataStore(new StateMigrator(), customDataDirectory: null));
         var expectedRoamingScript = Path.Combine(
             AppDataPaths.ResolveDefaultDataDirectory(),
             TerminalChristmasTreeService.ScriptsDirectoryName,
@@ -115,25 +115,23 @@ public sealed class TerminalChristmasTreeTests
         Assert.Equal(expected, TerminalChristmasTreeService.QuoteCommandLineArgument(raw));
     }
 
-    [Fact]
-    public void BuildNativeLaunchStartInfo_UsesConhostCmdWrapperAndFallsBackToDirectExe()
+    [Theory]
+    [InlineData(null)]
+    [InlineData(@"C:\Windows\System32\conhost.exe")]
+    public void BuildNativeLaunchStartInfo_PreservesArgumentsWithoutShell(string? consoleHostPath)
     {
-        const string clientExe = @"C:\Users\Test User\AppData\Local\LabPet\current\LabPet.Client.exe";
-        const string conhostPath = @"C:\Windows\System32\conhost.exe";
-
-        var conhostInfo = TerminalChristmasTreeService.BuildNativeLaunchStartInfo(clientExe, "모찌\r\n", conhostPath);
-        Assert.Equal(conhostPath, conhostInfo.FileName);
-        Assert.True(conhostInfo.UseShellExecute);
-        Assert.Equal(ProcessWindowStyle.Normal, conhostInfo.WindowStyle);
-        Assert.Equal(
-            $"cmd.exe /c \"\"{clientExe}\" --christmas-tree \"모찌\"\"",
-            conhostInfo.Arguments);
-
-        var directInfo = TerminalChristmasTreeService.BuildNativeLaunchStartInfo(clientExe, "똥개", consoleHostPath: null);
-        Assert.Equal(clientExe, directInfo.FileName);
-        Assert.True(directInfo.UseShellExecute);
-        Assert.Equal(ProcessWindowStyle.Normal, directInfo.WindowStyle);
-        Assert.Equal("--christmas-tree \"똥개\"", directInfo.Arguments);
+        const string clientExe = @"C:\사용자 이름\LabPet & (트리) %PATH%!\LabPet.Client.exe";
+        const string petName = "모찌 & | < > ^ %PATH% ! \"펫\"";
+        var info = TerminalChristmasTreeService.BuildNativeLaunchStartInfo(clientExe, petName + "\r\n", consoleHostPath);
+        Assert.Equal(consoleHostPath ?? clientExe, info.FileName);
+        Assert.False(info.UseShellExecute);
+        Assert.False(info.CreateNoWindow);
+        Assert.Equal(ProcessWindowStyle.Normal, info.WindowStyle);
+        Assert.Empty(info.Arguments);
+        var expected = consoleHostPath is null
+            ? new[] { TerminalChristmasTreeService.NativeCliFlag, petName }
+            : new[] { clientExe, TerminalChristmasTreeService.NativeCliFlag, petName };
+        Assert.Equal(expected, info.ArgumentList.ToArray());
     }
 
     [Fact]

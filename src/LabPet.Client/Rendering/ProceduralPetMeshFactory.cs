@@ -619,14 +619,25 @@ public sealed class ProceduralPetMeshFactory : IPetMeshFactory
         }
         triangleCount += SelectExpression(appearance.ExpressionId);
 
-        // 머리 소켓 3D 악세서리
+        // 보조 회전은 소켓을 중심으로 적용하고 머리 관절의 자식으로 유지한다.
+        var accessoryId = appearance.HeadAccessoryId?.ToLowerInvariant() ?? "none";
+        AxisAngleRotation3D? accessoryRotation = accessoryId is "sprout" or "ribbon" or "santa_hat"
+            ? new AxisAngleRotation3D(new Vector3D(0, 0, 1), 0) : null;
+        var accessoryLed = accessoryId == "headset"
+            ? new SolidColorBrush(Color.FromRgb(154, 220, 255)) { Opacity = 0.08 } : null;
+        var accessoryGroup = new Model3DGroup();
+        if (accessoryRotation is not null && accessoryId != "santa_hat")
+            accessoryGroup.Transform = new RotateTransform3D(accessoryRotation, new Point3D(0, headSocketY, 0));
         triangleCount += BuildHeadAccessory(
-            headGroup,
-            appearance.HeadAccessoryId,
+            accessoryGroup,
+            accessoryId,
             headSocketY,
             headRadiusX,
             accentColor,
-            accentDiffuseBrush);
+            accentDiffuseBrush,
+            pomRotation: accessoryId == "santa_hat" ? accessoryRotation : null,
+            ledBrush: accessoryLed);
+        headGroup.Children.Add(accessoryGroup);
 
         bodyGroup.Children.Add(headGroup);
 
@@ -642,7 +653,39 @@ public sealed class ProceduralPetMeshFactory : IPetMeshFactory
         // 3D 오라/주변 이펙트
         AxisAngleRotation3D? auraRot = null;
         TranslateTransform3D? auraTrans = null;
-        if (!string.Equals(appearance.AuraEffectId, "none", StringComparison.OrdinalIgnoreCase))
+        MusicParticleHandle[] auraParticles = [];
+        var auraId = appearance.AuraEffectId?.ToLowerInvariant() ?? "none";
+        if (auraId == "halo_ring")
+        {
+            var auraGroup = new Model3DGroup();
+            var pool = PetHaloPool.Build(auraGroup, accentColor);
+            auraParticles = pool.Particles;
+            triangleCount += pool.Triangles;
+            rootGroup.Children.Add(auraGroup);
+        }
+        else if (auraId is "music_notes" or "snowflakes")
+        {
+            var auraGroup = new Model3DGroup();
+            var pool = PetLegacyAuraPool.Build(auraGroup, auraId, accentColor);
+            auraParticles = pool.Particles;
+            triangleCount += pool.Triangles;
+            rootGroup.Children.Add(auraGroup);
+        }
+        else if (auraId is "starlight" or "cherry_blossom" or "milky_way" or "fireflies" or "aurora" or "electric")
+        {
+            var auraGroup = new Model3DGroup();
+            var pool = auraId switch
+            {
+                "fireflies" => PetAuraParticlePool.BuildSoftGlow(auraGroup, auraId, Color.FromRgb(255, 222, 132)),
+                "aurora" => PetAuroraPool.Build(auraGroup),
+                "electric" => PetEnergyPool.Build(auraGroup),
+                _ => PetAuraParticlePool.BuildTheme(auraGroup, auraId, accentColor)
+            };
+            auraParticles = pool.Particles;
+            triangleCount += pool.Triangles;
+            rootGroup.Children.Add(auraGroup);
+        }
+        else if (auraId != "none")
         {
             auraRot = new AxisAngleRotation3D(new Vector3D(0, 1, 0), 0);
             auraTrans = new TranslateTransform3D(0, 0, 0);
@@ -652,11 +695,16 @@ public sealed class ProceduralPetMeshFactory : IPetMeshFactory
             auraTransform.Children.Add(auraTrans);
 
             var auraGroup = new Model3DGroup { Transform = auraTransform };
-            var auraResult = BuildAuraEffect(auraGroup, appearance.AuraEffectId, accentColor, auraEmissiveBrush);
+            var auraResult = BuildAuraEffect(auraGroup, auraId, accentColor, auraEmissiveBrush);
             triangleCount += auraResult.Triangles;
             auraDiffuseBrush = auraResult.AuraDiffuseBrush;
             rootGroup.Children.Add(auraGroup);
         }
+
+        // 모든 오라 분기는 마지막 자식으로 전용 그룹을 추가한다.
+        // 공유 메시 자체가 아니라 완성된 모델 트리만 장식으로 등록한다.
+        if (auraId != "none")
+            PetEffectHitTest.MarkDecorative(rootGroup.Children[rootGroup.Children.Count - 1]);
 
         var leftEarBaseAngle = appearance.SpeciesId switch
         {
@@ -707,6 +755,11 @@ public sealed class ProceduralPetMeshFactory : IPetMeshFactory
             LeftArmPitch = leftArmPitch,
             RightArmPitch = rightArmPitch,
             RightHandPositionProvider = rightHandPosition,
+            HeadAccessoryId = accessoryId,
+            AccessoryRotation = accessoryRotation,
+            AccessoryEmissiveBrush = accessoryLed,
+            AuraParticles = auraParticles,
+            AuraEffectId = auraId,
             MusicParticles = musicParticles,
             AuraRotation = auraRot,
             AuraTranslate = auraTrans,
@@ -970,7 +1023,9 @@ public sealed class ProceduralPetMeshFactory : IPetMeshFactory
         float socketY,
         float headRadiusX,
         Color accentColor,
-        SolidColorBrush? sharedAccentBrush = null)
+        SolidColorBrush? sharedAccentBrush = null,
+        AxisAngleRotation3D? pomRotation = null,
+        SolidColorBrush? ledBrush = null)
     {
         var tris = 0;
         var accentMat = sharedAccentBrush is not null
@@ -1036,6 +1091,13 @@ public sealed class ProceduralPetMeshFactory : IPetMeshFactory
                 cupMb.AddEllipsoid(new Vector3(-rx, baseY, 0.0f), 0.16f, 0.26f, 0.24f, 20, 14);
                 cupMb.AddEllipsoid(new Vector3(rx, baseY, 0.0f), 0.16f, 0.26f, 0.24f, 20, 14);
                 tris += AddGeometry(parent, cupMb, cupMat);
+                if (ledBrush is not null)
+                {
+                    var ledMb = new MeshBuilder(true, false);
+                    ledMb.AddEllipsoid(new Vector3(-rx, baseY, 0.235f), 0.07f, 0.15f, 0.018f, 12, 8);
+                    ledMb.AddEllipsoid(new Vector3(rx, baseY, 0.235f), 0.07f, 0.15f, 0.018f, 12, 8);
+                    tris += AddGeometry(parent, ledMb, new EmissiveMaterial(ledBrush));
+                }
                 break;
             }
 
@@ -1046,8 +1108,16 @@ public sealed class ProceduralPetMeshFactory : IPetMeshFactory
 
                 var brimMb = new MeshBuilder(true, false);
                 AddRingTube(brimMb, new Vector3(0, socketY - 0.04f, 0), radius: 0.48f, tubeDiameter: 0.18f, segments: 28);
-                brimMb.AddSphere(new Vector3(0.28f, socketY + 0.58f, -0.08f), 0.15f, 18, 12);
                 tris += AddGeometry(parent, brimMb, whiteMat);
+                // 방울만 모자 끝에 매달아 테두리와 모자 본체는 흔들리지 않게 한다.
+                var pomGroup = new Model3DGroup();
+                if (pomRotation is not null)
+                    pomGroup.Transform = new RotateTransform3D(pomRotation,
+                        new Point3D(0.25, socketY + 0.70, -0.08));
+                var pomMb = new MeshBuilder(true, false);
+                pomMb.AddSphere(new Vector3(0.28f, socketY + 0.58f, -0.08f), 0.15f, 18, 12);
+                tris += AddGeometry(pomGroup, pomMb, whiteMat);
+                parent.Children.Add(pomGroup);
 
                 var coneMb = new MeshBuilder(true, false);
                 coneMb.AddCone(new Vector3(0, socketY - 0.02f, 0), new Vector3(0.32f, 1.0f, -0.10f), 0.44f, 0.05f, 0.72f, true, true, 24);

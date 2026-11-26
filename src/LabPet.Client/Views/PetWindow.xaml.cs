@@ -98,6 +98,7 @@ public partial class PetWindow : Window, IMessageBubbleTarget
         _social = social;
         _activityState = activityState ?? new SystemActivityStateMonitor(hookSystemEvents: false);
         DataContext = _viewModel;
+        CompactPetOverlay.Attach(FriendOverlayCard, FriendOverlayPopup);
 
         TrayIcon.Icon = CreateTrayIcon();
         TrayIcon.ContextMenu = PetContextMenuFactory.Create(_viewModel, includeStartupAutoRun: true);
@@ -371,10 +372,7 @@ public partial class PetWindow : Window, IMessageBubbleTarget
         }
 
         CancelOverlayCloseUnlessEditorLeft();
-        _viewModel.RefreshPomodoroOverlayState();
-        _viewModel.RefreshQuickOverlayEntries();
-        FriendOverlayPopup.IsOpen = true;
-        SetPetControlsVisible(true);
+        SchedulePetOverlayOpen();
     }
 
     internal static CustomPopupPlacement[] GetFriendOverlayPlacements(
@@ -1041,7 +1039,8 @@ public partial class PetWindow : Window, IMessageBubbleTarget
             null,
             result =>
             {
-                if (result is RayMeshGeometry3DHitTestResult)
+                if (result is RayMeshGeometry3DHitTestResult meshHit &&
+                    !PetEffectHitTest.IsDecorative(meshHit.ModelHit))
                 {
                     hitDetected = true;
                     return HitTestResultBehavior.Stop;

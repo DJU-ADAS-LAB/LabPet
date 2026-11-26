@@ -2842,34 +2842,29 @@ $engine.RunLoop($PetName, $vtEnabled)
 
     /// <summary>
     /// 외부 PowerShell이나 .ps1 스크립트 없이 LabPet.Client.exe 내장 C# 엔진(--christmas-tree)을 실행하는 ProcessStartInfo를 생성한다.
-    /// conhost.exe가 있으면 cmd.exe /c 래퍼로 클래식 콘솔 창에 연결하고, 없으면 LabPet.Client.exe가 자체 AllocConsole()로 창을 생성한다.
+    /// conhost.exe 또는 실행 파일을 직접 시작하고 ArgumentList로 인자를 전달하여 셸 메타문자 해석을 방지한다.
     /// </summary>
     public static ProcessStartInfo BuildNativeLaunchStartInfo(
         string clientExePath,
         string? petName,
         string? consoleHostPath)
     {
-        var safeName = SanitizePetName(petName);
-        var exeAndArgs = $"{QuoteCommandLineArgument(clientExePath)} {NativeCliFlag} {QuoteCommandLineArgument(safeName)}";
-
-        if (!string.IsNullOrWhiteSpace(consoleHostPath))
+        ArgumentException.ThrowIfNullOrWhiteSpace(clientExePath);
+        var useConsoleHost = !string.IsNullOrWhiteSpace(consoleHostPath);
+        var startInfo = new ProcessStartInfo
         {
-            return new ProcessStartInfo
-            {
-                FileName = consoleHostPath,
-                Arguments = $"cmd.exe /c \"{exeAndArgs}\"",
-                UseShellExecute = true,
-                WindowStyle = ProcessWindowStyle.Normal
-            };
-        }
-
-        return new ProcessStartInfo
-        {
-            FileName = clientExePath,
-            Arguments = $"{NativeCliFlag} {QuoteCommandLineArgument(safeName)}",
-            UseShellExecute = true,
+            FileName = useConsoleHost ? consoleHostPath! : clientExePath,
+            UseShellExecute = false,
+            CreateNoWindow = false,
             WindowStyle = ProcessWindowStyle.Normal
         };
+        if (useConsoleHost)
+        {
+            startInfo.ArgumentList.Add(clientExePath);
+        }
+        startInfo.ArgumentList.Add(NativeCliFlag);
+        startInfo.ArgumentList.Add(SanitizePetName(petName));
+        return startInfo;
     }
 
     /// <summary>
@@ -2894,6 +2889,33 @@ $engine.RunLoop($PetName, $vtEnabled)
     /// </summary>
     public static int RunNativeConsoleMode(IReadOnlyList<string> args)
     {
+        try
+        {
+            using var instance = new ChristmasTreeInstance();
+            if (!instance.IsOwner)
+            {
+                if (instance.TryActivateExisting())
+                {
+                    ChristmasTreeStartup.SignalReady();
+                    return 0;
+                }
+                ChristmasTreeStartup.SignalFailure();
+                return 1;
+            }
+            var result = RunNativeConsoleModeCore(args, instance);
+            if (result != 0) ChristmasTreeStartup.SignalFailure();
+            return result;
+        }
+        catch (Exception ex)
+        {
+            try { ChristmasTreeStartup.SignalFailure(); } catch { }
+            try { Console.Error.WriteLine("크리스마스트리 초기화 실패: " + ex.Message); } catch { }
+            return 1;
+        }
+    }
+
+    private static int RunNativeConsoleModeCore(IReadOnlyList<string> args, ChristmasTreeInstance instance)
+    {
         string? rawName = null;
         for (var i = 0; i < args.Count; i++)
         {
@@ -2913,6 +2935,7 @@ $engine.RunLoop($PetName, $vtEnabled)
             return 1;
         }
 
+        using var consoleState = new ChristmasConsoleState();
         try
         {
             var utf8NoBom = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
@@ -2941,9 +2964,37 @@ $engine.RunLoop($PetName, $vtEnabled)
                 DefaultFontPixelHeight);
         }
 
-        var engine = new LabPetChristmasEngine();
-        engine.RunLoop(safeName, vtEnabled);
-        return 0;
+        try
+        {
+            if (vtEnabled)
+            {
+                // 1열 ASCII 고정폭 셀 기본 비율(가로/세로 ≈ 0.5)을 폴백으로 사용하고, 호스트 측정값이 있으면 우선 적용한다.
+                var cellAspect = consoleState.TryGetGlyphAspect(out var measuredAspect)
+                    ? measuredAspect : 0.5f;
+                new ChristmasTreeConsoleRunner().Run(safeName, cellAspect,
+                    initialized: () =>
+                    {
+                        instance.MarkReady();
+                        ChristmasTreeStartup.SignalReady();
+                    });
+            }
+            else
+            {
+                // ANSI 미지원 환경에서는 기존 비 ANSI 출력 경로를 보존하고 시작 완료를 알린다.
+                Console.WriteLine("ANSI 색상을 지원하지 않아 호환 모드로 실행합니다.");
+                instance.MarkReady();
+                ChristmasTreeStartup.SignalReady();
+                var engine = new LabPetChristmasEngine();
+                engine.RunLoop(safeName, vtEnabled: false);
+            }
+            return 0;
+        }
+        catch (Exception ex)
+        {
+            // 크리스마스트리 전용 자식 프로세스의 실패를 종료 코드로 전달한다.
+            try { Console.Error.WriteLine("크리스마스트리 실행 실패: " + ex.Message); } catch { }
+            return 1;
+        }
     }
 
     /// <summary>
@@ -2954,6 +3005,22 @@ $engine.RunLoop($PetName, $vtEnabled)
     /// </summary>
     public (bool Success, string Message) Launch(string? petName)
     {
+        try
+        {
+            // 사용자 요청을 받은 본체에서 직접 활성화한다. 자식의 전경 전환 권한에 의존하지 않는다.
+            // 트리가 없으면 이 확인용 잠금을 해제한 뒤 자식을 시작한다.
+            using var existing = new ChristmasTreeInstance();
+            if (!existing.IsOwner)
+            {
+                return existing.TryActivateExisting()
+                    ? (true, "기존 크리스마스트리 창을 활성화했어요!")
+                    : (false, "크리스마스트리가 이미 실행 중이지만 창 활성화를 확인하지 못했습니다. 새 창은 만들지 않았습니다.");
+            }
+        }
+        catch
+        {
+            return (false, "크리스마스트리 실행 상태를 확인하지 못했습니다. 중복 실행을 방지하기 위해 새 창은 만들지 않았습니다.");
+        }
         const string successMessage = "크리스마스 트리를 띄웠어요! (Space: 조명 | F: 폭죽 | S: 눈 | Q: 종료)";
         var conhostPath = ResolveConsoleHostPath();
         var clientExePath = ResolveCurrentClientExecutablePath();
@@ -2965,10 +3032,10 @@ $engine.RunLoop($PetName, $vtEnabled)
                 try
                 {
                     var nativeConhostInfo = BuildNativeLaunchStartInfo(clientExePath, petName, conhostPath);
-                    using var proc = Process.Start(nativeConhostInfo);
-                    if (proc is not null && !proc.WaitForExit(150))
+                    var conhostResult = ChristmasTreeStartup.StartAndWait(nativeConhostInfo);
+                    if (conhostResult.Success || !conhostResult.CanFallback)
                     {
-                        return (true, successMessage);
+                        return (conhostResult.Success, conhostResult.Message);
                     }
                 }
                 catch
@@ -2980,10 +3047,10 @@ $engine.RunLoop($PetName, $vtEnabled)
             try
             {
                 var nativeDirectInfo = BuildNativeLaunchStartInfo(clientExePath, petName, consoleHostPath: null);
-                using var proc = Process.Start(nativeDirectInfo);
-                if (proc is not null && !proc.WaitForExit(150))
+                var directResult = ChristmasTreeStartup.StartAndWait(nativeDirectInfo);
+                if (directResult.Success || !directResult.CanFallback)
                 {
-                    return (true, successMessage);
+                    return (directResult.Success, directResult.Message);
                 }
             }
             catch

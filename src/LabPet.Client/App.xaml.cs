@@ -115,6 +115,9 @@ public partial class App : Application
         }
 
         var petVm = _serviceProvider.GetRequiredService<PetWindowViewModel>();
+#if DEBUG
+        petVm.EnableDebugFriends();
+#endif
         petVm.InitializeStartupState(startupService.IsEnabled());
         petVm.AttachVisitorChecker(petId => _visitorWindows.ContainsKey(petId));
         petVm.HubNavigationRequested += (_, request) => _ = NavigateHubAsync(request);

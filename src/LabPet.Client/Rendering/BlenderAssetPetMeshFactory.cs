@@ -380,12 +380,19 @@ public sealed class BlenderAssetPetMeshFactory : IPetMeshFactory
 
 
         // 머리 소켓 3D 악세서리 (Blender OBJ 우선, 미존재 시 절차적 폴백)
+        var accessoryId = appearance.HeadAccessoryId?.ToLowerInvariant() ?? "none";
+        var accessoryRotation = accessoryId is "sprout" or "ribbon" or "santa_hat"
+            ? new AxisAngleRotation3D(new Vector3D(0, 0, 1), 0) : null;
+        var accessoryGlow = accessoryId == "headset"
+            ? new SolidColorBrush(Color.FromArgb(20, 180, 225, 255)) : null;
         triangleCount += BuildHeadAccessoryFromAssetOrFallback(
             headGroup,
-            appearance.HeadAccessoryId,
+            accessoryId,
             metadata,
             accentColor,
-            ResolveSlotMaterial);
+            ResolveSlotMaterial,
+            accessoryRotation,
+            accessoryGlow);
 
         if (source?.Clips != null) headGroup.Transform = skin!.HeadSocket;
         bodyGroup.Children.Add(headGroup);
@@ -405,27 +412,121 @@ public sealed class BlenderAssetPetMeshFactory : IPetMeshFactory
         AxisAngleRotation3D? auraRot = null;
         TranslateTransform3D? auraTrans = null;
         SolidColorBrush? auraDiffuseBrush = null;
-        if (!string.Equals(appearance.AuraEffectId, "none", StringComparison.OrdinalIgnoreCase))
+        MusicParticleHandle[] auraParticles = [];
+        var auraId = appearance.AuraEffectId?.ToLowerInvariant() ?? "none";
+        if (auraId != "none")
         {
-            auraRot = new AxisAngleRotation3D(new Vector3D(0, 1, 0), 0);
-            auraTrans = new TranslateTransform3D(
-                metadata.AuraSocket.X,
-                metadata.AuraSocket.Y,
-                metadata.AuraSocket.Z);
-
-            var auraTransform = new Transform3DGroup();
-            auraTransform.Children.Add(new RotateTransform3D(auraRot));
-            auraTransform.Children.Add(auraTrans);
-
-            var auraGroup = new Model3DGroup { Transform = auraTransform };
-            var auraResult = BuildAuraEffectFromAssetOrFallback(auraGroup, appearance.AuraEffectId, accentColor, auraEmissiveBrush);
-            triangleCount += auraResult.Triangles;
-            auraDiffuseBrush = auraResult.AuraDiffuseBrush;
+            var auraGroup = new Model3DGroup();
+            if (auraId == "halo_ring")
+            {
+                auraGroup.Transform = new TranslateTransform3D(
+                    metadata.AuraSocket.X, metadata.AuraSocket.Y, metadata.AuraSocket.Z);
+                var pool = PetHaloPool.Build(auraGroup, accentColor);
+                auraParticles = pool.Particles;
+                triangleCount += pool.Triangles;
+            }
+            else if (auraId is "music_notes" or "snowflakes")
+            {
+                auraGroup.Transform = new TranslateTransform3D(
+                    metadata.AuraSocket.X, metadata.AuraSocket.Y, metadata.AuraSocket.Z);
+                var pool = PetLegacyAuraPool.Build(auraGroup, auraId, accentColor);
+                auraParticles = pool.Particles;
+                triangleCount += pool.Triangles;
+            }
+            else if (auraId == "electric")
+            {
+                auraGroup.Transform = new TranslateTransform3D(
+                    metadata.AuraSocket.X, metadata.AuraSocket.Y, metadata.AuraSocket.Z);
+                var pool = PetEnergyPool.Build(auraGroup);
+                auraParticles = pool.Particles;
+                triangleCount += pool.Triangles;
+            }
+            else if (auraId == "aurora")
+            {
+                auraGroup.Transform = new TranslateTransform3D(
+                    metadata.AuraSocket.X, metadata.AuraSocket.Y, metadata.AuraSocket.Z);
+                var pool = PetAuroraPool.Build(auraGroup);
+                auraParticles = pool.Particles;
+                triangleCount += pool.Triangles;
+            }
+            else if (auraId == "fireflies")
+            {
+                auraGroup.Transform = new TranslateTransform3D(
+                    metadata.AuraSocket.X, metadata.AuraSocket.Y, metadata.AuraSocket.Z);
+                var pool = PetAuraParticlePool.BuildSoftGlow(
+                    auraGroup, auraId, Color.FromRgb(255, 222, 132));
+                auraParticles = pool.Particles;
+                triangleCount += pool.Triangles;
+            }
+            else if (auraId is "starlight" or "cherry_blossom" or "milky_way")
+            {
+                auraGroup.Transform = new TranslateTransform3D(
+                    metadata.AuraSocket.X, metadata.AuraSocket.Y, metadata.AuraSocket.Z);
+                var pool = PetAuraParticlePool.BuildTheme(auraGroup, auraId, accentColor);
+                auraParticles = pool.Particles;
+                triangleCount += pool.Triangles;
+            }
+            else
+            {
+                auraRot = new AxisAngleRotation3D(new Vector3D(0, 1, 0), 0);
+                auraTrans = new TranslateTransform3D(
+                    metadata.AuraSocket.X, metadata.AuraSocket.Y, metadata.AuraSocket.Z);
+                var auraTransform = new Transform3DGroup();
+                auraTransform.Children.Add(new RotateTransform3D(auraRot));
+                auraTransform.Children.Add(auraTrans);
+                auraGroup.Transform = auraTransform;
+                var auraResult = BuildAuraEffectFromAssetOrFallback(auraGroup, auraId, accentColor, auraEmissiveBrush);
+                triangleCount += auraResult.Triangles;
+                auraDiffuseBrush = auraResult.AuraDiffuseBrush;
+            }
             rootGroup.Children.Add(auraGroup);
         }
+        var particleMeshName = auraId switch
+        {
+            "music_notes" => "music_note.obj",
+            "snowflakes" => "snowflake.obj",
+            _ => null
+        };
+        if (particleMeshName is not null &&
+            TryLoadFirstSubMesh(Path.Combine(_modelsRootDirectory, "Effects", particleMeshName)) is { } auraMesh)
+        {
+            // 메시 로드에 성공한 경우에만 기존 오라를 교체한다.
+            var auraGroup = (Model3DGroup)rootGroup.Children[rootGroup.Children.Count - 1];
+            static int CountTriangles(Model3D model)
+            {
+                if (model is GeometryModel3D { Geometry: WpfMeshGeometry3D geometry })
+                    return geometry.TriangleIndices.Count / 3;
+                var count = 0;
+                if (model is Model3DGroup group)
+                    foreach (var child in group.Children)
+                        count += CountTriangles(child);
+                return count;
+            }
+            var oldTriangles = CountTriangles(auraGroup);
+            auraGroup.Children.Clear();
+            auraGroup.Transform = new TranslateTransform3D(
+                metadata.AuraSocket.X, metadata.AuraSocket.Y, metadata.AuraSocket.Z);
+            var tint = auraId == "snowflakes" ? Color.FromRgb(224, 244, 255)
+                : ProceduralPetMeshFactory.Lighten(accentColor, 0.35);
+            var pool = PetAuraParticlePool.Build(auraGroup, auraMesh, tint, auraId);
+            auraParticles = pool.Particles;
+            triangleCount += pool.Triangles - oldTriangles;
+            auraRot = null;
+            auraTrans = null;
+            auraDiffuseBrush = null;
+        }
+
+        // 외부 음표·눈송이 교체까지 완료된 최종 오라 트리를 등록한다.
+        if (auraId != "none")
+            PetEffectHitTest.MarkDecorative(rootGroup.Children[rootGroup.Children.Count - 1]);
 
         return new PetRigHandle
         {
+            HeadAccessoryId = accessoryId,
+            AccessoryRotation = accessoryRotation,
+            AccessoryEmissiveBrush = accessoryGlow,
+            AuraParticles = auraParticles,
+            AuraEffectId = auraId,
             SpeciesId = appearance.SpeciesId,
             AppearanceStructureSignature = PetRigHandle.BuildStructureSignature(appearance),
             IsExternalAsset = true,
@@ -480,7 +581,9 @@ public sealed class BlenderAssetPetMeshFactory : IPetMeshFactory
         string accessoryId,
         PetModelMetadata metadata,
         Color accentColor,
-        Func<string, Material> resolveMaterial)
+        Func<string, Material> resolveMaterial,
+        AxisAngleRotation3D? accessoryRotation,
+        SolidColorBrush? accessoryGlow)
     {
         if (string.IsNullOrWhiteSpace(accessoryId) ||
             string.Equals(accessoryId, "none", StringComparison.OrdinalIgnoreCase))
@@ -489,6 +592,21 @@ public sealed class BlenderAssetPetMeshFactory : IPetMeshFactory
         }
 
         var safeId = Path.GetFileName(accessoryId);
+        if (metadata.AccessoryPlacements is { } placements &&
+            placements.FirstOrDefault(p => string.Equals(p.Key, safeId, StringComparison.OrdinalIgnoreCase)).Value is { } placement)
+        {
+            // OBJ와 폴백 모두 기존 장착 소켓을 중심으로 보정하며 머리 변환을 상속한다.
+            var correction = new Transform3DGroup();
+            correction.Children.Add(new TranslateTransform3D(
+                -metadata.HeadSocket.X, -metadata.HeadSocket.Y, -metadata.HeadSocket.Z));
+            correction.Children.Add(placement.CreateTransform());
+            correction.Children.Add(new TranslateTransform3D(
+                metadata.HeadSocket.X, metadata.HeadSocket.Y, metadata.HeadSocket.Z));
+            correction.Freeze();
+            var mount = new Model3DGroup { Transform = correction };
+            headGroup.Children.Add(mount);
+            headGroup = mount;
+        }
         var accessoryPath = Path.Combine(_modelsRootDirectory, "Accessories", $"{safeId}.obj");
         if (_objLoader.TryLoad(accessoryPath, out var accessoryAsset) && accessoryAsset is not null)
         {
@@ -509,20 +627,53 @@ public sealed class BlenderAssetPetMeshFactory : IPetMeshFactory
             var tris = 0;
             foreach (var sub in accessoryAsset.SubMeshes)
             {
-                tris += ProceduralPetMeshFactory.AddGeometry(accGroup, sub.Geometry, resolveMaterial(sub.MaterialSlot), null);
+                Transform3D? motion = null;
+                if (accessoryRotation is not null)
+                {
+                    if (safeId.Equals("sprout", StringComparison.OrdinalIgnoreCase))
+                        motion = new RotateTransform3D(accessoryRotation, new Point3D(0, -0.06, 0));
+                    else if (safeId.Equals("ribbon", StringComparison.OrdinalIgnoreCase))
+                        motion = new RotateTransform3D(accessoryRotation, new Point3D(0, 0.03, 0.10));
+                    else if (sub.PartName.Equals("Accessory_SantaPom", StringComparison.OrdinalIgnoreCase))
+                        motion = new RotateTransform3D(accessoryRotation, new Point3D(0.39, 0.30, -0.065));
+                }
+                var material = resolveMaterial(sub.MaterialSlot);
+                if (accessoryGlow is not null &&
+                    sub.PartName.Equals("Accessory_HeadsetLed", StringComparison.OrdinalIgnoreCase))
+                {
+                    var ledMaterial = new MaterialGroup();
+                    ledMaterial.Children.Add(material);
+                    ledMaterial.Children.Add(new EmissiveMaterial(accessoryGlow));
+                    material = ledMaterial;
+                }
+                tris += ProceduralPetMeshFactory.AddGeometry(accGroup, sub.Geometry, material, motion);
             }
 
             headGroup.Children.Add(accGroup);
             return tris;
         }
 
+        if (accessoryRotation is not null && accessoryId is "sprout" or "ribbon")
+        {
+            var pivot = accessoryId == "sprout"
+                ? new Point3D(0, metadata.HeadSocket.Y - 0.06, 0)
+                : new Point3D(0, metadata.HeadSocket.Y + 0.03, 0.10);
+            var moving = new Model3DGroup
+            {
+                Transform = new RotateTransform3D(accessoryRotation, pivot)
+            };
+            headGroup.Children.Add(moving);
+            headGroup = moving;
+        }
         return _fallbackFactory.BuildHeadAccessory(
             headGroup,
             accessoryId,
             (float)metadata.HeadSocket.Y,
             (float)metadata.HeadRadiusX,
             accentColor,
-            resolveMaterial("acc_accent") is MaterialGroup mg && mg.Children[0] is DiffuseMaterial dm && dm.Brush is SolidColorBrush b ? b : null);
+            resolveMaterial("acc_accent") is MaterialGroup mg && mg.Children[0] is DiffuseMaterial dm && dm.Brush is SolidColorBrush b ? b : null,
+            pomRotation: accessoryId == "santa_hat" ? accessoryRotation : null,
+            ledBrush: accessoryGlow);
     }
 
     private (int Triangles, MusicParticleHandle[] Particles) BuildMusicParticlesFromAssetOrFallback(

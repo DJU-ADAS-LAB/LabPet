@@ -81,7 +81,7 @@ public sealed class SnowballInteractionService : IDisposable
     internal async Task<bool> SendAsync(FriendEntry friend)
         => (await SendDetailedAsync(friend)).Succeeded;
 
-    internal async Task<TransportSendResult> SendDetailedAsync(FriendEntry friend)
+    internal async Task<TransportSendResult> SendDetailedAsync(FriendEntry friend, Guid? requestId = null)
     {
         _dispatcher.VerifyAccess();
         if (_disposed || string.IsNullOrWhiteSpace(friend.PairSecretBase64))
@@ -95,7 +95,8 @@ public sealed class SnowballInteractionService : IDisposable
             || GetStatus(friend.PetId) != SnowballPeerStatus.Available
             || !Guid.TryParse(friend.PetId, out var targetId) || targetId == Guid.Empty)
             return TransportSendResult.Fail();
-        var id = Guid.NewGuid();
+        var id = requestId ?? Guid.NewGuid();
+        if (id == Guid.Empty) return TransportSendResult.Fail();
         if (!Outgoing.TryReserve(id))
         {
             InteractionRejected?.Invoke(this, "눈덩이 투척이 너무 많이 대기 중입니다. 잠시 후 다시 시도해 주세요.");
@@ -103,6 +104,9 @@ public sealed class SnowballInteractionService : IDisposable
         }
         var sentAt = Timestamp;
         _lastSend[friend.PetId] = sentAt;
+        // 전송 접수부터 대상별 1초를 계산하고 응답과 독립적으로 만료를 알린다.
+        _ = RefreshAfterCooldownAsync(friend.PetId, sentAt);
+        if (_actions.TryGetValue(friend.PetId, out var action)) action.Refresh();
         using var attempt = CancellationTokenSource.CreateLinkedTokenSource(_stopping);
         attempt.CancelAfter(TimeSpan.FromSeconds(8));
         try
@@ -134,6 +138,28 @@ public sealed class SnowballInteractionService : IDisposable
                 catch (Exception ex) { CrashLogWriter.Write("SnowballInteraction.Outgoing", ex); }
             }
         }
+    }
+
+    private async Task RefreshAfterCooldownAsync(string petId, long sentAt)
+    {
+        try
+        {
+            // UI별 타이머 대신 서비스의 단조 증가 시계로 실제 만료를 확인한다.
+            while (!_disposed && _lastSend.TryGetValue(petId, out var latest) && latest == sentAt)
+            {
+                var remaining = GetCooldownRemaining(petId);
+                if (remaining <= TimeSpan.Zero)
+                {
+                    if (_actions.TryGetValue(petId, out var action)) action.Refresh();
+                    return;
+                }
+                // 타이머 해상도로 일찍 깨어나도 남은 시간을 재확인한다.
+                var delay = TimeSpan.FromMilliseconds(Math.Max(1, Math.Ceiling(remaining.TotalMilliseconds)));
+                await Task.Delay(delay, _clock, _stopping);
+            }
+        }
+        catch (OperationCanceledException) when (_stopping.IsCancellationRequested) { }
+        catch (Exception ex) { CrashLogWriter.Write("SnowballInteraction.Cooldown", ex); }
     }
 
     private long Timestamp => _clock.GetTimestamp();
@@ -225,7 +251,9 @@ public sealed class SnowballAction : ObservableObject
 {
     private readonly SnowballInteractionService _service;
     private FriendEntry _friend;
-    private bool _waiting;
+    // 네트워크 대기 상태를 저장하지 않고 대상별 공유 쿨다운만 확인한다.
+    private bool _waiting => _service.GetCooldownRemaining(_friend.PetId) > TimeSpan.Zero;
+    private Guid _latestRequestId;
     private bool _failed;
     private bool _rejectedByFocus;
 
@@ -233,7 +261,8 @@ public sealed class SnowballAction : ObservableObject
     {
         _service = service;
         _friend = friend;
-        Command = new AsyncRelayCommand(ExecuteAsync, CanSend);
+        // 중복 전송은 서비스의 대상별 쿨다운으로 제한하고 응답 대기는 차단하지 않는다.
+        Command = new AsyncRelayCommand(ExecuteAsync, CanSend, AsyncRelayCommandOptions.AllowConcurrentExecutions);
     }
 
     public IAsyncRelayCommand Command { get; }
@@ -281,22 +310,22 @@ public sealed class SnowballAction : ObservableObject
     {
         if (!CanSend()) return;
         var friend = _friend;
-        _waiting = true;
+        var requestId = Guid.NewGuid();
+        _latestRequestId = requestId;
         _failed = false;
         _rejectedByFocus = false;
         Refresh();
         try
         {
-            var result = await _service.SendDetailedAsync(friend);
+            var result = await _service.SendDetailedAsync(friend, requestId);
+            // 이전 요청이 늦게 끝나더라도 최신 요청의 표시 상태는 바꾸지 않는다.
+            if (_latestRequestId != requestId) return;
             _failed = !result.Succeeded;
             _rejectedByFocus = result.IsPomodoroFocusBlocked;
-            var remaining = _service.GetCooldownRemaining(friend.PetId);
-            if (remaining > TimeSpan.Zero) await Task.Delay(remaining);
         }
         finally
         {
-            _waiting = false;
-            Refresh();
+            if (_latestRequestId == requestId) Refresh();
         }
     }
 }

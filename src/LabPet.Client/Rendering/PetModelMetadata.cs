@@ -36,6 +36,9 @@ public sealed class PetModelMetadata
     /// <summary>헤드셋 등 머리 너비에 맞출 반경.</summary>
     public double HeadRadiusX { get; set; } = 0.82;
 
+    /// <summary>액세서리 ID별 소켓 로컬 보정. 생략한 기존 rig.json은 기존 배치를 유지한다.</summary>
+    public Dictionary<string, PetAccessoryPlacement> AccessoryPlacements { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+
     /// <summary>오라·파티클 중심 소켓.</summary>
     public PetVector3 AuraSocket { get; set; } = new(0, 0, 0);
 

@@ -521,6 +521,70 @@ public sealed class BlenderAssetPipelineTests
         });
     }
 
+    [Theory]
+    [InlineData("sprout")]
+    [InlineData("ribbon")]
+    [InlineData("santa_hat")]
+    [InlineData("headset")]
+    public void MissingAccessory_KeepsExternalCharacterAndConnectsFallbackAnimation(string accessoryId)
+    {
+        RunOnSta(() =>
+        {
+            var root = Directory.CreateTempSubdirectory();
+            try
+            {
+                var relative = Path.Combine("Characters", PetSpeciesIds.Usagi);
+                var dir = Directory.CreateDirectory(Path.Combine(root.FullName, relative));
+                var assets = Path.Combine(AppContext.BaseDirectory, "Assets", "Models", relative);
+                foreach (var file in new[] { "model.obj", "rig.json" })
+                    File.Copy(Path.Combine(assets, file), Path.Combine(dir.FullName, file));
+                var factory = new BlenderAssetPetMeshFactory(new ProceduralPetMeshFactory(), root.FullName);
+                var rig = factory.BuildPetRig(new PetAppearance
+                {
+                    SpeciesId = PetSpeciesIds.Usagi, HeadAccessoryId = accessoryId
+                }, PetRigEffects.None);
+                Assert.True(rig.IsExternalAsset);
+                Assert.Null(rig.Skin);
+                var models = GeometryModels(rig.RootModel).ToArray();
+                var meshes = models.Select(m => m.Geometry).ToArray();
+                if (accessoryId == "headset")
+                {
+                    Assert.NotNull(rig.AccessoryEmissiveBrush);
+                    Assert.Contains(models, m => m.Material is EmissiveMaterial e &&
+                        ReferenceEquals(e.Brush, rig.AccessoryEmissiveBrush));
+                }
+                else
+                {
+                    Assert.NotNull(rig.AccessoryRotation);
+                    Assert.True(ContainsRotation(rig.RootModel, rig.AccessoryRotation!));
+                }
+                var animator = new PetAnimationController();
+                animator.AttachRig(rig, "#FF9EB5");
+                var moved = false;
+                for (var i = 0; i < 180; i++)
+                {
+                    animator.UpdateAudioSnapshot(0.8f, 0.5f, 0.4f, i % 30 == 0);
+                    animator.UpdateFrame(1d / 60, 0.6, -0.2);
+                    if (rig.AccessoryRotation is { } rotation)
+                    {
+                        Assert.InRange(rotation.Angle, -6, 6);
+                        moved |= Math.Abs(rotation.Angle) > 0.01;
+                    }
+                }
+                if (accessoryId != "headset") Assert.True(moved);
+                Assert.Equal(meshes, GeometryModels(rig.RootModel).Select(m => m.Geometry).ToArray());
+                animator.DetachRig();
+            }
+            finally { root.Delete(true); }
+        });
+
+        static bool ContainsRotation(Model3D model, AxisAngleRotation3D rotation)
+        {
+            if (model.Transform is RotateTransform3D r && ReferenceEquals(r.Rotation, rotation)) return true;
+            return model is Model3DGroup group && group.Children.Any(c => ContainsRotation(c, rotation));
+        }
+    }
+
     [Fact]
     public void CorruptGlb_UsesShippedObjBeforeProceduralFallback()
     {

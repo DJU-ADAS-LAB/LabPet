@@ -14,6 +14,9 @@ public sealed class SoloProgress
     public long Xp { get; set; }
 
     public long Coins { get; set; }
+
+    /// <summary>보호된 성장 데이터에 함께 저장하는 시간당 이상 증가 감시 상태.</summary>
+    public GrowthRateAudit? GrowthAudit { get; set; }
     /// <summary>정산 전인 멀티플레이 참가비를 세션별로 기록한다.</summary>
     public Dictionary<string, int> PendingGameWagers { get; set; } = [];
     public long TotalKeystrokes { get; set; }

@@ -51,6 +51,15 @@ internal static class LabPetConsoleNative
     [DllImport("user32.dll")]
     public static extern bool IsZoomed(IntPtr hWnd);
 
+    [DllImport("user32.dll")]
+    public static extern bool IsIconic(IntPtr hWnd);
+
+    public static bool IsConsoleMinimized()
+    {
+        var window = GetConsoleWindow();
+        return window != IntPtr.Zero && IsIconic(window);
+    }
+
     [DllImport("kernel32.dll", SetLastError = true)]
     public static extern bool AttachConsole(int dwProcessId);
 

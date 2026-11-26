@@ -500,6 +500,9 @@ public sealed partial class PetWindowViewModel : ObservableObject, IAsyncDisposa
                 Peer = live
             });
         }
+#if DEBUG
+        AppendDebugFriends(items, isLocalFocusing);
+#endif
         // 친구 상태가 바뀌어도 같은 행과 입력 컨트롤을 유지한다.
         for (var index = 0; index < items.Count; index++)
         {

@@ -79,15 +79,15 @@ public sealed class StorageAndMigratorTests : IDisposable
 
     [Theory]
     [InlineData(51, 50_001, true, true, false)]
-    [InlineData(50, 50_001, false, true, false)]
-    [InlineData(51, 50_000, true, false, false)]
+    [InlineData(50, 50_001, true, true, false)]
+    [InlineData(51, 50_000, true, true, false)]
     [InlineData(50, 50_000, false, false, false)]
     [InlineData(49, 4_000, false, false, false)]
     [InlineData(51, 50_001, true, true, true)]
-    [InlineData(49, 50_001, false, true, true)]
-    [InlineData(51, 50_000, true, false, true)]
+    [InlineData(49, 50_001, true, true, true)]
+    [InlineData(51, 50_000, true, true, true)]
     [InlineData(50, 50_000, false, false, true)]
-    public async Task GrowthReset_HasIndependentThresholdsAndDurableReceipt(int level, long coins,
+    public async Task GrowthReset_RequiresEitherThresholdAndDurableReceipt(int level, long coins,
         bool resetLevel, bool resetCoins, bool protectedBefore)
     {
         var profile = new PetProfile { PetName = "이전 모찌", IsOnboardingCompleted = true };
@@ -113,7 +113,7 @@ public sealed class StorageAndMigratorTests : IDisposable
 
         await using var store = new JsonAppDataStore(new StateMigrator(), _tempDir);
         var migrated = await store.LoadProfileAsync();
-        Assert.Equal("0.3.16", migrated.GrowthResetReceipt);
+        Assert.Equal("0.3.17", migrated.GrowthResetReceipt);
         Assert.False(migrated.RequiresGrowthRecovery);
         Assert.Equal(resetLevel ? 1 : level, migrated.SoloProgress.Level);
         Assert.Equal(resetCoins ? 0 : coins, migrated.SoloProgress.Coins);
@@ -132,7 +132,7 @@ public sealed class StorageAndMigratorTests : IDisposable
             await File.WriteAllTextAsync(path + ".bak", original);
             await File.WriteAllTextAsync(markerPath, oldMarker);
             var interrupted = await store.LoadProfileAsync();
-            Assert.Equal("0.3.16", interrupted.GrowthResetReceipt);
+            Assert.Equal("0.3.17", interrupted.GrowthResetReceipt);
             Assert.Equal(migrated.SoloProgress.Coins, interrupted.SoloProgress.Coins);
             Assert.NotEqual(oldMarker, await File.ReadAllTextAsync(markerPath));
         }
@@ -144,8 +144,11 @@ public sealed class StorageAndMigratorTests : IDisposable
             Assert.False(economy.SettleWager(migrated, "보류 세션", 20));
         }
 
-        migrated.SoloProgress.Level = 60;
-        migrated.SoloProgress.Coins = 200_000;
+        var progressionEconomy = new PetEconomyService();
+        progressionEconomy.AddCoins(migrated, 500_000);
+        while (migrated.SoloProgress.Level < 60)
+            Assert.True(progressionEconomy.TryLevelUp(migrated, out _));
+        Assert.True(progressionEconomy.TrySpendCoins(migrated, migrated.SoloProgress.Coins - 200_000));
         await store.SaveProfileAsync(migrated);
         await using var restarted = new JsonAppDataStore(new StateMigrator(), _tempDir);
         var saved = await restarted.LoadProfileAsync();
@@ -156,7 +159,7 @@ public sealed class StorageAndMigratorTests : IDisposable
         await File.WriteAllTextAsync(path, original);
         await File.WriteAllTextAsync(path + ".bak", original);
         var afterRestore = await restarted.LoadProfileAsync();
-        Assert.Equal("0.3.16", afterRestore.GrowthResetReceipt);
+        Assert.Equal("0.3.17", afterRestore.GrowthResetReceipt);
         Assert.Equal(60, afterRestore.SoloProgress.Level);
         Assert.Equal(200_000, afterRestore.SoloProgress.Coins);
     }
@@ -178,7 +181,7 @@ public sealed class StorageAndMigratorTests : IDisposable
             await File.WriteAllTextAsync(Path.Combine(_tempDir, "profile.json"),
                 JsonSerializer.Serialize(profile, ProtocolJson.StorageOptions));
         }
-        await using var later = new JsonAppDataStore(new StateMigrator(), _tempDir, new Version(0, 3, 17, 0));
+        await using var later = new JsonAppDataStore(new StateMigrator(), _tempDir, new Version(0, 3, 18, 0));
         var loaded = await later.LoadProfileAsync();
         Assert.Null(loaded.GrowthResetReceipt);
         Assert.Equal(80, loaded.SoloProgress.Level);
@@ -335,7 +338,7 @@ public sealed class StorageAndMigratorTests : IDisposable
         ciphertext[^8] ^= 1;
         root["protectedProgressV1"] = Convert.ToBase64String(ciphertext);
         root["requiresGrowthRecovery"] = false;
-        root["growthResetReceipt"] = "0.3.16";
+        root["growthResetReceipt"] = "0.3.17";
         root["soloProgress"] = JsonNode.Parse("""{"level":99,"coins":999999}""");
         var invalidPrimary = root.ToJsonString();
         const string invalidBackup = "{손상된 백업";

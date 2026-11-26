@@ -120,8 +120,7 @@ public sealed class EconomyAndMigrationTests : IDisposable
         Assert.Equal(2, profile.SoloProgress.Level);
 
         // Lv.99 상한 도달 시 코인 차감 금지
-        profile.SoloProgress.Level = 99;
-        profile.SoloProgress.Coins = 500;
+        profile = new PetProfile { SoloProgress = { Level = 99, Coins = 500 } };
         Assert.False(economy.TryLevelUp(profile, out var maxFailed));
         Assert.Equal(LevelUpFailureReason.MaxLevelReached, maxFailed.FailureReason);
         Assert.Equal(500, profile.SoloProgress.Coins);

@@ -2339,9 +2339,14 @@ def build_accessories():
     )
 
     def sculpt_leaf(x, y, z, nx, ny, nz):
-        tip = max(0.0, abs(nx))
-        arch_y = y - (tip ** 2) * 0.028 + abs(nx) * 0.012
-        return (x, arch_y, z * (1.0 - tip * 0.35))
+        # 닫힌 잎의 두께는 유지하고 끝으로 갈수록 좁아지는 윤곽과 중앙 능선을 조형한다.
+        tip = abs(nx)
+        taper = 1.0 - 0.48 * tip ** 1.6
+        midrib = 0.018 * (1.0 - tip * tip) * math.exp(-9.0 * nz * nz)
+        cup = 0.020 * nz * nz * (1.0 - tip)
+        arch = 0.025 * math.sin(math.pi * tip) - 0.036 * tip * tip
+        twist = 0.012 * nx * nz
+        return (x, y * (0.72 + 0.28 * taper) + arch + midrib + cup + twist, z * taper)
 
     leaf_l = create_sculpted_quad_mesh(
         "_LeafL",
@@ -2370,9 +2375,14 @@ def build_accessories():
     knot = create_sculpted_quad_mesh("_Knot", "acc_accent", (0, 0.03, 0.10), (0.092, 0.082, 0.075), subsurf_levels=2)
 
     def sculpt_bow_wing(x, y, z, nx, ny, nz):
-        flare = 0.68 + abs(nx) * 0.50
-        pinch_z = 0.72 + abs(nx) * 0.40
-        return (x, y * flare, z * pinch_z)
+        # 매듭 쪽 압축과 천 표면의 완만한 주름을 닫힌 곡면에 반영한다.
+        span = abs(nx)
+        flare = 0.62 + span * 0.55
+        pinch_z = 0.68 + span * 0.42
+        fold = 0.014 * math.cos(ny * math.pi * 2.0) * (1.0 - span * span)
+        front_weight = nz * nz
+        drape = -0.018 * span * span + 0.008 * nx
+        return (x, y * flare + drape, z * pinch_z + fold * front_weight)
 
     wing_l = create_sculpted_quad_mesh(
         "_WingL", "acc_accent", (-0.175, 0.06, 0.08), (0.175, 0.12, 0.078), subsurf_levels=2,
@@ -2430,8 +2440,28 @@ def build_accessories():
                 subsurf_levels=2,
             )
         )
-    headset = join_part_group("Accessory_Headset", parts)
-    tris = export_obj(os.path.join(MODELS_ROOT, "Accessories", "headset.obj"), [headset])
+    # 밴드 안쪽 쿠션과 이어컵 외곽의 연속 몰딩으로 재질 경계를 분리한다.
+    pad_pts = []
+    for i in range(11):
+        ang = math.pi * (0.22 + 0.56 * i / 10.0)
+        ca, sa = math.cos(ang), math.sin(ang)
+        pad_pts.append((math.copysign(abs(ca) ** 0.88, ca) * rx,
+                        base_y + sa ** 0.90 * ry - 0.036, 0.0, 0.042))
+    parts.append(create_curve_tube("_BandPadding", "acc_headband", pad_pts,
+                                   resolution_u=3, bevel_resolution=1, scale_z=1.45))
+    for side in (-1, 1):
+        rim_pts = []
+        for i in range(20):
+            ang = 2.0 * math.pi * i / 20.0
+            rim_pts.append((side * (rx + 0.122),
+                            base_y - 0.03 + 0.135 * math.cos(ang),
+                            0.125 * math.sin(ang), 0.013))
+        parts.append(create_curve_tube(f"_CupTrim_{side}", "acc_headband", rim_pts,
+                                       resolution_u=2, bevel_resolution=1, closed=True))
+    # 얇은 이어컵 테두리만 독립 LED 파트로 유지한다.
+    led = join_part_group("Accessory_HeadsetLed", parts[-2:])
+    headset = join_part_group("Accessory_Headset", parts[:-2])
+    tris = export_obj(os.path.join(MODELS_ROOT, "Accessories", "headset.obj"), [headset, led])
     print(f"[Accessory] headset.obj ({tris} tris)")
 
     # 2.4 산타 모자 (santa_hat)
@@ -2446,16 +2476,33 @@ def build_accessories():
         "acc_red",
         [
             (0.0, -0.04, 0.0, 0.38),
-            (0.05, 0.16, -0.02, 0.27),
-            (0.15, 0.36, -0.05, 0.15),
-            (0.30, 0.45, -0.08, 0.052),
+            (0.015, 0.14, -0.015, 0.29),
+            (0.07, 0.34, -0.035, 0.20),
+            (0.19, 0.49, -0.055, 0.12),
+            (0.34, 0.44, -0.07, 0.065),
+            (0.39, 0.30, -0.065, 0.026),
         ],
         resolution_u=5,
         bevel_resolution=2,
     )
-    pom = create_sculpted_quad_mesh("_Pom", "acc_white", (0.33, 0.44, -0.09), (0.125, 0.125, 0.125), subsurf_levels=2)
-    santa = join_part_group("Accessory_SantaHat", [brim, hat_cone, pom])
-    tris = export_obj(os.path.join(MODELS_ROOT, "Accessories", "santa_hat.obj"), [santa])
+    # 밑단에서 올라오는 완만한 천 주름. 윗부분은 감쇠시켜 처진 끝의 실루엣을 보존한다.
+    def sculpt_hat_folds(x, y, z):
+        height = max(0.0, min(1.0, (y + 0.04) / 0.48))
+        center_x = 0.015 + 0.18 * height * height
+        center_z = -0.055 * height
+        dx, dz = x - center_x, z - center_z
+        angle = math.atan2(dz, dx)
+        envelope = math.sin(math.pi * height) * (1.0 - height) ** 2
+        fold = 1.0 + 0.055 * envelope * math.cos(7.0 * angle + height * 1.8)
+        return (center_x + dx * fold, y, center_z + dz * fold)
+
+    apply_wpf_vertex_fn(hat_cone, sculpt_hat_folds)
+    set_smooth_and_recalc(hat_cone)
+    # 끝부분이 아래로 굽어 방울에 연결되는 비대칭 천 실루엣.
+    pom = create_sculpted_quad_mesh("_Pom", "acc_white", (0.39, 0.28, -0.065), (0.112, 0.125, 0.112), subsurf_levels=2)
+    santa = join_part_group("Accessory_SantaHat", [brim, hat_cone])
+    pom.name = "Accessory_SantaPom"
+    tris = export_obj(os.path.join(MODELS_ROOT, "Accessories", "santa_hat.obj"), [santa, pom])
     print(f"[Accessory] santa_hat.obj ({tris} tris)")
 
     # 2.5 미니 왕관 (crown)
@@ -2489,9 +2536,29 @@ def build_accessories():
                 subsurf_levels=1,
             )
         )
-    gem = create_sculpted_quad_mesh(
-        "_FrontGem", "acc_accent", center_wpf=(0, 0.055, 0.33), radii_wpf=(0.060, 0.070, 0.032), subsurf_levels=1
-    )
+    # 작은 테이블 면, 넓은 거들, 뒤쪽 파빌리온으로 구성한 팔각 컷 보석.
+    gem_vertices, gem_faces = [], []
+    for radius, depth in ((0.52, 0.038), (1.0, 0.008), (0.24, -0.026)):
+        for i in range(8):
+            angle = 2.0 * math.pi * i / 8.0 + math.pi / 8.0
+            gem_vertices.append(to_bl(0.064 * radius * math.cos(angle),
+                                      0.055 + 0.076 * radius * math.sin(angle), 0.33 + depth))
+    gem_faces.append(tuple(range(8)))
+    for ring in range(2):
+        for i in range(8):
+            j = (i + 1) % 8
+            a, b = ring * 8, (ring + 1) * 8
+            gem_faces.append((a + i, b + i, b + j, a + j))
+    gem_faces.append(tuple(reversed(range(16, 24))))
+    gem_mesh = bpy.data.meshes.new("_FrontGem")
+    gem_mesh.from_pydata(gem_vertices, [], gem_faces)
+    gem_mesh.update()
+    gem = bpy.data.objects.new("_FrontGem", gem_mesh)
+    bpy.context.collection.objects.link(gem)
+    gem.data.materials.append(ensure_material("acc_accent"))
+    set_smooth_and_recalc(gem)
+    for face in gem.data.polygons:
+        face.use_smooth = False
     crown_parts.append(gem)
     crown = join_part_group("Accessory_Crown", crown_parts)
     tris = export_obj(os.path.join(MODELS_ROOT, "Accessories", "crown.obj"), [crown])
@@ -2546,6 +2613,19 @@ def build_effects():
                 resolution_u=2, bevel_resolution=0
             )
         )
+    # 육각 대칭의 짧은 곁가지를 더해 작은 크기에서도 눈결정 윤곽을 유지한다.
+    for arm in range(6):
+        angle = arm * math.pi / 3.0
+        dx, dy = math.cos(angle), math.sin(angle)
+        for level in (0.045, 0.075):
+            for side in (-1, 1):
+                x, y = dx * level, dy * level
+                snow_parts.append(create_curve_tube(
+                    f"_SnowBranch_{arm}_{level}_{side}", "acc_white",
+                    [(x, y, 0, 0.007),
+                     (x + dx * 0.025 - dy * side * 0.021,
+                      y + dy * 0.025 + dx * side * 0.021, 0, 0.004)],
+                    resolution_u=1, bevel_resolution=0))
     snow_parts.append(
         create_curve_tube(
             "_SnowCrossZ", "acc_white",

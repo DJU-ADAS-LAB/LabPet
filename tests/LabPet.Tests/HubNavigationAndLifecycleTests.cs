@@ -353,6 +353,61 @@ public sealed class HubNavigationAndLifecycleTests : IDisposable
     }
 
     [Fact]
+    public async Task AppearancePage_AllAurasRebuildPreviewAndPreserveSavedSelection()
+    {
+        await WpfTestHost.RunAsync(async () =>
+        {
+            await using var h = await CreateTestHarnessAsync("aura-preview");
+            try
+            {
+                Assert.True(await h.Navigation.NavigateAsync(new NavigationRequest(HubPage.Appearance)));
+                await WpfTestHost.FlushAsync();
+                var page = Assert.IsType<AppearancePageView>(h.CurrentWindow!.ActivePageView);
+                var editor = Assert.IsType<LabPet.Client.Views.Controls.PetAppearanceEditorControl>(page.FindName("EditorControl"));
+                var visual = Assert.IsType<System.Windows.Media.Media3D.ModelVisual3D>(editor.FindName("PreviewPetVisual"));
+                var vm = page.EditorViewModel;
+                vm.SelectedAuraEffectId = "none";
+                var previous = visual.Content;
+                foreach (var id in new[] { "halo_ring", "music_notes", "snowflakes", "starlight", "aurora", "fireflies", "cherry_blossom", "milky_way", "electric" })
+                {
+                    Assert.Contains(vm.AuraEffectOptions, option => option.Id == id);
+                    vm.SelectedAuraEffectId = id;
+                    await WpfTestHost.FlushAsync();
+                    Assert.NotNull(visual.Content);
+                    Assert.NotSame(previous, visual.Content);
+                    Assert.True(Decorations(visual.Content) > 0, id);
+                    Assert.Equal(id, vm.BuildCurrentAppearance().AuraEffectId);
+                    previous = visual.Content;
+                }
+                vm.SelectedBodyColorHex = "#E9F7E8";
+                Assert.Same(previous, visual.Content);
+                await vm.SaveCommand.ExecuteAsync(null);
+                Assert.False(page.HasUnsavedChanges);
+                Assert.Equal("electric", h.PetVm.CurrentProfile.Appearance.AuraEffectId);
+                vm.SelectedAuraEffectId = "none";
+                Assert.Equal(0, Decorations(visual.Content));
+                vm.CancelChangesCommand.Execute(null);
+                Assert.Equal("electric", vm.SelectedAuraEffectId);
+                Assert.True(Decorations(visual.Content) > 0);
+                editor.SetPreviewActive(false);
+                Assert.False(editor.IsPreviewTimerRunning);
+                editor.SetPreviewActive(true);
+                Assert.True(editor.IsPreviewTimerRunning);
+                editor.DisposePreview();
+                Assert.Null(visual.Content);
+                Assert.False(editor.IsPreviewTimerRunning);
+            }
+            finally { h.CloseAll(); }
+        });
+
+        static int Decorations(System.Windows.Media.Media3D.Model3D? model)
+            => model is System.Windows.Media.Media3D.GeometryModel3D geometry
+                ? (PetEffectHitTest.IsDecorative(geometry) ? 1 : 0)
+                : model is System.Windows.Media.Media3D.Model3DGroup group
+                    ? group.Children.Sum(child => Decorations(child)) : 0;
+    }
+
+    [Fact]
     public async Task AppearancePageView_UnsavedChangesGuard_CancelBypassAndLiveProgressionSave()
     {
         await WpfTestHost.RunAsync(async () =>

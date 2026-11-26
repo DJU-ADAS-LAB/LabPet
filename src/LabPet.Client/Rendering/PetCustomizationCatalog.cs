@@ -71,6 +71,12 @@ public static class PetCustomizationCatalog
         new("none", "없음", "오라 이펙트 비활성"),
         new("halo_ring", "회전 링", "펫 주위를 부드럽게 도는 발광 링"),
         new("music_notes", "음표", "주변에 떠다니는 3D 음표 파츠"),
-        new("snowflakes", "눈송이", "은은하게 회전하는 3D 결정 파티클")
+        new("snowflakes", "눈송이", "천천히 내려오는 반짝이는 눈 결정"),
+        new("starlight", "별빛", "작게 부유하며 은은하게 반짝이는 별"),
+        new("aurora", "오로라", "민트·하늘·보라 빛의 부드러운 물결"),
+        new("fireflies", "반딧불", "따뜻한 빛 입자의 느긋한 부유"),
+        new("cherry_blossom", "벚꽃", "살랑이며 천천히 내려오는 꽃잎"),
+        new("milky_way", "은하수", "별과 초승달의 느린 공전"),
+        new("electric", "전기", "음악에 반응하는 푸른 에너지 파동")
     ];
 }

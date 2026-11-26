@@ -743,6 +743,24 @@ public sealed class PetAnimationController
             }
         }
 
+        // 장착점은 유지하고 보조 회전만 시간 간격 독립적으로 지연시킨다.
+        if (rig.AccessoryRotation is { } accessoryRotation)
+        {
+            var amplitude = rig.HeadAccessoryId == "sprout" ? 3.0
+                : rig.HeadAccessoryId == "ribbon" ? 1.5 : 5.0;
+            var target = Math.Clamp(-headRollExtra * 0.18
+                + Math.Sin(_elapsedSeconds * 4.6) * amplitude * (0.12 + bass + beat * 0.3)
+                * awakeFactor, -6.0, 6.0);
+            accessoryRotation.Angle += (target - accessoryRotation.Angle)
+                * (1.0 - Math.Exp(-deltaSeconds * 8.0));
+        }
+
+        if (rig.AccessoryEmissiveBrush is { } led)
+        {
+            var targetOpacity = Math.Clamp((0.04 + bass * 0.16 + beat * 0.08) * awakeFactor, 0, 0.28);
+            led.Opacity += (targetOpacity - led.Opacity) * (1.0 - Math.Exp(-deltaSeconds * 6.0));
+        }
+
         // 귀 적용 (rig.json / 종별 기본 각도 + 깜짝 기상 귀 쫑긋)
         if (rig.LeftEarRotation is not null && rig.RightEarRotation is not null)
         {
@@ -911,14 +929,18 @@ public sealed class PetAnimationController
         rig.Skin?.Update(rig, (float)deltaSeconds, (float)stride, (float)activeStance,
             (float)(leftStrike * awakeFactor), (float)(rightStrike * awakeFactor), (float)waveTime, (float)walk, motion.Clip, motion.Progress, throwPose);
 
-        if (rig.AuraRotation is not null)
+        if (rig.AuraParticles.Count > 0)
         {
-            rig.AuraRotation.Angle = _auraPhase;
+            // 독립 입자 경로에는 그룹 전체 회전·부유를 중복 적용하지 않는다.
+            PetAuraAnimator.Update(rig, _elapsedSeconds, bass * awakeFactor, beat * awakeFactor);
         }
-
-        if (rig.AuraTranslate is not null)
+        else
         {
-            rig.AuraTranslate.OffsetY = Math.Sin(_elapsedSeconds * 1.35) * (0.032 + beat * 0.02);
+            // 아직 독립 풀로 전환하지 않은 기존 효과의 호환 경로.
+            if (rig.AuraRotation is not null)
+                rig.AuraRotation.Angle = _auraPhase;
+            if (rig.AuraTranslate is not null)
+                rig.AuraTranslate.OffsetY = Math.Sin(_elapsedSeconds * 1.35) * (0.032 + beat * 0.02);
         }
 
         emissiveStrength = Math.Clamp(emissiveStrength, 0.0, 0.16);

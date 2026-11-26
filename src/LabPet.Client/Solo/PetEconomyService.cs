@@ -188,6 +188,7 @@ public sealed class PetEconomyService
         lock (profile.GrowthSync)
         {
             if (profile.RequiresGrowthRecovery) { result = new(false, 0, 0, 0, 0, 0, LevelUpFailureReason.GrowthRecoveryRequired); return false; }
+            using var approvedGrowth = GrowthRateMonitor.BeginEconomyChange(profile, _timeProvider.GetUtcNow());
             NormalizeProgress(profile);
             var p = profile.SoloProgress;
             EnsureDailySocialBucket(p);
@@ -232,6 +233,7 @@ public sealed class PetEconomyService
         lock (profile.GrowthSync)
         {
             if (profile.RequiresGrowthRecovery) return default;
+            using var approvedGrowth = GrowthRateMonitor.BeginEconomyChange(profile, _timeProvider.GetUtcNow());
             NormalizeProgress(profile);
             var p = profile.SoloProgress;
             EnsureDailySocialBucket(p);
@@ -272,6 +274,7 @@ public sealed class PetEconomyService
         lock (profile.GrowthSync)
         {
             if (profile.RequiresGrowthRecovery) return default;
+            using var approvedGrowth = GrowthRateMonitor.BeginEconomyChange(profile, _timeProvider.GetUtcNow());
             NormalizeProgress(profile);
             var p = profile.SoloProgress;
             EnsureDailySocialBucket(p);
@@ -312,6 +315,7 @@ public sealed class PetEconomyService
         lock (profile.GrowthSync)
         {
             if (profile.RequiresGrowthRecovery) return default;
+            using var approvedGrowth = GrowthRateMonitor.BeginEconomyChange(profile, _timeProvider.GetUtcNow());
             NormalizeProgress(profile);
             var p = profile.SoloProgress;
             EnsureDailySocialBucket(p);
@@ -352,6 +356,7 @@ public sealed class PetEconomyService
         lock (profile.GrowthSync)
         {
             if (profile.RequiresGrowthRecovery) return default;
+            using var approvedGrowth = GrowthRateMonitor.BeginEconomyChange(profile, _timeProvider.GetUtcNow());
             NormalizeProgress(profile);
             var p = profile.SoloProgress;
             EnsureDailySocialBucket(p);
@@ -391,6 +396,7 @@ public sealed class PetEconomyService
         lock (profile.GrowthSync)
         {
             if (profile.RequiresGrowthRecovery) return new SocialCoinRewardResult(0, 0, DailySocialCoinCap, false, false);
+            using var approvedGrowth = GrowthRateMonitor.BeginEconomyChange(profile, nowUtc);
             NormalizeProgress(profile);
             var p = profile.SoloProgress;
             EnsureDailySocialBucket(p);
@@ -457,6 +463,7 @@ public sealed class PetEconomyService
         lock (profile.GrowthSync)
         {
             if (profile.RequiresGrowthRecovery) return false;
+            using var approvedGrowth = GrowthRateMonitor.BeginEconomyChange(profile, _timeProvider.GetUtcNow());
             NormalizeProgress(profile);
             var p = profile.SoloProgress;
             EnsureDailySocialBucket(p);
@@ -489,10 +496,11 @@ public sealed class PetEconomyService
         lock (profile.GrowthSync)
         {
             if (profile.RequiresGrowthRecovery) return;
+            using var approvedGrowth = GrowthRateMonitor.BeginEconomyChange(profile, _timeProvider.GetUtcNow());
             NormalizeProgress(profile);
             var p = profile.SoloProgress;
             EnsureDailySocialBucket(p);
-            p.Coins += amount;
+            p.Coins = checked(p.Coins + amount);
             currentCoins = p.Coins;
             currentLevel = p.Level;
             dailySocial = p.DailySocialRewardCoinsEarned;
@@ -525,6 +533,7 @@ public sealed class PetEconomyService
         lock (profile.GrowthSync)
         {
             if (profile.RequiresGrowthRecovery) return false;
+            using var approvedGrowth = GrowthRateMonitor.BeginEconomyChange(profile, _timeProvider.GetUtcNow());
             NormalizeProgress(profile);
             var p = profile.SoloProgress;
             EnsureDailySocialBucket(p);
@@ -564,6 +573,7 @@ public sealed class PetEconomyService
         lock (profile.GrowthSync)
         {
             if (profile.RequiresGrowthRecovery) return false;
+            using var approvedGrowth = GrowthRateMonitor.BeginEconomyChange(profile, _timeProvider.GetUtcNow());
             NormalizeProgress(profile);
             var p = profile.SoloProgress;
             EnsureDailySocialBucket(p);
@@ -602,6 +612,7 @@ public sealed class PetEconomyService
         lock (profile.GrowthSync)
         {
             if (profile.RequiresGrowthRecovery) return false;
+            using var approvedGrowth = GrowthRateMonitor.BeginEconomyChange(profile, _timeProvider.GetUtcNow());
             NormalizeProgress(profile);
             var p = profile.SoloProgress;
             EnsureDailySocialBucket(p);

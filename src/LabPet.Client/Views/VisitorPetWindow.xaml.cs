@@ -174,6 +174,7 @@ public partial class VisitorPetWindow : Window, IMessageBubbleTarget, ISnowballT
         VisitorBubblePopup.Opened += OnBubblePopupOpened;
         VisitorChatComposerPopup.Opened += OnComposerPopupOpened;
 
+        InitializeInteractionOverlay();
         LightsVisual.Content = _meshFactory.CreateStudioLights();
         ApplyFriendState(friend, initialAppearance);
         var initialPeer = _social.DiscoveredPeers.FirstOrDefault(p => string.Equals(p.PetId, friend.PetId, StringComparison.OrdinalIgnoreCase));
@@ -388,7 +389,8 @@ public partial class VisitorPetWindow : Window, IMessageBubbleTarget, ISnowballT
     private void OnDismissHideTick(object? sender, EventArgs e)
     {
         _dismissHideTimer.Stop();
-        if (!VisitorViewport.IsMouseOver && !DismissButton.IsMouseOver)
+        if (!VisitorViewport.IsMouseOver && !DismissButton.IsMouseOver
+            && _interactionStrip?.IsMouseOver != true)
         {
             SetDismissButtonVisible(false);
         }
@@ -396,6 +398,7 @@ public partial class VisitorPetWindow : Window, IMessageBubbleTarget, ISnowballT
 
     private void SetDismissButtonVisible(bool visible)
     {
+        SetInteractionOverlayVisible(visible);
         if (DismissButton.IsHitTestVisible != visible)
         {
             DismissButton.IsHitTestVisible = visible;
@@ -427,8 +430,13 @@ public partial class VisitorPetWindow : Window, IMessageBubbleTarget, ISnowballT
             bounds.Z + bounds.SizeZ * 0.70);
         if (VisitorPetVisual.TransformToAncestor(VisitorViewport).TryTransform(anchor, out var position))
         {
-            Canvas.SetLeft(DismissButton, Math.Clamp(position.X, 0, VisitorViewport.ActualWidth - DismissButton.Width));
-            Canvas.SetTop(DismissButton, Math.Clamp(position.Y - DismissButton.Height, 0, VisitorViewport.ActualHeight - DismissButton.Height));
+            var left = Math.Clamp(position.X + 10, 4, Math.Max(4, VisitorViewport.ActualWidth - DismissButton.Width - 4));
+            var stripHeight = DismissButton.Height * 3 + 10;
+            var top = Math.Clamp(position.Y - DismissButton.Height, 0,
+                Math.Max(0, VisitorViewport.ActualHeight - stripHeight));
+            Canvas.SetLeft(DismissButton, left);
+            Canvas.SetTop(DismissButton, top);
+            PositionInteractionOverlay(left, top);
         }
     }
 
@@ -1676,7 +1684,8 @@ public partial class VisitorPetWindow : Window, IMessageBubbleTarget, ISnowballT
             null,
             result =>
             {
-                if (result is RayMeshGeometry3DHitTestResult)
+                if (result is RayMeshGeometry3DHitTestResult meshHit &&
+                    !PetEffectHitTest.IsDecorative(meshHit.ModelHit))
                 {
                     hit = true;
                     return HitTestResultBehavior.Stop;

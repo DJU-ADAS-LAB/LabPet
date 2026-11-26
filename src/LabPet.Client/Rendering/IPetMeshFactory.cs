@@ -14,6 +14,8 @@ public sealed class MusicParticleHandle
     public required AxisAngleRotation3D Rotation { get; init; }
     public SolidColorBrush? TintBrush { get; init; }
     public SolidColorBrush? EmissiveBrush { get; init; }
+    // 그라데이션 발광의 페이드 제어용. 메시와 텍스처는 생성 시 공유한다.
+    public Brush? SoftGlowBrush { get; init; }
     public Color BaseColor { get; set; } = Color.FromRgb(255, 194, 212);
     public string ParticleKind { get; init; } = "note";
 }
@@ -148,6 +150,15 @@ public sealed class PetRigHandle
     // 댄스·음악·반응 이펙트용 풀링 3D 음표/별 파티클
     public IReadOnlyList<MusicParticleHandle> MusicParticles { get; init; } = [];
 
+    // 액세서리 보조 움직임은 머리 관절과 별도로 갱신한다.
+    internal string HeadAccessoryId { get; init; } = "none";
+    internal AxisAngleRotation3D? AccessoryRotation { get; init; }
+    internal SolidColorBrush? AccessoryEmissiveBrush { get; init; }
+
+    // 상시 오라 입자는 음악 방출 입자와 별도 풀로 관리한다.
+    public IReadOnlyList<MusicParticleHandle> AuraParticles { get; init; } = [];
+    public string AuraEffectId { get; init; } = "none";
+
     // 3D 오라 이펙트 변환
     public AxisAngleRotation3D? AuraRotation { get; init; }
     public TranslateTransform3D? AuraTranslate { get; init; }
@@ -220,6 +231,36 @@ public sealed class PetRigHandle
         {
             var softAura = ProceduralPetMeshFactory.Lighten(accentColor, 0.35);
             AuraDiffuseBrush.Color = Color.FromArgb(AuraDiffuseBrush.Color.A, softAura.R, softAura.G, softAura.B);
+        }
+
+        // 링은 브러시와 현재 투명도를 유지하고 공유 텍스처 참조만 교체한다.
+        if (AuraEffectId == "halo_ring")
+        {
+            ImageSource? texture = null;
+            foreach (var particle in AuraParticles)
+            {
+                if (particle.BaseColor == accentColor) continue;
+                if (particle.SoftGlowBrush is ImageBrush brush)
+                {
+                    texture ??= PetAuraGlow.CreateBrush(accentColor).ImageSource;
+                    brush.ImageSource = texture;
+                }
+                particle.BaseColor = accentColor;
+            }
+        }
+
+        // 음표는 포인트 색상을 따르고 눈송이와 신규 오라의 고유 테마색은 유지한다.
+        if (AuraEffectId == "music_notes")
+        {
+            var auraColor = ProceduralPetMeshFactory.Lighten(accentColor, 0.35);
+            foreach (var particle in AuraParticles)
+            {
+                particle.BaseColor = auraColor;
+                if (particle.TintBrush is { } tint)
+                    tint.Color = Color.FromArgb(tint.Color.A, auraColor.R, auraColor.G, auraColor.B);
+                if (particle.EmissiveBrush is { } glow)
+                    glow.Color = Color.FromArgb(glow.Color.A, auraColor.R, auraColor.G, auraColor.B);
+            }
         }
 
         var particleColor = ProceduralPetMeshFactory.Lighten(accentColor, 0.25);

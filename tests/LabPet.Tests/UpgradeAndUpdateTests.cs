@@ -43,7 +43,7 @@ public sealed class UpgradeAndUpdateTests
     public async Task AppDataStore_UsesRoamingAppDataOutsideBaseDirectoryAndPreservesAcrossReinstantiation()
     {
         // 기본 생성자가 빌드 구성별 저장 경로를 사용하고 설치 폴더와 분리되는지 확인한다.
-        var defaultStore = new JsonAppDataStore(new StateMigrator());
+        var defaultStore = new JsonAppDataStore(new StateMigrator(), customDataDirectory: null);
         var expectedRoaming = AppDataPaths.ResolveDefaultDataDirectory();
 
         Assert.Equal(expectedRoaming, defaultStore.DataDirectory);
